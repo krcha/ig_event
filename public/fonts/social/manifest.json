@@ -61,6 +61,76 @@
       "source": "https://raw.githubusercontent.com/google/fonts/66928797f271fed5ee428544e7229685e2d90127/ofl/notosans/OFL.txt",
       "sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
       "bytes": 4396
+    },
+    {
+      "file": "Fraunces.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/fraunces/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf",
+      "retrieved": "2026-10-19",
+      "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+      "bytes": 360440
+    },
+    {
+      "file": "fraunces-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/fraunces/OFL.txt",
+      "retrieved": "2026-10-19",
+      "sha256": "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b",
+      "bytes": 4391
+    },
+    {
+      "file": "ArchivoBlack.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/archivoblack/ArchivoBlack-Regular.ttf",
+      "retrieved": "2026-10-19",
+      "sha256": "dd9a89a019b4849f66ab75455fe7bdf931311042cbb0f0f97acc061539703180",
+      "bytes": 90988
+    },
+    {
+      "file": "archivoblack-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/archivoblack/OFL.txt",
+      "retrieved": "2026-10-19",
+      "sha256": "3173acd82f8c6159b5b1037b539fcbd4edff68e65c2ea8b9412b5a5ca97b08ff",
+      "bytes": 4492
+    },
+    {
+      "file": "Syne.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/syne/Syne%5Bwght%5D.ttf",
+      "retrieved": "2026-10-19",
+      "sha256": "ce5ac77142a65cab2248a1a2ebb740b1d4d9c20b52488877d3ff664d1356104a",
+      "bytes": 146980
+    },
+    {
+      "file": "syne-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/syne/OFL.txt",
+      "retrieved": "2026-10-19",
+      "sha256": "cc43cdce6f91c57989af8459341c276655e34224e954fa69c2ad700831a742d8",
+      "bytes": 4402
+    },
+    {
+      "file": "RubikMonoOne.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/rubikmonoone/RubikMonoOne-Regular.ttf",
+      "retrieved": "2026-10-19",
+      "sha256": "b22624b6a36e543e942106edfccd198c50b57b65b924bfe02a6f0a5699429e6b",
+      "bytes": 141088
+    },
+    {
+      "file": "rubikmonoone-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/rubikmonoone/OFL.txt",
+      "retrieved": "2026-10-19",
+      "sha256": "43d530580461a574f6dfed9e15af6a74e95f7c04d9bfa1174a63ff036e8eee07",
+      "bytes": 4462
+    },
+    {
+      "file": "BodoniModa.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/bodonimoda/BodoniModa%5Bopsz%2Cwght%5D.ttf",
+      "retrieved": "2026-10-19",
+      "sha256": "550f5e34ee0a828d7941b1fe9bc58b34e5260d3f33a61532e6d0a0114e79a5cf",
+      "bytes": 162104
+    },
+    {
+      "file": "bodonimoda-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/bodonimoda/OFL.txt",
+      "retrieved": "2026-10-19",
+      "sha256": "931dfe2e0cd3c9443295f5c1d754b8a8403bf060df50c1d5900267ade83d0046",
+      "bytes": 4400
     }
   ]
 }

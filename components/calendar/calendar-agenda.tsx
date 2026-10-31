@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { ArrowUpDown, ChevronRight, Search } from "lucide-react";
-import { useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { VirtualAgendaList } from "./virtual-agenda-list";
 import { CalendarEventPreviews, CalendarEventPreviewRow } from "./calendar-event-preview";
 import { EventKindToggleChips } from "./event-kind-toggle-chips";
 import { OpenNowFilter } from "./open-now-filter";
@@ -145,13 +146,22 @@ type Props = {
 };
 
 /** One data projection and one event tree; only presentation changes at 768px. */
-export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCategories, selectedDayEventCount, dayLabel, openNowActive, openNowHref, now, authEnabled, hiddenSort, hasActiveFilters, clearFiltersHref, advancedSearch, advancedSort }: Props) {
+export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCategories, dayLabel, openNowActive, openNowHref, now, hiddenSort, hasActiveFilters, clearFiltersHref, advancedSearch, advancedSort }: Props) {
   const mobileWeek = useSyncExternalStore(subscribeViewport, readMobileViewport, serverViewport);
-  const hiddenDayCategorySet = useMemo(() => new Set(hiddenDayCategories), [hiddenDayCategories]);
+  const [activeHiddenCategories, setActiveHiddenCategories] = useState(hiddenDayCategories);
+  const [openVenueGroups, setOpenVenueGroups] = useState<ReadonlySet<string>>(new Set());
+  const hiddenDayCategorySet = useMemo(() => new Set(activeHiddenCategories), [activeHiddenCategories]);
+  useEffect(() => setActiveHiddenCategories(hiddenDayCategories), [hiddenDayCategories]);
+  useEffect(() => {
+    const count = selectedDayAgendaEvents.filter(event => !hiddenDayCategorySet.has(getDayCategory(event))).length;
+    document.querySelectorAll<HTMLElement>("[data-calendar-mobile-day-count]").forEach(target => {
+      if (target.textContent !== String(count)) target.textContent = String(count);
+    });
+  }, [hiddenDayCategorySet, selectedDayAgendaEvents]);
   function renderSelectedDayAgenda(mobileWeek: boolean) {
     const agendaEvents = mobileWeek
-      ? [...selectedDayAgendaEvents].sort((left, right) => left.mobileOrder - right.mobileOrder)
-      : selectedDayAgendaEvents;
+      ? [...selectedDayAgendaEvents].filter(event => !hiddenDayCategorySet.has(getDayCategory(event))).sort((left, right) => left.mobileOrder - right.mobileOrder)
+      : selectedDayAgendaEvents.filter(event => !hiddenDayCategorySet.has(getDayCategory(event)));
     const { groups: venueGroups, individualEvents } = mobileWeek
       ? { groups: [], individualEvents: agendaEvents }
       : groupBusyVenuesForDay(agendaEvents, (event) => !hiddenDayCategorySet.has(getDayCategory(event)));
@@ -207,6 +217,7 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
         <EventKindToggleChips
           afterAll={mobileWeek ? <OpenNowFilter active={openNowActive} appearance="chip" href={openNowHref} initialNow={now} /> : undefined}
           initialHiddenCategories={hiddenDayCategories}
+          onHiddenCategoriesChange={setActiveHiddenCategories}
           singleSelection={mobileWeek}
         >
           {withActions ? renderMobileAdvancedControls() : null}
@@ -219,12 +230,22 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
         <>
           {venueGroups.length > 0 ? (
             <div className="space-y-1.5" data-calendar-venue-groups="true">
-              {venueGroups.map((group) => (
+              <VirtualAgendaList items={venueGroups} getKey={group => group.key} estimateSize={62} containsEvent={(group, id) => group.events.some(event => event._id === id)}>{(group) => (
                 <details
                   className="group rounded-[0.9rem] border border-primary/25 bg-primary/[0.07] open:border-primary/40"
                   data-calendar-venue-group="true"
                   hidden={group.visibleCount === 0}
                   key={group.key}
+                  open={openVenueGroups.has(group.key)}
+                  onToggle={event => {
+                    const open = event.currentTarget.open;
+                    setOpenVenueGroups(current => {
+                      if (current.has(group.key) === open) return current;
+                      const next = new Set(current);
+                      if (open) next.add(group.key); else next.delete(group.key);
+                      return next;
+                    });
+                  }}
                 >
                   <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
                     <span className="min-w-0 flex-1">
@@ -238,15 +259,15 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
                     </span>
                     <ChevronRight className="h-4 w-4 flex-none text-primary transition-transform group-open:rotate-90" />
                   </summary>
-                  <ul className="space-y-1 border-t border-primary/15 px-2 py-2">
-                    {group.events.map((event) => {
+                  {openVenueGroups.has(group.key) ? <div className="border-t border-primary/15 px-2 py-2">
+                    <VirtualAgendaList items={group.events} getKey={event => event._id} estimateSize={52}>{(event) => {
                       const eventCategory = getDayCategory(event);
                       const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
                       const tone = getEventTone(event);
                       const timePresentation = getTimePresentation(event);
 
                       return (
-                        <li
+                        <article
                           data-calendar-event-id={event._id}
                           data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}
                           data-calendar-event-kind={eventCategory}
@@ -277,13 +298,14 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
                               <OpenNowStatus eventId={event._id} state={event.openNowState} />
                             </span>
                             <span className="max-w-[40%] truncate text-[10px] font-medium text-muted-foreground">{tone.name}</span>
+                            <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="icon" />
                           </CalendarEventPreviewRow>
-                        </li>
+                        </article>
                       );
-                    })}
-                  </ul>
+                    }}</VirtualAgendaList>
+                  </div> : null}
                 </details>
-              ))}
+              )}</VirtualAgendaList>
             </div>
           ) : null}
           {agendaTimeBandGroups.map((timeBand) => {
@@ -319,8 +341,8 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
                     {pluralize(initialVisibleTimeBandCount, "event")}
                   </span>
                 </div>
-                <div className="space-y-1.5">
-                  {timeBand.events.map((event) => {
+                <VirtualAgendaList items={timeBand.events} getKey={event => event._id}>
+                  {(event) => {
             const tone = getEventTone(event);
             const eventCategory = getDayCategory(event);
             const isHiddenByKind = hiddenDayCategorySet.has(eventCategory);
@@ -397,14 +419,12 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
                       <OpenNowStatus eventId={event._id} state={event.openNowState} />
                     </div>
                   </div>
-                  {authEnabled ? (
-                    <SaveEventButton eventId={event._id} eventTitle={event.title} variant="icon" />
-                  ) : null}
+                    <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="icon" />
                   </CalendarEventPreviewRow>
                 </article>
               );
-                  })}
-                </div>
+                  }}
+                </VirtualAgendaList>
               </section>
             );
           })}
@@ -441,6 +461,7 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
           className={mobileWeek ? mobileStyles.agenda : "space-y-1.5"}
           data-calendar-agenda-scope={mobileWeek ? "mobile-week" : "mobile"}
           data-calendar-scroll-region="selected-day-agenda"
+          data-calendar-virtualized-agenda="true"
         >
           {mobileWeek ? (
             <div className={mobileStyles.stickyFilters} data-calendar-mobile-sticky-filters="true">
@@ -452,7 +473,7 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
                 {dayLabel}{" "}
                 <span className="text-muted-foreground">·</span>{" "}
                 <span data-calendar-visible-event-count="true">
-                  {pluralize(selectedDayEventCount, "event")}
+                  {pluralize(initialVisibleAgendaEventCount, "event")}
                 </span>
               </h2>
               <OpenNowFilter active={openNowActive} href={openNowHref} initialNow={now} />

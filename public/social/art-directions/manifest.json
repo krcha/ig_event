@@ -1,0 +1,334 @@
+{
+  "generator": "built-in image_gen",
+  "version": "27-families-v3",
+  "assets": [
+    {
+      "id": "01",
+      "key": "riso",
+      "file": "01-riso.jpg",
+      "sha256": "6badd504fc7149997da76168e6e917759a8ecd4b28b811bbaa16c618dc11a341",
+      "bytes": 834783,
+      "prompt": "A text-free vertical risograph print background for an independent Belgrade culture programme. Cornflower cobalt blue uncoated paper with coarse visible grain; irregular coral-red ink roller strokes on the outer edges; a pale mint hand-cut paper rabbit silhouette with long ears in the upper right quarter, playful abstract hand-cut clouds at bottom. Imperfect two-colour ink registration, actual screenprinted texture, folk art charm, beautiful art school print. Main center-left 75 percent of canvas must remain calm cornflower blue for dense programme typography to be added later. Make the decorative edges generous but not busy. Portrait 4:5, flat full bleed artwork, NO TEXT, no letters, no numbers, no layout boxes, no UI, no logos, no watermark. This is a background asset, not a finished poster."
+    },
+    {
+      "id": "02",
+      "key": "afterhours",
+      "file": "02-afterhours.jpg",
+      "sha256": "998204173536721bfe6c5430967f5109148441681a88ec61ad9734210eb771c6",
+      "bytes": 440404,
+      "prompt": "A text-free photographic collage background for an underground Belgrade club programme. Portrait 4:5 full bleed. Deep near-black navy analog film photograph of an empty dance floor after hours, tiny electric cobalt reflections, subtle scratched 35mm film grain; one striking flash-photographed metallic silver disco star / folded foil cutout in the upper right quarter, with a narrow acid-lime tape fragment crossing only the far bottom edge. Atmospheric, raw, 1990s independent music zine, NOT glossy luxury, NOT abstract tech gradients. Most center-left 75 percent is very dark, calm, almost black to support luminous typography added later. No humans. NO TEXT, no letters, no numbers, no frames, no UI, no logos, no watermark. Original editorial background asset."
+    },
+    {
+      "id": "03",
+      "key": "botanical",
+      "file": "03-botanical.jpg",
+      "sha256": "8088da2385403a50f494d1adb4136b1dc63944f5a390ee7a3bcad3439109ad10",
+      "bytes": 793505,
+      "prompt": "Original text-free vertical 4:5 art print background for an independent cultural events poster. Burnt orange and soft peach textured handmade paper. Olive-green photographic botanical shadows of climbing vine leaves and a small surreal cut-paper moth mostly along far right edge and upper right corner. Sun-faded 1970s art book, tactile paper fibers, actual uneven hand-painted gouache, beautiful natural irregularity. Main center-left 75 percent quiet pale peach / orange washed paper for readable event text to be added later. No center objects. Full bleed flat artwork, NOT a framed poster mockup. No gradients made of smooth blobs. NO TEXT, no letters, no numbers, no UI, no logos, no watermark."
+    },
+    {
+      "id": "04",
+      "key": "ticket",
+      "file": "04-ticket.jpg",
+      "sha256": "2d48a68637f235a6d15ba185563830ce9a290f6750e5dde9f63726094ba6f4f4",
+      "bytes": 749326,
+      "prompt": "Original text-free 4:5 portrait background asset for a joyful underground music programme, inspired by vintage theatre and carnival ephemera. Almost-black charcoal felt / photocopied paper surface with rich physical grain. At upper right an expressive flat hand-painted coral and golden-yellow paper fan with tiny blue-green collage feather accents, lower right loose pink pencil squiggle and a small cutout lemon. Keep 78 percent center-left dark and quiet. Printed yellow / coral misregistered strips on outer edges only. Sophisticated small-club poster art, playful, asymmetrical, carefully restrained collage, screenprinted edges. NO TEXT, no labels, no letters, no numbers, no ticket boxes, no UI, no logos, no watermark. Not a finished poster, a background with room for programme typesetting."
+    },
+    {
+      "id": "05",
+      "key": "sleeve",
+      "file": "05-sleeve.jpg",
+      "sha256": "3a8aac401ae98b5c80c4545cb7bdf17fd76acbbb177490f8bf1935ed0887ac41",
+      "bytes": 715961,
+      "prompt": "Text-free original portrait 4:5 background asset for an independent record-store club night programme. Lilac and cool lavender rough uncoated paper, cobalt cyanotype-like photographic crop of a vinyl record and silver foil crescent in upper right quadrant, irregular black photocopy scuff marks at bottom right, a tiny fluorescent orange sticker shape touching top edge only. Contemporary experimental record sleeve meets 1990s DIY zine. Flat physical collage with elegant imperfect edges and visible halftone, NOT digital 3D render, no smooth generic gradients. Center-left 75 percent clear calm lavender field for large typography to be typeset later. NO TEXT, no letters, no numbers, no UI, no logos, no watermark."
+    },
+    {
+      "id": "06",
+      "key": "picnic",
+      "file": "06-picnic.jpg",
+      "sha256": "c09ddb6870520e15c2e21a9ac9db58b28dc2b8e1e42ebf6d9787d2792261d251",
+      "bytes": 594772,
+      "prompt": "Text-free original vertical 4:5 poster background. Playful independent Serbian culture festival art: warm butter-yellow paper with pistachio green ink, lively hand-cut vermilion-red / pink naive tulip and blue-striped rabbit cut-paper silhouette placed in upper right quarter, hand-stamped uneven checker fragments only on far bottom and right edge. Real linocut grain, risograph misregistration, handprinted folk-pop aesthetic, sophisticated but silly, warm lively colours, tactile and naturally imperfect. Center-left 75 percent remains calm pale yellow for dense event typography added later. Full bleed flat artwork. NO TEXT, no letters, no numbers, no boxes, no UI, no logos, no watermark."
+    },
+    {
+      "id": "07",
+      "key": "sunday",
+      "file": "07-sunday.jpg",
+      "sha256": "d4d8f397d71b3053b89aa6d22532db0819d88f69521611a33da295268a9cd1e1",
+      "bytes": 627816,
+      "prompt": "Original text-free portrait 4:5 independent art book / culture programme background. Rich burgundy and dark cherry textured paper with faded pale blush gouache areas on far edges. Upper right is a surreal small editorial paper collage of a cobalt blue coffee cup, yellow sun cutout and little cream rabbit silhouette; bottom edge has a thin cream torn-paper seam. Relaxed Sunday print-shop mood, real cut paper shadows and photocopy grain, poetic and humorous but restrained, art-directed editorial collage, no 3D. Center-left 75 percent must stay quiet uniform dark cherry to support legible cream type later. NO TEXT, no letters, no numbers, no UI, no logos, no watermark, no frames."
+    },
+    {
+      "id": "08",
+      "key": "haze",
+      "file": "08-haze.jpg",
+      "sha256": "702a5306cde80697263c4c9a2af278ad8b910d48f67c8b0242cb5b8de4b258aa",
+      "bytes": 340944,
+      "prompt": "Original text-free portrait 4:5 background asset for an independent Belgrade music and culture programme. Analog dream-photography, magenta and plum film haze, pink-white long-exposure light trails around a vague abstract dancing silhouette at the FAR UPPER RIGHT, no recognizable face or identity. Soft lens bloom, authentic fine film grain, very beautiful luminous image, editorial fashion photograph atmosphere, subtle motion blur with real dark plum shadows. Keep center-left 75 percent QUIET DARK PLUM so white programme text will be added separately. NOT a generic smooth gradient, NOT digital smoke wallpaper, no recognizable existing poster. Full bleed, no mockup. NO TEXT, no letters, no numbers, no logos, no watermark, no boxes."
+    },
+    {
+      "id": "09",
+      "key": "tribal",
+      "file": "09-tribal.jpg",
+      "sha256": "820e8699d49009c17f746d7d349c0e5f72935b1d004b4ddf91f0669961832dfd",
+      "bytes": 673569,
+      "prompt": "Original text-free portrait 4:5 cyber tribal / underground rave poster background asset. Graphite black photocopied paper, sharp mirrored chrome silver thorn and curved metallic blade ornaments as an ORIGINAL ABSTRACT FRAME along outer sides and upper right. One electric violet and acid cyan glint. Aggressive but elegant Y2K club print, physical scratched metal, coarse halftone and xerox grain, sculptural thin asymmetrical spikes. Do not use any religious symbols, real cultural scripts, runes or existing logos. Main center-left 75 percent quiet nearly black for separately typeset programme. Ornament must stay at perimeter, no center logo. NO TEXT, no letters, no numbers, no UI, no watermark. Flat full bleed original artwork, no mockup."
+    },
+    {
+      "id": "10",
+      "key": "redprint",
+      "file": "10-redprint.jpg",
+      "sha256": "4ef9407dc3a0260bf74cf4675018112399745d3175a13f8a58a53da429abf6d3",
+      "bytes": 780574,
+      "prompt": "Original text-free portrait 4:5 independent techno flyer background. Two-colour vermilion-red and deep charcoal black xerox print with asymmetric torn tape border, red mechanical registration marks and slashed abstract barbed angular shapes concentrated in upper right and far side edges. Raw screenprinted texture, imperfect overprinting, late 90s underground club flyer, bold structural rhythm, genuinely tactile paper. Center-left 75 percent calm nearly black for bright programme typography added separately. No borrowed event logos, no existing symbols, no lettering, no numbers, no text, no UI, no watermark. Full bleed flat graphic artwork, not a framed mockup."
+    },
+    {
+      "id": "11",
+      "key": "laser",
+      "file": "11-laser.jpg",
+      "sha256": "003af42698d7f32c708d39c589a9308caab1730176315f3717403eba8ba039d4",
+      "bytes": 395931,
+      "prompt": "Original text-free portrait 4:5 abstract nightclub photography / graphic background asset. Near-black burgundy room with laser-red translucent glass shards and diagonal architectural reflections, a few fine specular red lines at the edges, a small crisp silver glint in the upper right. Sophisticated industrial techno timetable atmosphere, rich deep red, analog grain, precise angular geometry, 1990s underground design, not a generic futuristic dashboard. Leave center-left 75 percent dark calm negative space for separately added type. No words, no letters, no numbers, no grid UI, no logos, no watermark. Flat full bleed artwork."
+    },
+    {
+      "id": "12",
+      "key": "bioblue",
+      "file": "12-bioblue.jpg",
+      "sha256": "9fbbdebd4afdc84e1359d52e7dded01a19af18237e45b3784f95b414005084fd",
+      "bytes": 711290,
+      "prompt": "Original text-free portrait 4:5 organic cyber / bioluminescent art background for an underground culture programme. Deep black and dark olive photogram paper with electric cobalt-blue fluid branching membranes and corroded golden olive edges wrapping the FAR RIGHT side and upper right corner. Macro botanical cellular texture, experimental darkroom solarization, physical grain and tiny speckled artifacts, sophisticated weird organic poster art. Center-left 75 percent must be quiet dark black-olive to support a readable programme added later. No central vortex, no generic glowing orb, no symmetrical corporate gradient. NO TEXT, no letters, no numbers, no logos, no watermark, no UI. Original full bleed flat artwork."
+    },
+    {
+      "id": "13",
+      "key": "signal",
+      "file": "13-signal.jpg",
+      "sha256": "975e49f0412e7c081d8383778590bc125462a02c7af2728b9a23f3b3fcdf9786",
+      "bytes": 555487,
+      "prompt": "Original text-free portrait 4:5 analog music culture poster background asset. Forest black-green grainy analogue video frame with rich amber light leaking at far right and soft emerald motion trail along bottom. Thin irregular looping silver wire with very narrow violet and cobalt chromatic fringes at far side edges and upper right, like a physical wire photographed through old broadcast equipment. Gritty tasteful experimental live music film, late-night Belgrade atmosphere, no humans in center. Keep center-left 75 percent near-black green quiet for readable large type to be added later. No text, no letters, no numbers, no logos, no UI, no watermark. Full bleed flat editorial artwork, no mockup."
+    },
+    {
+      "id": "14",
+      "key": "posle-ponoci",
+      "file": "14-posle-ponoci.jpg",
+      "sha256": "bf6d8488e2cf551407f6ddb6c548b15993b4f82c2afc28e5242348ed843dfc58",
+      "bytes": 604456,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: POSLE PONOĆI. An original editorial photograph of a sculptural folded mirrored chrome object, a small fragment of a mosaic disco sphere and a hard shadow on a cobalt wall in a dark club corner. Tactile mirror tiles and photographed flash reflections, violet chrome, deep almost-black negative space, cream highlights. The main reflective sculpture enters from the upper right edge, with a cobalt light stripe and a small silver fold near the lower opposite corner. It should feel like an avant-garde record sleeve, elegant and nocturnal, not sci-fi CGI. Palette #101014 #244BFF #9762D5 #D8DCE8 #FFF4DE. No human figure or mannequin. Add a very small incidental silver rabbit-shaped keychain partly obscured in the lower right texture; tiny, about 2 percent of image, not a mascot.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "01"
+    },
+    {
+      "id": "15",
+      "key": "ruzicasta-temperatura",
+      "file": "15-ruzicasta-temperatura.jpg",
+      "sha256": "089dc0b8432679fdae38f282438c193de66c17fd4f208776a1149a764b278b28",
+      "bytes": 768076,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: RUŽIČASTA TEMPERATURA. A screenprinted photographic still life of one cropped hot pink mirrored disco sphere at the right edge, with a sweeping cream flame-shaped silk ribbon above it and raspberry powder drifting at the bottom. Suggest heat and a theatrical stage rather than literal fire danger. Matte printed paper, coarse halftone in the imagery, tactile ink, vivid raspberry and plum shadows; central-left stays quiet raspberry. Elegant bold underground club print, no generic glowing stars. Palette #AE164C #FF4B99 #FFD990 #4B122E #FFEBDC. No rabbit. Original composition inspired by mirrored nightlife objects and warm-pink stage light, not a copy of any flyer.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "02"
+    },
+    {
+      "id": "16",
+      "key": "hrom-u-trnju",
+      "file": "16-hrom-u-trnju.jpg",
+      "sha256": "f09dbdba6fa76c18384aff002e8e5d7fd6be2b22fbfc85141a992de3307ce940",
+      "bytes": 456009,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: HROM U TRNJU. Original cyber-tribal ornament as a photographed bent polished metal sculpture and laser-cut sheet steel: narrow branching blades and organic tension, asymmetry, beautiful precision, chrome speculars. Ornaments hug the outside right and left edges like interrupted brackets, central space graphite and quiet. A single sharp acid-lime printed mark breaks the silver symmetry. Palette graphite #15191C silver #B9C3CE acid lime #E4FF73 blue-violet #5C67D8 bone #F4F0E6. One tiny negative-space notch at a lower edge subtly resembles two rabbit ears; no animal face or central rabbit icon. Artful real metal, not a gothic crest, not gaming graphics.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "03"
+    },
+    {
+      "id": "17",
+      "key": "fluoro-kopija",
+      "file": "17-fluoro-kopija.jpg",
+      "sha256": "141a628adad1d79e140d96b15e16aa51d2d52317254dbce4a12ea266060bb7f2",
+      "bytes": 819017,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: FLUORO KOPIJA. Physical underground photocopied concert flyer background, fluorescent yellow paper, inky torn xerox fragments, large broken cable spiral, magenta misregistered silkscreen ink, traces of glue and tape. Edges of paper visible as a physical collage; strong graphic diagonal outside the central reading space, patches of cream blank paper and dark-green black ink. Keep most central-left area plain yellow and restrained, with emphatic expressive outer edge marks. Palette #E7FF22 #ED4BA6 #16201B #F1EEDC #78B6A8. Genuine paper fibres, selectively coarse halftone and copy wear, not uniform digital noise. No rabbit and no fake printed text anywhere.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "04"
+    },
+    {
+      "id": "18",
+      "key": "plavi-negativ",
+      "file": "18-plavi-negativ.jpg",
+      "sha256": "f6f430143cb4b258ad8f990fa831d2335aa8742611f71d637c8c80d1befa6ade",
+      "bytes": 648389,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: PLAVI NEGATIV. Analog solarized macro photograph of folded foil reflected in rippling water, sharp cyan organic contours with oxidised brass edges and deep Prussian-blue shadows. A large folded cyan membrane enters from the right with interrupted horizontal photographic-film-like bands near the bottom; quiet navy center-left. Rich physically plausible liquid reflection with subtle psychedelic distortion and imperfect darkroom print edges. Palette #061E37 #08A8D1 #5274CC #B89169 #ECE5D4. Not a smooth AI liquid blob, not a holographic gradient wallpaper, not computer interface imagery. No rabbit.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "05"
+    },
+    {
+      "id": "19",
+      "key": "iseceni-ritam",
+      "file": "19-iseceni-ritam.jpg",
+      "sha256": "609280002602156f1b0bb88ae7bf7e7d5709f9ab28a0d872cc7ca14934eda0ce",
+      "bytes": 672620,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: ISEČENI RITAM. Original tactile editorial collage of blank ticket paper, translucent adhesive tape, cut vermilion and ultramarine paper shapes, ochre semi-circles and a hand-pulled charcoal line. Beautiful real contact shadows, uneven cuts, warm ivory paper fibre. Objects gather along the upper-right and bottom edges; center-left is mostly blank warm paper with large quiet shapes. Offbeat cultural festival poster, playful but disciplined, no childish clip art. Palette #F1E6CF #D93A31 #2658C9 #21201C #D6A64E. One tiny rough rabbit rubber stamp half covered by translucent tape in a lower corner, subtle and about 2 percent of image. All tickets blank, no fake type.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "06"
+    },
+    {
+      "id": "20",
+      "key": "opalni-signal",
+      "file": "20-opalni-signal.jpg",
+      "sha256": "6103c34e4cef1c78bddf15f22108bb8c3bb67b906ce3b3ba4d3015632e9d261f",
+      "bytes": 446941,
+      "prompt": "Use case: stylized-concept. Asset type: ORIGINAL text-free background artwork for an independent Belgrade culture and nightlife poster series, Event Zeka. Portrait 3:4 composition. High-end authored art direction, tactile physical material, not a template. Keep broad low-detail quiet areas in the central-left 65 percent for a programme to be typeset later. Interesting art at top-right and outer edges, generous breathing room. No lettering, no numbers, no logos, no watermarks, no text-like glyphs. No mockup border, no UI, no layout boxes. Real material imperfections, composed lighting, restrained grain. All type will be added as a separate measured layer later. Direction: OPALNI SIGNAL. Tactile still life of translucent opal sheets and a sculptural satin fold with one delicate glass ring, grainy analog photograph with soft but directional lighting. Large pearly-lavender material fold curves along the right edge; a crisp apricot paper edge enters at the bottom, broad central-left warm pearl and muted sage quiet space. Refined atmospheric art-book poster, an intentional calm contrast to the louder club posters, elegant physical material depth. Palette #402F59 #B4A1D5 #BED5AE #E49D77 #F7EEDF. No generic purple gradient, no rainbow holography, no glowing particles, no rabbit.",
+      "approvedPreview": "poster-pack-02-2026-10-19",
+      "previewId": "07"
+    },
+    {
+      "id": "21",
+      "key": "crni-kadar",
+      "file": "21-crni-kadar.jpg",
+      "sha256": "6faa3637a3419200c27f3b3233035e97fc8fe71e7eb10ea26afd868324c19b54",
+      "bytes": 1236194,
+      "prompt": "Use case: ads-marketing. Create an ORIGINAL text-free portrait art background for Event Zeka cultural and nightlife programme posters, asset name 01 Crni kadar. Output 1440 x 2160 pixels, portrait 2:3, full bleed.\nInput image: the supplied black-and-white grainy cinema poster is REFERENCE INSPIRATION ONLY for material and photographic mood, not a layout or content to reproduce. Do not copy its people, title, typography, words, or logo.\nScene and medium: authored black-and-white 35mm film photograph, deep matte charcoal silver-gelatin grain, slightly blown bone-white flash highlights, coarse photocopied edge texture. On the far RIGHT edge and lower-right perimeter, show a cropped anonymous silhouette behind folded gauzy theater drapery, only the suggestion of shoulder and head, no recognizable face, with soft flash bloom and a few pale vertical folds. The textile should have real fabric depth and natural imperfect tonal transitions. Evoke a small underground cinema foyer, mysterious but not a horror cliche.\nComposition: make this a practical programme background with lively peripheral art, not a finished poster. Upper-left 70% width and top 22% height is quiet nearly black for a separately typeset header. The central-left 70% of the image from y22% to y86% stays calm dark charcoal with only low contrast film grain, generous continuous room for three or four event listings. Light fabric and silhouette occupy the rightmost 25% and lower perimeter; keep important details away from edge crops. A few fine dust flecks at outer margins. The 4:5 crop and 9:16 crop must both remain balanced.\nColor palette: black #101014, charcoal #252629, bone white #EEEADB, neutral silver gray. Rich photographic blacks, no blue or purple color cast.\nConstraints: absolutely NO lettering, text, words, letters, numerals, labels, logos, watermarks, drawn cards, boxes, borders, columns, time badges or placeholder glyphs anywhere. No pictorial religious or occult symbols, no weapons, no copied figure. No smooth generic gradients, no shiny 3D illustration, no center object. Preserve a convincing analog photograph with restrained negative space.",
+      "sourceSha256": "f0052563b09f7e2b18a2a1ffd4ea36ddb1563bfd58ede205f9911c8209efe71d",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "01",
+      "sourceFile": "assets/originals/01-crni-kadar.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "22",
+      "key": "crvena-margina",
+      "file": "22-crvena-margina.jpg",
+      "sha256": "60773093834146b08f5b9e8b1ac5b5e0da4cd3369162f4c693369f0430a4c901",
+      "bytes": 1479364,
+      "prompt": "Use case: ads-marketing. Create an ORIGINAL text-free portrait ink art background for Event Zeka cultural programme posters, asset name 02 Crvena margina. Output 1440 x 2160 pixels, portrait 2:3, full bleed.\nInput image: supplied red/black Japanese horror event poster is REFERENCE INSPIRATION ONLY for ink material, stark three-color printing, nervous rootlike lines, and atmosphere. Do not copy any human face, original character, Japanese script, lettering, layout, or marks.\nSubject/medium: an original abstract winged moth interpreted as tangled root veins and cut wood-grain, elegant unsettling black-and-bone-white woodcut and scratchboard etching, with thin irregular scarlet printed lines. Its branching wing veins and root ends occupy the far RIGHT side, extending slightly into the bottom margin, as if a large carved print has been cropped by the page. A single irregular scarlet vertical dry brush mark along the far left edge, broken in a few places, adds heat. The original moth should be abstract organic anatomy, not a logo, not a scary human or a face, no skulls.\nComposition: central-left programme area from x9% to 70%, y20% to 88%, and upper-left header area from x8% to 73%, y4% to 19%, should remain nearly black with only faint paper tooth and ink noise, continuous clean negative space. Active white etched wing segments stay mostly x77% to 100%; cropped root tendrils frame the bottom-right and top-right perimeter. Do not put a solid rectangular white panel behind the art. The right edge should feel like a painterly carved print emerging from black, not a pasted card. Keep the artwork striking in both a 4:5 and 9:16 crop.\nPalette: rich soot black #0D0E10, sharp scarlet #EE2C3A, aged bone #EDE6D7. Two-color riso/linocut misregistration in a few details, natural small scratches, slightly rough ink edges. No smooth airbrush shading or 3D shine.\nConstraints: absolutely NO text, letters, numbers, script, glyphs, characters, logos, labels, watermarks, borders, frames, cards, timetable boxes or placeholders. No readable or invented Asian writing. No central focal object. Original sophisticated underground cultural print, not Halloween decoration.",
+      "sourceSha256": "b008828fe14cabdd9feb9fed55cd063ce65ce062dbc120925590d473f2b1a7c2",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "02",
+      "sourceFile": "assets/originals/02-crvena-margina.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "23",
+      "key": "kabinet-tusa",
+      "file": "23-kabinet-tusa.jpg",
+      "sha256": "671781dbc54791cef60430590d1b64f02abf2be8aceed83bbec496886e73c3e7",
+      "bytes": 1406940,
+      "prompt": "Use case: ads-marketing. Create an ORIGINAL text-free portrait drawing background for Event Zeka cultural programme posters, asset name 03 Kabinet tusa. Output 1440 x 2160 pixels, portrait 2:3, full bleed.\nInput image: supplied warm ivory framed black-and-red nervous pen artwork is REFERENCE INSPIRATION ONLY for physical paper, expressive hatching, abrupt red strokes and enigmatic motion. Do not reproduce its characters, figures, text, signature, frame or composition.\nSubject and medium: a hand-drawn study of an impossible folded ribbon sculpture, twisting sheet material drawn with black fountain pen and dry nib crosshatching, engraved contours, irregular ink load and a few vivid vermilion pen sketches. Think an artist's private cabinet of curious folded paper and textile studies, not a digital 3D blob. MAIN dark sculptural fold is cropped by the far RIGHT EDGE, with its thin crosshatched loops and sharp cutouts in the rightmost 25% of the composition; two SMALL companion fragments at lower-left and bottom-right corners. One tiny etched hare profile, only 4% of image width, half hidden in hatch marks at lower-left corner, a subtle incidental sketch rather than a mascot. A few thin nervous vermilion lines curl around the peripheral sculpture. Fine warm uncoated paper fibers throughout.\nComposition: upper-left 75% width and top 22% height stays clean warm ivory with only paper texture for a separately typeset title. Central-left 70% width between y22% and y86% also stays almost unmarked warm ivory, large continuous legible programme space. The dramatic black art belongs at outer right and lower perimeter; do not let it drift into the central programme zone. Sparse pinhead ink marks at outer margins only. Composed for both 4:5 and 9:16 crops without relying on one exact edge. Make it tactile, elegant and slightly eccentric, not a blank corporate background.\nPalette: warm ivory #EAE1CB and pale parchment #F1E9D7, deep black-brown ink #1F1C18, vermilion #C94229 used sparsely. Shadows in crosshatching, never smooth gray airbrush; no gold, purple, neon, or chrome.\nConstraints: absolutely NO text, numbers, letters, scribbled writing, signatures, labels, logos, watermarks, borders, picture frames, cards, badges, boxes, time rectangles or placeholder glyphs anywhere. No copied characters or recognisable faces. No generic abstract gradient, no vector clip art.",
+      "sourceSha256": "99dc427c3e8ed1fbfa9113f962d6a7c0cd352a829abcc875c8109d68a7bed1a4",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "03",
+      "sourceFile": "assets/originals/03-kabinet-tusa.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "24",
+      "key": "plavi-bakrorez",
+      "file": "24-plavi-bakrorez.jpg",
+      "sha256": "8cb917fe4a2baaaa6e085a9a3abd40c4bfefff84e65a1bbbbfe6f2695fe6790c",
+      "bytes": 1856583,
+      "prompt": "Use case: ads-marketing. Asset: original TEXT-FREE artwork background for Event Zeka culture/club programme, portrait 1440x2160. References are inspiration for materials, linework, tonal hierarchy; create an ORIGINAL new composition, not a copy of the reference. Produce one full bleed artwork, no collage contact sheet. The artwork will be cropped to 1080x1350 and 1080x1920 with separate real Serbian typography added by code: keep upper-left heading area and the broad central-left 70% calm and low in local contrast, with exciting imagery concentrated at the right perimeter, uppermost/lower perimeter and a few left edge incursions. Calm space must be part of the same tactile artwork, no blank UI boxes or drawn programme cards. Strong visual character at thumbnail size. No writing, no typography, no logo, no signature, no watermark, no letters, no dates, no pictograms, no numbers, no preprinted text. Rich authored club/cultural poster aesthetic with physically credible grain and ink. Package PLAVI BAKROREZ. Dominant saturated deep Prussian blue and indigo paper, ivory and pale dusty cyan engraving strokes, tiny muted coral print registration accents. Interpret the reference's nervous etched black-and-red pen drawing as a blue intaglio artwork. Large original looping folded membrane / ribbon assembled from fine sharp crosshatching and broken drypoint lines, diagonally sweeping across the upper-right and lower-right margins, sweeping inward just a little from bottom left. Organic, tensile, irregular; engraved grooves and ink pressure visible, sophisticated cultured experimental print. Quiet ink-blue center, selective bone-white scratched highlights at outer edges. Very subtle fine plate border close to fullbleed perimeter. No representational horror face, no borrowed symbols, no rabbit in this package. Tonally luminous and tactile, not glossy 3D.",
+      "sourceSha256": "9315ea606357bc8e02ee841e9a100fd5425106c92bc48a58ea6b13d5c6e824dd",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "04",
+      "sourceFile": "assets/originals/04-plavi-bakrorez.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "25",
+      "key": "ljubicasti-kontakt",
+      "file": "25-ljubicasti-kontakt.jpg",
+      "sha256": "16508e6fc83974cf9edca0348a447bac869c8588d7ab9e0fb79ebf6a8c285f45",
+      "bytes": 1068765,
+      "prompt": "Use case: ads-marketing. Asset: original TEXT-FREE artwork background for Event Zeka culture/club programme, portrait 1440x2160. References are inspiration for materials, linework, tonal hierarchy; create an ORIGINAL new composition, not a copy of the reference. Produce one full bleed artwork, no collage contact sheet. The artwork will be cropped to 1080x1350 and 1080x1920 with separate real Serbian typography added by code: keep upper-left heading area and the broad central-left 70% calm and low in local contrast, with exciting imagery concentrated at the right perimeter, uppermost/lower perimeter and a few left edge incursions. Calm space must be part of the same tactile artwork, no blank UI boxes or drawn programme cards. Strong visual character at thumbnail size. No writing, no typography, no logo, no signature, no watermark, no letters, no dates, no pictograms, no numbers, no preprinted text. Rich authored club/cultural poster aesthetic with physically credible grain and ink. Package LJUBICASTI KONTAKT. A moody analog photographic contact print dyed deep plum and dusty violet with warm ivory bloom, silvery lavender highlights and a small dark crimson light leak. Interpret the first reference's intimate grainy theatrical film still, soft flash and elegant darkness through an ORIGINAL photograph: a cropped anonymous figure's shoulder and back in flowing vintage cloth beside a soft folding curtain, pushed to far right and mostly below the middle, indistinct face entirely outside the crop; real irregular film grain, slightly lost focus, halation, close black shadows. A faint ghost of pressed botanical silhouette near bottom perimeter, deep mostly quiet plum over central-left programme area. Sophisticated archive-zine photography, emotional and tactile, photographic image itself must be compelling without text. No literal copy of the reference people or costumes, no satanic symbols, no rabbit in this package.",
+      "sourceSha256": "36bad0f8aefbaf75af62758acd5205de0055fc5381389d13fd61acbd668fd28d",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "05",
+      "sourceFile": "assets/originals/05-ljubicasti-kontakt.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "26",
+      "key": "zeleni-fanzin",
+      "file": "26-zeleni-fanzin.jpg",
+      "sha256": "d59db5e942297d97a02f4e2f2056659d95a4960f80ae0c19427c4f542d1346d6",
+      "bytes": 1845541,
+      "prompt": "Use case: ads-marketing. Asset: original TEXT-FREE artwork background for Event Zeka culture/club programme, portrait 1440x2160. References are inspiration for materials, linework, tonal hierarchy; create an ORIGINAL new composition, not a copy of the reference. Produce one full bleed artwork, no collage contact sheet. The artwork will be cropped to 1080x1350 and 1080x1920 with separate real Serbian typography added by code: keep upper-left heading area and the broad central-left 70% calm and low in local contrast, with exciting imagery concentrated at the right perimeter, uppermost/lower perimeter and a few left edge incursions. Calm space must be part of the same tactile artwork, no blank UI boxes or drawn programme cards. Strong visual character at thumbnail size. No writing, no typography, no logo, no signature, no watermark, no letters, no dates, no pictograms, no numbers, no preprinted text. Rich authored club/cultural poster aesthetic with physically credible grain and ink. Package ZELENI FANZIN. Acid yellow-green / chartreuse dyed paper, dense charcoal-black toner, muted oxide-orange little offset accents and a few warm cream paper tears. Take the Japanese horror reference's ink-vein organic drawing and the pen reference's restless dry hatching, make an original cut-and-paste photocopied art zine: enlarged abstract insect-wing / fern-vein engraving fragments along right edge and lower corners, partial xerox sheet edges, few genuine tape traces, broken stipple and uneven toner, no neat geometric vector look. Broad tranquil green left-center with very fine paper grain. Strong black edges create visual bite; one tilted orange paper sliver close to bottom edge. Include a tiny rabbit-shaped ink stamp partly hidden under a torn scrap in a far corner, subtle and discovered late, not mascot. No text or decorative pseudo-writing, no literal face from reference, no 3D liquid chrome.",
+      "sourceSha256": "9ef977f5bb35ba9267bab545d2f7720ed7105de0b92fb4c94afca5b7aceaa81a",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "06",
+      "sourceFile": "assets/originals/06-zeleni-fanzin.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    },
+    {
+      "id": "27",
+      "key": "karminski-odjek",
+      "file": "27-karminski-odjek.jpg",
+      "sha256": "abecf4e99b68a68b0cb86725ddef24b602a4dbb12fcf3b9c94a7e08eec31a6fe",
+      "bytes": 1295589,
+      "prompt": "Use case: style-transfer. Edit the FIRST IMAGE only, as a text-free artwork for Event Zeka club/cultural posters. Images 2 and 3 are visual material/linework inspiration only. Keep the first image's deep carmine/wine print ground, copper-red/pale dusty pink/ivory color palette, tactile scratched ink and paper, and broad empty calm left-central programme space. Keep portrait 1440x2160 and preserve calm upper-left area for a heading. Change ONLY the decorative ivory ribbon subject around the perimeter: replace its long folded fabric ribbons with ORIGINAL dramatic theatrical face/mask fragments drawn in expressive, broken drypoint and nervous pen crosshatching, as if printed from an artist's sketchbook. An asymmetrical large mask/profile fragment is cropped by far right edge (upper-middle/right), its eye and cheek gesturally suggested with angular ink and hatch marks, and a much smaller disjointed eye/hand-like sketch fragment at very bottom-left creates visual counterpoint. No likeness or character copied from references. Dark and poetic, elegant cultured club poster; unexpected expressive mark-making, NOT photorealistic or slick 3D. Plenty of deep quiet wine space in center, edges varied not a uniform rectangular ornamental frame. A tiny suggestive rabbit ear pair may hide in a pen stroke far bottom edge, optional and subtle. No text, no letters, no numbers, no logos, no signatures, no date, no line of pseudo-writing, no programme cards, no typography. These are decorative background drawings; real event names will be separate code layers.",
+      "sourceSha256": "ebaddf626784c4a1c85395fe573532b8b7988f29c99c2e403d05115529652e6a",
+      "sourceDimensions": {
+        "width": 1024,
+        "height": 1536
+      },
+      "jpegDimensions": {
+        "width": 1440,
+        "height": 2160
+      },
+      "tool": "built-in image_gen",
+      "approvedPreview": "poster-pack-03-2026-10-19",
+      "previewId": "07",
+      "sourceFile": "assets/originals/07-karminski-odjek.png",
+      "sourcePromptVersion": "eventzeka-pack03-reference-guided-v1"
+    }
+  ]
+}

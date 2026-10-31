@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import sharp from "sharp";
 import { ConvexHttpClient } from "convex/browser";
 import { GET as getAgendaPoster } from "../app/api/social/carousel/days/[date]/route.ts";
+import { GET as getClosingPoster } from "../app/api/social/carousel/cta/route.ts";
+import { CLOSING_CTA_COPY, buildClosingCtaRenderVersion } from "../lib/social/carousel-cta.ts";
 import {
   buildAgendaRenderVersion,
   buildDailyCarouselCaption,
@@ -18,10 +20,12 @@ import {
   normalizeInstagramHandle,
   selectDailyCarouselEvents,
 } from "../lib/social/daily-carousel.ts";
-import { getAgendaTagPositions } from "../lib/social/agenda-layout.ts";
+import { getPosterTagPositions } from "../lib/social/poster-layout.ts";
 import {
   buildAgendaPosterSvg,
+  buildClosingCarouselSvg,
   renderAgendaPoster,
+  renderClosingCarouselSlide,
 } from "../lib/social/agenda-images.ts";
 import {
   renderCtaCarouselSlide,
@@ -66,9 +70,9 @@ for (const date of eventDates) {
 }
 assert.ok(new Set(selected.map((event) => event.venue)).size < selected.length, "the same venue may appear on different dates");
 assert.deepEqual(selected, selectDailyCarouselEvents([...fixtures].reverse(), publishDate), "source order does not reroll the selection");
-const followingSelection = selectDailyCarouselEvents(fixtures, eventDates[0]);
+const followingSelection = selectDailyCarouselEvents(fixtures, eventDates[0], 9, undefined, { publishedCaptions: [buildDailyCarouselCaption(selected)] });
 for (const date of eventDates.slice(1)) {
-  assert.deepEqual(selected.filter((event) => event.date === date), followingSelection.filter((event) => event.date === date), "overlapping days keep their ordered event selection");
+  assert.ok(followingSelection.filter((event) => event.date === date).some(event => !selected.some(prior => prior._id === event._id)), "overlapping dates choose previously unposted alternatives first");
 }
 assert.deepEqual(selectDailyCarouselEvents([...fixtures, fixtures[0]], publishDate), selected, "duplicate source rows do not consume a slot");
 
@@ -77,6 +81,8 @@ const optionalPayload = buildDailyCarouselPayload({ events: optionalHandles, pub
 assert.equal(optionalPayload.selectedCount, 3, "missing or invalid Instagram handles do not hide approved events");
 assert.equal(optionalPayload.slides[0].userTags.length, 1);
 assert.equal(optionalPayload.slides[0].userTags[0].username, "venue.1");
+assert.equal(optionalPayload.slides.length, 2, "one populated day still ends with a closing card");
+assert.equal(optionalPayload.slides.at(-1).kind, "cta");
 const sharedVenue = optionalHandles.map((event) => ({ ...event, venue: "Jedan prostor", venueInstagramHandle: "one.venue" }));
 const sharedPayload = buildDailyCarouselPayload({ events: sharedVenue, publishDate, publicOrigin: EVENT_ZEKA_PUBLIC_ORIGIN });
 assert.equal(sharedPayload.selectedCount, 3, "a sparse day can contain multiple real events at the same venue");
@@ -85,8 +91,13 @@ assert.equal(sharedPayload.slides[0].userTags.length, 1, "Instagram user tags ar
 const payload = buildDailyCarouselPayload({ events: fixtures, publishDate, publicOrigin: "https://events.example.test/" });
 assert.equal(payload.selectedCount, 9);
 assert.deepEqual(payload.eventDates, eventDates);
-assert.equal(payload.slides.length, 3);
-assert.ok(payload.slides.every((slide) => slide.kind === "agenda"));
+assert.equal(payload.slides.length, 4);
+const agendaSlides = payload.slides.filter((slide) => slide.kind === "agenda");
+assert.equal(agendaSlides.length, 3);
+assert.equal(payload.slides.at(-1).kind, "cta");
+assert.deepEqual(payload.slides.at(-1).userTags, []);
+assert.equal(new URL(payload.slides.at(-1).imageUrl).searchParams.get("v"), buildClosingCtaRenderVersion(publishDate));
+assert.ok(payload.selectionKey.endsWith(`+cta@${buildClosingCtaRenderVersion(publishDate)}`));
 assert.ok(payload.selectionKey.startsWith(`${publishDate}:`));
 assert.match(payload.caption, /Sreda, 14\. oktobra 2026\./);
 assert.match(payload.caption, /Četvrtak, 15\. oktobra 2026\./);
@@ -98,7 +109,7 @@ for (const event of selected) {
   assert.ok(payload.caption.includes(event.title));
   assert.ok(payload.caption.includes(event.venue));
 }
-for (const [position, slide] of payload.slides.entries()) {
+for (const [position, slide] of agendaSlides.entries()) {
   assert.equal(slide.position, position);
   assert.equal(slide.eventIds.length, 3);
   assert.equal(slide.date, eventDates[position]);
@@ -107,8 +118,9 @@ for (const [position, slide] of payload.slides.entries()) {
   assert.equal(imageUrl.pathname, `/api/social/carousel/days/${slide.date}`);
   assert.equal(imageUrl.searchParams.get("events"), slide.eventIds.join(","));
   assert.equal(imageUrl.searchParams.get("position"), String(position));
-  assert.equal(imageUrl.searchParams.get("v"), buildAgendaRenderVersion(slide.date, events, position));
-  const positions = getAgendaTagPositions(events.map((event) => ({ title: event.title, venue: event.venue, time: getAgendaEventTime(event), detail: getAgendaEventDetail(event) })));
+  assert.equal(imageUrl.searchParams.get("publishDate"), publishDate);
+  assert.equal(imageUrl.searchParams.get("v"), buildAgendaRenderVersion(slide.date, events, position, publishDate));
+  const positions = getPosterTagPositions(events.map((event) => ({ title: event.title, venue: event.venue, time: getAgendaEventTime(event), detail: getAgendaEventDetail(event) })), { date: slide.date, position, publishDate });
   for (const tag of slide.userTags) {
     const index = events.findIndex((event) => normalizeInstagramHandle(event.venueInstagramHandle) === tag.username);
     assert.deepEqual({ x: tag.x, y: tag.y }, positions[index]);
@@ -140,6 +152,7 @@ for (const change of [{ title: "Drugi program" }, { venue: "Drugi prostor" }, { 
   assert.notEqual(originalVersion, buildAgendaRenderVersion(metadataEvent.date, [{ ...metadataEvent, ...change }], 0), "changed displayed facts invalidate image URLs");
 }
 assert.notEqual(originalVersion, buildAgendaRenderVersion(metadataEvent.date, [metadataEvent], 1), "the poster palette/index is versioned");
+assert.notEqual(buildAgendaRenderVersion("2026-10-23", [{ ...metadataEvent, date: "2026-10-23" }], 0, "2026-10-21"), buildAgendaRenderVersion("2026-10-23", [{ ...metadataEvent, date: "2026-10-23" }], 0, "2026-10-22"), "the publication day invalidates a sparse-window image even when all event facts match");
 const formatOnly = { ...metadataEvent, artists: [], ticketPrice: undefined, eventType: "event" };
 assert.equal(buildAgendaRenderVersion(formatOnly.date, [formatOnly], 0), buildAgendaRenderVersion(formatOnly.date, [{ ...formatOnly, eventType: "live music" }], 0), "unused generic categories do not change rendered facts");
 assert.equal(originalVersion, buildAgendaRenderVersion(metadataEvent.date, [{ ...metadataEvent, description: "not present in the calendar projection" }], 0), "calendar and approved-event detail projections produce the same image version");
@@ -183,6 +196,7 @@ for (const [position, date] of eventDates.entries()) {
   assert.deepEqual([metadata.width, metadata.height, metadata.format], [1080, 1350, "jpeg"]);
   const svg = buildAgendaPosterSvg(input).toString("utf8");
   assert.doesNotMatch(svg, /🐇|Zeka zna|linearGradient/);
+  assert.doesNotMatch(svg, /data-role="intro"/u, "carousel dates lead directly to their events");
 }
 const longTitlePoster = await renderAgendaPoster({ date: eventDates[0], position: 0, events: [{ ...metadataEvent, title: "Predavanje i razgovor: kako grad menja naš svakodnevni život i gde se sreću muzika, umetnost i javni prostor" }, { ...metadataEvent, _id: "long-2", title: "Muzički program: pesme Dejvida Bouvija, koncert i razgovor sa publikom" }, { ...metadataEvent, _id: "long-3", title: "KRATKO", time: "TBD" }] });
 assert.equal((await sharp(longTitlePoster).metadata()).height, 1350);
@@ -191,14 +205,46 @@ for (const legacyImage of [await renderEventCarouselSlide({ title: "Šta se deš
   assert.deepEqual([metadata.width, metadata.height, metadata.format], [1080, 1350, "jpeg"]);
 }
 
+const closingImage = await renderClosingCarouselSlide();
+const closingMetadata = await sharp(closingImage).metadata();
+assert.deepEqual([closingMetadata.width, closingMetadata.height, closingMetadata.format], [1080, 1350, "jpeg"]);
+const closingSvg = buildClosingCarouselSvg().toString("utf8");
+assert.ok(closingSvg.includes(CLOSING_CTA_COPY.title));
+assert.ok(closingSvg.includes(CLOSING_CTA_COPY.benefit));
+assert.doesNotMatch(closingSvg, /linearGradient|<text/);
+assert.match(closingSvg, /<image href="data:image\/jpeg;base64,/);
+const appendedPublishDate="2026-11-14",appendedDates=getUpcomingAgendaDates(appendedPublishDate);
+const appendedEvents=fixtures.map((event,index)=>({...event,date:appendedDates[Math.floor(index/5)]}));
+const appended=buildDailyCarouselPayload({events:appendedEvents,publishDate:appendedPublishDate,publicOrigin:EVENT_ZEKA_PUBLIC_ORIGIN});
+assert.deepEqual([appended.design.id,appended.design.cycleLength,appended.selectedCount,appended.slides.length],["27",81,9,4]);
+for(const [position,date]of appendedDates.entries()){
+ const selected=appended.slides[position].eventIds.map(id=>appendedEvents.find(event=>event._id===id));
+ assert.equal(selected.length,3);
+ const svg=buildAgendaPosterSvg({date,events:selected,position,publishDate:appendedPublishDate}).toString();
+ assert.match(svg,/data-theme="27"/u);assert.match(svg,/data-composition="0"/u);
+ assert.equal((svg.match(/width="168" height="108"/g)||[]).length,3);assert.doesNotMatch(svg,/data-role="intro"/u);
+}
+const appendedClosing=buildClosingCarouselSvg(appendedPublishDate).toString();
+assert.match(appendedClosing,/data-theme="27"/u);assert.match(appendedClosing,/data-composition="0"/u);
+assert.equal((appendedClosing.match(/data-role="closing-reading-surface"/g)||[]).length,2);
+assert.ok(appendedClosing.includes(CLOSING_CTA_COPY.benefit));
+const closingResponse = await getClosingPoster(new Request(`https://events.example.test/api/social/carousel/cta?v=${buildClosingCtaRenderVersion()}`));
+assert.equal(closingResponse.status, 200);
+assert.equal(closingResponse.headers.get("content-type"), "image/jpeg");
+assert.equal(closingResponse.headers.get("cache-control"), "public, max-age=60, must-revalidate");
+assert.equal((await getClosingPoster(new Request("https://events.example.test/api/social/carousel/cta?v=old"))).status, 409);
+assert.equal((await getClosingPoster(new Request(`https://events.example.test/api/social/carousel/cta?v=${buildClosingCtaRenderVersion()}&v=${buildClosingCtaRenderVersion()}`))).status, 409);
+assert.equal((await getClosingPoster(new Request("https://events.example.test/api/social/carousel/cta"))).status, 200, "unversioned legacy links remain valid");
+
 const originalQuery = ConvexHttpClient.prototype.query;
 const originalConvexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 const routeEvent = { ...metadataEvent, _id: "qaagenda00001", status: "approved" };
 const routeRecords = new Map([[routeEvent._id, routeEvent]]);
 let queryCount = 0;
 const routeVersion = buildAgendaRenderVersion(routeEvent.date, [routeEvent], 0);
-async function requestPoster({ date = routeEvent.date, events = routeEvent._id, position = "0", version = routeVersion, extra = "" } = {}) {
+async function requestPoster({ date = routeEvent.date, events = routeEvent._id, position = "0", version = routeVersion, publicationDate, extra = "" } = {}) {
   const parameters = new URLSearchParams({ events, position, v: version });
+  if (publicationDate !== undefined) parameters.set("publishDate", publicationDate);
   return await getAgendaPoster(new Request(`https://events.example.test/api/social/carousel/days/${date}?${parameters}${extra}`), { params: Promise.resolve({ date }) });
 }
 try {
@@ -207,7 +253,7 @@ try {
     queryCount += 1;
     return routeRecords.get(args.id) ?? null;
   };
-  for (const invalid of [{ date: "2026-02-29" }, { events: "short" }, { events: "qaagenda00001,qaagenda00002,qaagenda00003,qaagenda00004" }, { events: "qaagenda00001,qaagenda00001" }, { position: "3" }, { version: "" }, { extra: "&events=qaagenda00002" }]) {
+  for (const invalid of [{ date: "2026-02-29" }, { events: "short" }, { events: "qaagenda00001,qaagenda00002,qaagenda00003,qaagenda00004" }, { events: "qaagenda00001,qaagenda00001" }, { position: "3" }, { version: "" }, { extra: "&events=qaagenda00002" }, { publicationDate: "2026-02-29" }, { publicationDate: "" }, { publicationDate: "2026-10-21", extra: "&publishDate=2026-10-21" }]) {
     assert.equal((await requestPoster(invalid)).status, 400);
   }
   assert.equal(queryCount, 0, "malformed image requests never reach the data API");
@@ -216,6 +262,15 @@ try {
   assert.equal(response.headers.get("content-type"), "image/jpeg");
   assert.equal(response.headers.get("cache-control"), "public, max-age=60, must-revalidate");
   assert.deepEqual([(await sharp(Buffer.from(await response.arrayBuffer())).metadata()).width, response.headers.get("x-content-type-options")], [1080, "nosniff"]);
+  const customEvent = { ...routeEvent, date: "2026-10-23" }, customPublicationDate = "2026-10-21";
+  const customVersion = buildAgendaRenderVersion(customEvent.date, [customEvent], 0, customPublicationDate);
+  routeRecords.set(customEvent._id, customEvent);
+  const customResponse = await requestPoster({ date: customEvent.date, publicationDate: customPublicationDate, version: customVersion });
+  assert.equal(customResponse.status, 200, "an explicit publication date supports a sparse/custom feed window");
+  assert.equal(customResponse.headers.get("cache-control"), "public, max-age=60, must-revalidate");
+  assert.equal((await requestPoster({ date: customEvent.date, publicationDate: "2026-10-22", version: customVersion })).status, 409, "a stale hash cannot move the same event to another publication-day design");
+  assert.equal((await requestPoster({ date: customEvent.date, version: customVersion })).status, 409, "omitting an explicit sparse-window day cannot reuse its different style version");
+  routeRecords.set(routeEvent._id, routeEvent);
   routeRecords.clear();
   assert.equal((await requestPoster()).status, 404, "withdrawn events cannot be rendered from old public URLs");
   routeRecords.set(routeEvent._id, { ...routeEvent, date: eventDates[1] });
@@ -256,4 +311,4 @@ assert.match(workflowCode, /blocked_reconciliation_required/);
 assert.match(workflowCode, /pendingSelectionKey/);
 assert.doesNotMatch(workflowCode, /slide\.kind === 'event'/, "venue tags apply to agenda pages");
 
-console.log("Daily Instagram agenda QA passed: three-day event quotas, stable overlap, optional valid tags at actual row positions, factual Serbian captions, metadata-versioned images, and 1080x1350 JPEG posters.");
+console.log("Daily Instagram agenda QA passed: three-day event quotas, final versioned CTA, sparse and empty windows, rotating overlap, venue tags, Serbian captions, and 1080x1350 JPEG posters.");

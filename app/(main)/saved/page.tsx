@@ -3,7 +3,6 @@ import { auth } from "@clerk/nextjs/server";
 import type { FunctionReference } from "convex/server";
 import {
   SavedLibraryPanel,
-  SignInPromptCard,
   type SavedLibraryEvent,
   type SavedLibraryVenue,
 } from "@/components/saved/saved-library-panel";
@@ -103,20 +102,8 @@ export default async function SavedPage({ searchParams }: { searchParams?: Promi
   const params = await searchParams;
   const date = Array.isArray(params?.date) ? params.date[0] : params?.date;
   const returnPath = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `/saved?date=${date}` : "/saved";
-  if (!hasClerkEnv()) {
-    return (
-      <main className="app-page gap-3 sm:gap-4">
-        <SignInPromptCard authEnabled={false} returnPath={returnPath} />
-      </main>
-    );
-  }
-
-  const { userId } = await auth();
-  if (!userId) {
-    // Server-known guests can see working sign-in links immediately, even if
-    // the Clerk browser SDK is slow or unavailable. No private read runs here.
-    return <main className="app-page gap-3 sm:gap-4"><SignInPromptCard returnPath={returnPath} /></main>;
-  }
+  const authEnabled = hasClerkEnv();
+  const { userId } = authEnabled ? await auth() : { userId: null };
   let library = EMPTY_LIBRARY;
   let initialError: string | undefined;
   let upcomingEvents: SavedLibraryEvent[] = [];
@@ -135,6 +122,7 @@ export default async function SavedPage({ searchParams }: { searchParams?: Promi
   return (
     <main className="app-page gap-3 sm:gap-4">
       <SavedLibraryPanel
+        authEnabled={authEnabled}
         initialError={initialError}
         initialFavoriteVenueIds={library.favoriteVenueIds}
         initialFavoriteVenues={library.favoriteVenues}

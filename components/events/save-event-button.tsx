@@ -3,13 +3,13 @@
 import { Bookmark } from "lucide-react";
 import { useState } from "react";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
-import { useRequireAuth } from "@/lib/auth/use-require-auth";
 import { cn } from "@/lib/utils";
 
 type SaveEventButtonProps = {
   className?: string;
   defaultSaved?: boolean;
   eventId: string;
+  event?: unknown;
   eventTitle?: string;
   variant?: "icon" | "full";
 };
@@ -18,19 +18,17 @@ export function SaveEventButton({
   className,
   defaultSaved = false,
   eventId,
+  event,
   eventTitle,
   variant = "full",
 }: SaveEventButtonProps) {
-  const { isSignedIn } = useRequireAuth();
   const { error: libraryError, isEventPending, isLibraryLoaded, savedEventIds, toggleSavedEvent } =
     useUserLibrary();
   const [localError, setLocalError] = useState<string | null>(null);
   const isBusy = isEventPending(eventId);
   const isSaved = isLibraryLoaded ? savedEventIds.has(eventId) : savedEventIds.has(eventId) || defaultSaved;
   const actionLabel = isSaved ? "Unsave" : "Save";
-  const label = isSignedIn
-    ? `${actionLabel}${eventTitle ? ` ${eventTitle}` : " event"}`
-    : "Sign in to save";
+  const label = `${actionLabel}${eventTitle ? ` ${eventTitle}` : " event"}`;
   const displayLabel = isSaved ? "Saved" : "Save";
   const error = localError ?? libraryError;
 
@@ -40,7 +38,7 @@ export function SaveEventButton({
       return;
     }
 
-    const result = await toggleSavedEvent(eventId, { expectedSaved: isSaved });
+    const result = await toggleSavedEvent(eventId, { expectedSaved: isSaved, event });
     if (result === null) {
       return;
     }
@@ -65,9 +63,9 @@ export function SaveEventButton({
         data-auth-action="save-event"
         data-pending={isBusy ? "true" : "false"}
         data-saved={isSaved ? "true" : "false"}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        onClick={(click) => {
+          click.preventDefault();
+          click.stopPropagation();
           void onToggleSavedEvent();
         }}
         type="button"
@@ -75,8 +73,8 @@ export function SaveEventButton({
         <Bookmark className={cn("h-4 w-4", isSaved ? "fill-[#8B86FB] text-[#8B86FB]" : "fill-transparent")} />
         {variant === "full" ? <span>{displayLabel}</span> : null}
       </button>
-      {variant === "full" && error ? (
-        <span className="text-xs leading-5 text-destructive">{error}</span>
+      {error ? (
+        <span role="status" className={variant === "icon" ? "sr-only" : "text-xs leading-5 text-destructive"}>{error}</span>
       ) : null}
     </span>
   );

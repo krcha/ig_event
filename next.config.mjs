@@ -12,6 +12,7 @@ const applicationSecurityHeaders = buildApplicationSecurityHeaders({
 });
 
 const nextConfig = {
+  serverExternalPackages: ["@napi-rs/canvas"],
   // Resolve route metadata before streaming for every user agent so dynamic
   // notFound() responses preserve real 404 status codes for crawlers and users.
   htmlLimitedBots: /.*/,

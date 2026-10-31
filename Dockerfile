@@ -21,16 +21,17 @@ ENV NEXT_PUBLIC_CONVEX_URL=${NEXT_PUBLIC_CONVEX_URL}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run lint \
+RUN mkdir -p /app/runtime \
+  && npm run lint \
   && npm run typecheck \
   && npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
-RUN apk add --no-cache libc6-compat font-dejavu \
+RUN apk add --no-cache libc6-compat font-dejavu ffmpeg \
   && fc-cache -f \
-  && addgroup -S nodejs \
-  && adduser -S nextjs -G nodejs
+  && addgroup -g 1001 -S nodejs \
+  && adduser -u 1001 -S nextjs -G nodejs
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -43,6 +44,7 @@ RUN npm ci --omit=dev \
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/runtime ./runtime
 COPY --from=builder --chown=nextjs:nodejs /app/next.config.mjs ./next.config.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/lib/security ./lib/security
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/check-web-readiness.mjs ./scripts/check-web-readiness.mjs

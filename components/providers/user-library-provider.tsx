@@ -17,6 +17,13 @@ import {
   type SaveEventsResult,
   type SetSavedEventResult,
 } from "@/lib/user-library/saved-events-client";
+import {
+  GUEST_SAVED_EVENT_PREFIX,
+  readGuestSavedEvents,
+  removeGuestSavedEventForOwner,
+  syncGuestSavedEvents,
+  writeGuestSavedEvent,
+} from "@/lib/user-library/guest-saved-events";
 
 type LibraryEvent = {
   _id: string;
@@ -57,6 +64,7 @@ type ToggleFavoriteVenuePayload = {
 
 type ToggleSavedEventOptions = {
   expectedSaved?: boolean;
+  event?: unknown;
 };
 
 type ToggleFavoriteVenueOptions = {
@@ -69,12 +77,14 @@ type UserLibraryContextValue = {
   favoriteVenues: readonly LibraryVenue[];
   isEventPending: (eventId: string) => boolean;
   isLibraryLoaded: boolean;
+  isSignedIn: boolean;
+  isSyncing: boolean;
   isVenuePending: (venueId: string) => boolean;
   refreshLibrary: () => Promise<void>;
   savedEventIds: ReadonlySet<string>;
   savedEvents: readonly LibraryEvent[];
-  saveEvents: (eventIds: readonly string[]) => Promise<SaveEventsResult>;
-  setSavedEvent: (eventId: string, saved: boolean) => Promise<SetSavedEventResult>;
+  saveEvents: (eventIds: readonly string[], events?: readonly { _id: string }[]) => Promise<SaveEventsResult>;
+  setSavedEvent: (eventId: string, saved: boolean, event?: unknown) => Promise<SetSavedEventResult>;
   toggleFavoriteVenue: (
     venueId: string,
     options?: ToggleFavoriteVenueOptions,
@@ -91,6 +101,8 @@ const UserLibraryContext = createContext<UserLibraryContextValue>({
   favoriteVenues: [],
   isEventPending: () => false,
   isLibraryLoaded: false,
+  isSignedIn: false,
+  isSyncing: false,
   isVenuePending: () => false,
   refreshLibrary: async () => {},
   savedEventIds: emptySet,
@@ -194,8 +206,10 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   }
 }
 
-export function UserLibraryProvider({ children }: { children: React.ReactNode }) {
-  const { isLoaded, isSignedIn, requireAuth, userId } = useRequireAuth();
+type LibraryAuth = ReturnType<typeof useRequireAuth>;
+
+function LibraryStateProvider({ children, identity }: { children: React.ReactNode; identity: Pick<LibraryAuth, "isLoaded" | "isSignedIn" | "requireAuth" | "userId"> }) {
+  const { isLoaded, isSignedIn, requireAuth, userId } = identity;
   const [savedEventIds, setSavedEventIds] = useState<Set<string>>(new Set());
   const [favoriteVenueIds, setFavoriteVenueIds] = useState<Set<string>>(new Set());
   const [savedEvents, setSavedEvents] = useState<LibraryEvent[]>([]);
@@ -204,7 +218,16 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
   const [pendingFavoriteVenueIds, setPendingFavoriteVenueIds] = useState<Set<string>>(new Set());
   const [isLibraryLoaded, setIsLibraryLoaded] = useState(false);
   const [libraryUserId, setLibraryUserId] = useState<string | null | undefined>();
+  const libraryOwnerRef = useRef(libraryUserId);
+  libraryOwnerRef.current = libraryUserId;
   const [error, setError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [guestVersion, setGuestVersion] = useState(0);
+  const syncingOwners = useRef(new Set<string>());
+  const syncAgain = useRef(new Set<string>());
+  const editClock = useRef(0);
+  const confirmedEdits = useRef(new Map<string, { owner: string; saved: boolean; event: LibraryEvent | null; clock: number }>());
+  const explicitIntent = useRef(new Map<string, boolean>());
   const authRef = useRef({ isLoaded, isSignedIn, userId });
   authRef.current = { isLoaded, isSignedIn, userId };
   const savedEventRequests = useRef(new Map<string, {
@@ -213,14 +236,11 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
   }>());
 
   const refreshLibrary = useCallback(async () => {
-    if (!isLoaded) {
-      return;
-    }
-
     if (!isSignedIn || !userId) {
-      setSavedEventIds(new Set());
+      const guest = readGuestSavedEvents(window.localStorage);
+      setSavedEventIds(new Set(guest.map(record => record.event._id)));
       setFavoriteVenueIds(new Set());
-      setSavedEvents([]);
+      setSavedEvents(guest.map(record => record.event));
       setFavoriteVenues([]);
       setPendingSavedEventIds(new Set());
       setPendingFavoriteVenueIds(new Set());
@@ -232,6 +252,7 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
 
     setIsLibraryLoaded(false);
     setError(null);
+    const startedAt = editClock.current;
 
     const response = await fetch("/api/user/library", { cache: "no-store" });
     if (!response.ok) {
@@ -240,13 +261,27 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
 
     const body = (await response.json()) as UserLibraryPayload;
     if (authRef.current.userId !== userId || !authRef.current.isSignedIn) return;
-    setSavedEventIds(idsFromPayload(body.savedEventIds));
+    let guest: ReturnType<typeof readGuestSavedEvents> = [];
+    try { guest = readGuestSavedEvents(window.localStorage, userId); } catch { /* Account saves still work when device storage is blocked. */ }
+    let nextIds = idsFromPayload(body.savedEventIds);
+    let nextEvents = eventsFromPayload(body.savedEvents);
+    for (const record of guest) {
+      nextIds.add(record.event._id);
+      if (!nextEvents.some(event => event._id === record.event._id)) nextEvents.push(record.event);
+    }
+    // A late GET must not undo a save/unsave confirmed after that read began.
+    for (const [id, edit] of confirmedEdits.current) {
+      if (edit.owner !== userId || edit.clock <= startedAt) continue;
+      nextIds = toggleSetValue(nextIds, id, edit.saved);
+      nextEvents = !edit.saved ? removeById(nextEvents, id) : edit.event ? upsertById(nextEvents, edit.event) : nextEvents;
+    }
+    setSavedEventIds(nextIds);
     setFavoriteVenueIds(idsFromPayload(body.favoriteVenueIds));
-    setSavedEvents(eventsFromPayload(body.savedEvents));
+    setSavedEvents(nextEvents);
     setFavoriteVenues(venuesFromPayload(body.favoriteVenues));
     setLibraryUserId(userId);
     setIsLibraryLoaded(true);
-  }, [isLoaded, isSignedIn, userId]);
+  }, [isSignedIn, userId]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -258,7 +293,11 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
         if (isCancelled || authRef.current.userId !== userId) {
           return;
         }
-        setLibraryUserId(userId);
+        if (libraryOwnerRef.current !== (isSignedIn ? userId : null)) {
+          setSavedEventIds(new Set()); setSavedEvents([]);
+          setFavoriteVenueIds(new Set()); setFavoriteVenues([]);
+        }
+        setLibraryUserId(isSignedIn ? userId : null);
         setIsLibraryLoaded(true);
         setError(caughtError instanceof Error ? caughtError.message : "Could not load your saved items.");
       }
@@ -269,19 +308,44 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
     return () => {
       isCancelled = true;
     };
-  }, [refreshLibrary, userId]);
+  }, [refreshLibrary, userId, isSignedIn]);
 
   useEffect(() => {
     setPendingSavedEventIds(new Set());
+    explicitIntent.current.clear();
+    confirmedEdits.current.clear();
   }, [userId]);
 
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && !event.key.startsWith(GUEST_SAVED_EVENT_PREFIX)) return;
+      if (authRef.current.isSignedIn) setGuestVersion(value => value + 1);
+      else void refreshLibrary().catch(() => setError("Could not read saved events on this device."));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [refreshLibrary]);
+
   const setSavedEvent = useCallback(
-    (eventId: string, saved: boolean): Promise<SetSavedEventResult> => {
+    (eventId: string, saved: boolean, snapshot?: unknown): Promise<SetSavedEventResult> => {
       const owner = authRef.current;
-      if (!owner.isLoaded || !owner.isSignedIn || !owner.userId) {
-        return Promise.resolve(failedSavedEventResult(eventId, "Authentication required.", true));
+      if (!owner.isSignedIn || !owner.userId) {
+        try {
+          const event = writeGuestSavedEvent(window.localStorage, eventId, saved, snapshot);
+          setSavedEventIds(current => toggleSetValue(current, eventId, saved));
+          setSavedEvents(current => !saved ? removeById(current, eventId) : event ? upsertById(current, event) : current);
+          setLibraryUserId(null);
+          setIsLibraryLoaded(true);
+          setError(null);
+          return Promise.resolve({ authenticationRequired: false, error: null, event, eventId, saved, success: true });
+        } catch {
+          const message = "Could not save on this device. Check browser storage and try again.";
+          setError(message);
+          return Promise.resolve(failedSavedEventResult(eventId, message));
+        }
       }
       const requestKey = `${owner.userId}:${eventId}`;
+      explicitIntent.current.set(requestKey, saved);
       const previous = savedEventRequests.current.get(requestKey);
       if (previous?.saved === saved) return previous.promise;
 
@@ -298,6 +362,10 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
         }
         if (result.success) {
           const event = eventFromPayload(result.event);
+          confirmedEdits.current.set(eventId, { owner: owner.userId!, event, saved, clock: ++editClock.current });
+          if (!saved) {
+            try { removeGuestSavedEventForOwner(window.localStorage, eventId, owner.userId!); } catch { /* An explicit retry remains safe. */ }
+          }
           setSavedEventIds((current) => toggleSetValue(current, eventId, saved));
           setSavedEvents((current) => !saved
             ? removeById(current, eventId)
@@ -320,18 +388,41 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
   );
 
   const saveEvents = useCallback(
-    (eventIds: readonly string[]) => saveEventSelection(eventIds, setSavedEvent),
+    (eventIds: readonly string[], events: readonly { _id: string }[] = []) => {
+      const byId = new Map(events.map(event => [event._id, event]));
+      return saveEventSelection(eventIds, (id, saved) => setSavedEvent(id, saved, byId.get(id)));
+    },
     [setSavedEvent],
   );
 
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !userId || !isLibraryLoaded || libraryUserId !== userId) return;
+    if (syncingOwners.current.has(userId)) { syncAgain.current.add(userId); return; }
+    const owner = userId;
+    syncingOwners.current.add(owner);
+    setIsSyncing(true);
+    const currentOwner = () => authRef.current.isSignedIn && authRef.current.userId === owner;
+    void Promise.resolve().then(() => syncGuestSavedEvents(window.localStorage, owner, id => setSavedEvent(id, true), currentOwner,
+      id => explicitIntent.current.get(`${owner}:${id}`) !== false,
+    )).then(result => {
+      if (currentOwner() && result.failedEventIds.length) setError("Some device saves could not sync. Your local copies are kept. Try again.");
+    }).catch(() => {
+      if (currentOwner()) setError("Device saves could not sync. Your local copies are kept. Try again.");
+    }).finally(() => {
+      syncingOwners.current.delete(owner);
+      if (!currentOwner()) return;
+      setIsSyncing(false);
+      if (syncAgain.current.delete(owner)) setGuestVersion(value => value + 1);
+    });
+  }, [guestVersion, isLibraryLoaded, isLoaded, isSignedIn, libraryUserId, setSavedEvent, userId]);
+
   const toggleSavedEvent = useCallback(
     async (eventId: string, options: ToggleSavedEventOptions = {}) => {
-      if (!requireAuth()) return null;
       const wasSaved = options.expectedSaved ?? savedEventIds.has(eventId);
-      const result = await setSavedEvent(eventId, !wasSaved);
+      const result = await setSavedEvent(eventId, !wasSaved, options.event);
       return result.success ? result.saved : wasSaved;
     },
-    [requireAuth, savedEventIds, setSavedEvent],
+    [savedEventIds, setSavedEvent],
   );
 
   const toggleFavoriteVenue = useCallback(
@@ -394,32 +485,52 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
     [savedEventIds, savedEvents],
   );
 
+  const reloadLibrary = useCallback(async () => {
+    const owner = authRef.current.userId;
+    try { await refreshLibrary(); }
+    catch {
+      if (authRef.current.userId !== owner) return;
+      if (libraryOwnerRef.current !== owner) {
+        setSavedEventIds(new Set()); setSavedEvents([]); setFavoriteVenueIds(new Set()); setFavoriteVenues([]);
+      }
+      setLibraryUserId(owner); setIsLibraryLoaded(true);
+      setError("Could not load saved items. Please try again.");
+    }
+  }, [refreshLibrary]);
+  const matchingOwner = libraryUserId === (isSignedIn ? userId : null);
+
   const value = useMemo<UserLibraryContextValue>(
     () => ({
       error,
-      favoriteVenueIds,
-      favoriteVenues,
+      favoriteVenueIds: matchingOwner ? favoriteVenueIds : emptySet,
+      favoriteVenues: matchingOwner ? favoriteVenues : [],
       isEventPending: (eventId: string) => pendingSavedEventIds.has(eventId),
-      isLibraryLoaded: isLibraryLoaded && libraryUserId === userId,
+      isLibraryLoaded: isLibraryLoaded && libraryUserId === (isSignedIn ? userId : null),
+      isSignedIn,
+      isSyncing: isSignedIn && libraryUserId === userId && isSyncing,
       isVenuePending: (venueId: string) => pendingFavoriteVenueIds.has(venueId),
-      refreshLibrary,
-      savedEventIds,
-      savedEvents,
+      refreshLibrary: reloadLibrary,
+      savedEventIds: matchingOwner ? savedEventIds : emptySet,
+      savedEvents: matchingOwner ? savedEvents : [],
       saveEvents,
       setSavedEvent,
       toggleFavoriteVenue,
       toggleSavedEvent,
-      upcomingSavedEventCount,
+      upcomingSavedEventCount: matchingOwner ? upcomingSavedEventCount : 0,
     }),
     [
       error,
       favoriteVenueIds,
       favoriteVenues,
       isLibraryLoaded,
+      isSignedIn,
+      isSyncing,
       libraryUserId,
       pendingFavoriteVenueIds,
       pendingSavedEventIds,
       refreshLibrary,
+      reloadLibrary,
+      matchingOwner,
       savedEventIds,
       savedEvents,
       saveEvents,
@@ -432,6 +543,18 @@ export function UserLibraryProvider({ children }: { children: React.ReactNode })
   );
 
   return <UserLibraryContext.Provider value={value}>{children}</UserLibraryContext.Provider>;
+}
+
+function AuthenticatedUserLibraryProvider({ children }: { children: React.ReactNode }) {
+  return <LibraryStateProvider identity={useRequireAuth()}>{children}</LibraryStateProvider>;
+}
+
+const guestIdentity = { isLoaded: true, isSignedIn: false, userId: null, requireAuth: () => false };
+
+export function UserLibraryProvider({ children, authEnabled = true }: { children: React.ReactNode; authEnabled?: boolean }) {
+  return authEnabled
+    ? <AuthenticatedUserLibraryProvider>{children}</AuthenticatedUserLibraryProvider>
+    : <LibraryStateProvider identity={guestIdentity}>{children}</LibraryStateProvider>;
 }
 
 export function useUserLibrary() {

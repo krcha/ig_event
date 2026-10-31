@@ -1,5 +1,10 @@
 # Operations Runbook
 
+Current production is on the dedicated VPS `207.180.251.201`. Follow
+[the October 31 migration runbook](vps-migration-2026-10-31.md) for its actual
+private Compose manifest, isolated network, schedulers and recovery paths.
+The older setup examples below describe historical/general deployment paths.
+
 This runbook covers local setup, Convex deployment, optional self-hosted Convex,
 VPS/Docker deployment, cron replacement, QA, monitoring, rollback, and current
 operational blockers for the Instagram event aggregator.

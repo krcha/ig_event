@@ -107,7 +107,7 @@ function AppDocument({
             <UserLibraryProvider>{appContent}</UserLibraryProvider>
           </AuthUserProvider>
         ) : (
-          appContent
+          <UserLibraryProvider authEnabled={false}>{appContent}</UserLibraryProvider>
         )}
       </body>
     </html>

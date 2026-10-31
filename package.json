@@ -160,10 +160,14 @@
     "qa:release": "node scripts/release-check.mjs",
     "qa:self-hosted-convex-compose": "docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.self-hosted-convex.yml config --quiet",
     "convex:codegen": "npx convex codegen --typecheck disable",
-    "qa:instaloader": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instaloader.mjs"
+    "qa:instaloader": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instaloader.mjs",
+    "qa:guest-saves-and-virtualization": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-guest-saves-and-virtualization.mjs",
+    "qa:social-runtime": "node scripts/qa-social-runtime.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "6.39.5",
+    "@napi-rs/canvas": "0.1.100",
+    "@tanstack/react-virtual": "3.14.24",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.31.7",

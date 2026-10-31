@@ -284,6 +284,10 @@
   [data-calendar-event-id]:has([data-expanded="true"]) {
     content-visibility: visible;
   }
+  [data-calendar-virtual-list] [data-calendar-event-id] {
+    content-visibility: visible;
+    contain-intrinsic-block-size: none;
+  }
   [aria-labelledby="belgrade-events-guide"] {
     content-visibility: auto;
     contain-intrinsic-block-size: auto 360px;

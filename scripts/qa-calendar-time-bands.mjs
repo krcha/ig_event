@@ -9,11 +9,11 @@ import {
 import { groupBusyVenuesForDay } from "../lib/events/venue-day-grouping.ts";
 
 const expectedBandKeys = [
-  "after-midnight",
   "daytime",
   "evening",
   "night",
   "time-not-announced",
+  "after-midnight",
 ];
 
 const venueFixtures = [
@@ -67,12 +67,12 @@ assert.deepEqual(
 assert.deepEqual(
   CALENDAR_TIME_BANDS.map((band) => band.key),
   expectedBandKeys,
-  "Calendar time bands must stay in deterministic chronological order with unknown times last.",
+  "Calendar time bands must retain daytime/evening/night order with After midnight at the end.",
 );
 assert.equal(
   CALENDAR_TIME_BANDS.at(-1)?.label,
-  "Time not announced",
-  "Unknown-time events need an explicit, user-facing group label.",
+  "After midnight",
+  "After midnight must be the final group, including after unknown-time events.",
 );
 
 const boundaryFixtures = [
@@ -266,7 +266,7 @@ assert.equal(
 );
 assert.ok(
   groupingSource.includes('data-calendar-venue-group="true"') &&
-    groupingSource.includes("group.events.map") &&
+    groupingSource.includes("items={group.events}") &&
     groupingSource.includes("Više događaja") &&
     postPreviewSource.includes('data-calendar-event-link="true"') &&
     kindToggleSource.includes('querySelectorAll<HTMLElement>("[data-calendar-venue-group]")') &&

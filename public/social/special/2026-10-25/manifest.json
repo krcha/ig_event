@@ -1,0 +1,43 @@
+{
+  "id": "eventzeka-special-2026-10-25-v1",
+  "date": "2026-10-25",
+  "timezone": "Europe/Belgrade",
+  "scheduledLocalTime": "10:00",
+  "scheduledUtc": "2026-10-25T09:00:00Z",
+  "caption": "Izađi i glasaj!",
+  "sourceSha256": "7f74b0a02bb3029cb7ef652188088df1848216e6511c7c97370defe66ab8dff8",
+  "locationId": "109920975697736",
+  "locationName": "Belgrade, Serbia",
+  "shareToFeed": false,
+  "durationSeconds": 15,
+  "assets": {
+    "post": {
+      "file": "post.jpg",
+      "sha256": "35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec",
+      "bytes": 140150,
+      "contentType": "image/jpeg",
+      "url": "https://eventzeka.com/api/social/special/2026-10-25/post.jpg?v=35358c671ff6a9db504ace0cbc6afb924c7385a45d25841cec45435be17278ec"
+    },
+    "story": {
+      "file": "story.jpg",
+      "sha256": "eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396",
+      "bytes": 152478,
+      "contentType": "image/jpeg",
+      "url": "https://eventzeka.com/api/social/special/2026-10-25/story.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396"
+    },
+    "reel": {
+      "file": "reel.mp4",
+      "sha256": "65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a",
+      "bytes": 372862,
+      "contentType": "video/mp4",
+      "url": "https://eventzeka.com/api/social/special/2026-10-25/reel.mp4?v=65d1b400c11439e08056d0d759adfda5352d613c43f111a1e8345f5defae5a4a"
+    },
+    "cover": {
+      "file": "reel-cover.jpg",
+      "sha256": "eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396",
+      "bytes": 152478,
+      "contentType": "image/jpeg",
+      "url": "https://eventzeka.com/api/social/special/2026-10-25/reel-cover.jpg?v=eddbc9690d2e5c9252fe671fb5cdde2138eb5f4b5ac5b412693991dd23477396"
+    }
+  }
+}

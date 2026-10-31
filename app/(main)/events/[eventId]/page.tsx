@@ -530,9 +530,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 ) : null}
 
                 <div className="hidden flex-wrap gap-2 md:flex">
-                  {authEnabled ? (
-                    <SaveEventButton eventId={event._id} eventTitle={event.title} variant="full" />
-                  ) : null}
+                  <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="full" />
                   {event.instagramPostUrl ? (
                     <a
                       aria-label={`View post: original Instagram announcement for ${event.title}`}
@@ -581,14 +579,13 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
           <div className="fixed inset-x-0 bottom-[calc(4.85rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden">
             <div className="glass-panel flex gap-2 bg-card/95 p-2 shadow-[0_-18px_48px_-34px_rgba(0,0,0,0.9)]">
-              {authEnabled ? (
                 <SaveEventButton
                   className="min-w-0 flex-1 [&>button]:w-full [&>button]:px-3"
+                  event={event}
                   eventId={event._id}
                   eventTitle={event.title}
                   variant="full"
                 />
-              ) : null}
               {event.instagramPostUrl ? (
                 <a
                   aria-label={`View post: original Instagram announcement for ${event.title}`}

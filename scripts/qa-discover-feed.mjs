@@ -265,8 +265,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  "authEnabled ?",
-  "Discover save controls should be hidden when Clerk auth is disabled.",
+  "event={event}",
+  "Discover save controls must provide public metadata for guest device saves.",
 );
 assertIncludes(
   discoverFeedSource,

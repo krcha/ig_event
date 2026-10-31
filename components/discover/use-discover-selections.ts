@@ -8,7 +8,7 @@ import {
   type DiscoverChoice, type DiscoverDayChoices, type DiscoverScope, type DiscoverSessions,
 } from "@/lib/discover/swipe-session";
 
-export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:boolean;isSignedIn:boolean;userId:string|null}) {
+export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:boolean;isSignedIn:boolean;userId:string|null}, events: readonly { _id: string }[] = []) {
   const [sessions,setSessions] = useState<DiscoverSessions>({});
   const [hydrated,setHydrated] = useState(false);
   const [loadedKey,setLoadedKey] = useState<string|null>(null);
@@ -25,7 +25,6 @@ export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:bo
   const {isLibraryLoaded,savedEventIds,saveEvents,setSavedEvent,isEventPending} = useUserLibrary();
 
   useEffect(()=>{
-    if(!isLoaded){setHydrated(false);return;}
     activeKey.current=storageKey; attempted.current.clear(); setFailedIds([]); unpersisted.current={};
     let next=partitions.current.get(storageKey) ?? {};
     try { next=readDiscoverSessions(localStorage.getItem(storageKey)); } catch { /* Preserve this identity's memory partition. */ }
@@ -67,11 +66,11 @@ export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:bo
   const complete=useCallback((date:string,scope:DiscoverScope)=>commit(date,day=>({...day,choices:day?.choices ?? [],completedScopes:[...new Set([...(day?.completedScopes ?? []),scope])]})),[commit]);
 
   useEffect(()=>{
-    if(!hydrated || loadedKey!==storageKey || !isSignedIn || !userId || !isLibraryLoaded || savingRef.current || activeKey.current!==storageKey)return;
+    if(!hydrated || loadedKey!==storageKey || !isLibraryLoaded || savingRef.current || activeKey.current!==storageKey)return;
     const pending=pendingDiscoverSaveIds(sessions,new Set(),attempted.current);
     if(!pending.length)return;
     const key=storageKey; pending.forEach(id=>attempted.current.add(id));savingRef.current=true;setSaving(true);
-    void saveEvents(pending).then(result=>{
+    void saveEvents(pending, events).then(result=>{
       if(result.savedEventIds.length){
         let source=partitions.current.get(key) ?? {};
         try{source=readDiscoverSessions(localStorage.getItem(key));}catch{/* The originating account's memory is still isolated. */}
@@ -85,21 +84,21 @@ export function useDiscoverSelections({isLoaded,isSignedIn,userId}: {isLoaded:bo
       setFailedIds(previous=>[...new Set([...previous.filter(id=>!result.savedEventIds.includes(id)),...result.failedEventIds])]);
     }).catch(()=>{if(activeKey.current===key)setFailedIds(previous=>[...new Set([...previous,...pending])]);})
       .finally(()=>{savingRef.current=false;setSaving(false);});
-  },[hydrated,loadedKey,isSignedIn,isLibraryLoaded,retry,saveEvents,sessions,storageKey,userId,saving]);
+  },[events,hydrated,loadedKey,isSignedIn,isLibraryLoaded,retry,saveEvents,sessions,storageKey,userId,saving]);
 
   const retrySave=useCallback(()=>{attempted.current.clear();setFailedIds([]);setRetry(value=>value+1);},[]);
   const undo=useCallback((date:string,scope:DiscoverScope)=>commit(date,day=>undoDiscoverChoice(day,scope)),[commit]);
   const restart=useCallback((date:string,scope:DiscoverScope)=>commit(date,day=>restartDiscoverScope(day,scope)),[commit]);
   const removeLike=useCallback(async(date:string,eventId:string)=>{
     const key=activeKey.current;
-    if(isSignedIn){
+    if(savedEventIds.has(eventId)){
       const result=await setSavedEvent(eventId,false);
       if(!result.success || activeKey.current!==key)return false;
     }
     commit(date,day=>({...day,choices:(day?.choices ?? []).map(choice=>choice.eventId===eventId?{...choice,decision:"skip"}:choice),completedScopes:day?.completedScopes ?? []}));
     attempted.current.delete(eventId);
     return true;
-  },[commit,isSignedIn,setSavedEvent]);
+  },[commit,savedEventIds,setSavedEvent]);
   const acknowledged=new Set(Object.values(sessions).flatMap(day=>day.acknowledgedIds ?? []));
   const likedIds=new Set(discoverLikedIds(sessions));
   const ready=hydrated && loadedKey===storageKey && activeKey.current===storageKey;

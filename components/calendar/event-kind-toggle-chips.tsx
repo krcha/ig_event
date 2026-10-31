@@ -26,6 +26,7 @@ type EventKindToggleChipsProps = {
   children?: ReactNode;
   initialHiddenCategories?: readonly EventCategoryKind[];
   singleSelection?: boolean;
+  onHiddenCategoriesChange?: (categories: EventCategoryKind[]) => void;
 };
 
 type CategoryCountMap = Partial<Record<EventCategoryKind, number>>;
@@ -173,6 +174,8 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
   const hiddenSet = new Set(categories);
 
   document.querySelectorAll<HTMLElement>("[data-calendar-agenda-scope]").forEach((scope) => {
+    // Virtual rows are only a viewport sample; React derives their full counts.
+    if (scope.dataset.calendarVirtualizedAgenda === "true") return;
     const rows = Array.from(scope.querySelectorAll<HTMLElement>("[data-calendar-event-kind]"));
     let visibleCount = 0;
 
@@ -242,6 +245,7 @@ export function EventKindToggleChips({
   children,
   initialHiddenCategories = [],
   singleSelection = false,
+  onHiddenCategoriesChange,
 }: EventKindToggleChipsProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -265,6 +269,7 @@ export function EventKindToggleChips({
       const targetUrl = buildHiddenCategoriesUrl(normalized, pathname || "/");
 
       setHiddenCategories(normalized);
+      onHiddenCategoriesChange?.(normalized);
       const nextKey = formatHiddenCategories(normalized) ?? "";
       if (appliedCategoryKey.current !== nextKey) {
         applyAgendaVisibility(normalized);
@@ -277,7 +282,7 @@ export function EventKindToggleChips({
         });
       }
     },
-    [pathname, router, startTransition],
+    [onHiddenCategoriesChange, pathname, router, startTransition],
   );
 
   useEffect(() => {
@@ -301,7 +306,9 @@ export function EventKindToggleChips({
 
   useEffect(() => {
     const onPopState = () => {
-      setHiddenCategories(readHiddenCategoriesFromLocation());
+      const categories = readHiddenCategoriesFromLocation();
+      setHiddenCategories(categories);
+      onHiddenCategoriesChange?.(categories);
     };
 
     const onDocumentClick = (event: MouseEvent) => {
@@ -332,7 +339,7 @@ export function EventKindToggleChips({
       window.removeEventListener("popstate", onPopState);
       document.removeEventListener("click", onDocumentClick);
     };
-  }, [hiddenCategories, setHiddenCategoriesAndUrl]);
+  }, [hiddenCategories, onHiddenCategoriesChange, setHiddenCategoriesAndUrl]);
 
   function toggleCategory(category: EventCategoryKind) {
     const next = singleSelection

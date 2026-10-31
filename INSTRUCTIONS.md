@@ -108,6 +108,15 @@ scripts/*                                  deterministic QA
 
 ## Environment And Deployment
 
+Production runs on the dedicated VPS `207.180.251.201` following the October 31
+migration. Use the private `/opt/eventzeka/compose.json` manifest there; the old
+`109.199.117.114` Event Zeka runtime is retired. Read
+`docs/vps-migration-2026-10-31.md` before production operations. Do not recreate
+the historical shared `n8n-compose_default` dependency on the new host.
+Website and social rendering use the same `eventzeka/app` release image with
+separate process roles. Do not restore old source/node_modules bind mounts or
+deploy a different application checkout for social routes.
+
 Use `.env.example` for local development and `.env.production.example` for the
 Docker/VPS path.
 

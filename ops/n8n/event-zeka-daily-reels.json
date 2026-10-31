@@ -1,0 +1,121 @@
+[
+  {
+    "id": "EzekaDailyReel001",
+    "name": "Event Zeka - Tomorrow Reel at 19:30",
+    "description": "Daily 19:30 Europe/Belgrade: a Reels-only 18-second SUTRA Reel with up to four tomorrow events and the mandatory Zeka zna closing CTA. Material deformation and vector motion use the same publication-date art direction as today's Story and feed. Unposted events first; off the profile grid, random song among the first three distinct eligible live catalog tracks of at least 18 seconds, and Belgrade location. Preserve exact preparation, ambiguous-publish blocking and safe manual previews.",
+    "active": false,
+    "nodes": [
+      {
+        "id": "manual-reel-preview",
+        "name": "Manual Reel Preview",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          -460,
+          -90
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "daily-reel-schedule",
+        "name": "Daily at 19:30 Belgrade",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -460,
+          170
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "30 19 * * *"
+              },
+              {
+                "field": "cronExpression",
+                "expression": "0 20 * * *"
+              },
+              {
+                "field": "cronExpression",
+                "expression": "30 20 * * *"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "generate-and-publish-reel",
+        "name": "Generate and Publish Tomorrow Reel",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -180,
+          70
+        ],
+        "parameters": {
+          "jsCode": "async function publishEventZekaReel({ env, httpRequest, getStaticData, now = () => new Date(), random = Math.random, forceDryRun = false }) {\n\n  // Generator GET/selection POST calls are read-only. Never use this for Meta writes.\n  async function requestGenerator(options, label) {\n    const secrets = [String(env.EVENTZEKA_CRON_SECRET || ''), String(env.EVENTZEKA_IG_ACCESS_TOKEN || ''),\n      String(env.EVENTZEKA_REELS_FB_ACCESS_TOKEN || '')].filter(Boolean);\n    const safeDetail = value => {\n      let text = String(value || '');\n      for (const secret of secrets) text = text.replaceAll(secret, '[redacted]');\n      return text.replace(/Bearer\\s+[^\\s\"'<>]+/gi, 'Bearer [redacted]').replace(/[\\r\\n\\t]/g, ' ').slice(0, 400);\n    };\n    const delays = [5000, 15000, 30000];\n    for (let attempt = 0; attempt < 4; attempt++) {\n      let response, transportError;\n      try { response = await httpRequest({ ...options, timeout: 45000 }); }\n      catch (error) { transportError = error; }\n      const status = Number(response?.statusCode || 0);\n      if (!transportError && status >= 200 && status < 300) return response;\n      let detail = '';\n      if (transportError) detail = safeDetail(transportError instanceof Error ? transportError.message : transportError);\n      else {\n        let body = response?.body;\n        if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* Plain-text upstream error. */ } }\n        const reason = typeof body === 'string' ? body : typeof body?.error === 'string' ? body.error :\n          body?.error?.message || body?.message || '';\n        detail = safeDetail(typeof reason === 'string' ? reason : '');\n      }\n      const retryable = Boolean(transportError) || status === 429 || (status >= 500 && status <= 599);\n      if (!retryable || attempt === 3) {\n        throw new Error(label + ' failed after ' + (attempt + 1) + ' attempt(s): ' +\n          (transportError ? 'transport error' : 'HTTP ' + (status || 'unknown')) + (detail ? '. ' + detail : ''));\n      }\n      const retryAfter = Object.entries(response?.headers || {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1];\n      const seconds = Number(retryAfter);\n      const requested = retryAfter === undefined ? 0 : Number.isFinite(seconds) ? seconds * 1000 : Date.parse(String(retryAfter)) - Date.now();\n      const delay = Math.max(delays[attempt], Math.min(30000, Math.max(0, Number.isFinite(requested) ? requested : 0)));\n      await new Promise(resolve => setTimeout(resolve, delay));\n    }\n  }\n\n  const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Belgrade', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now());\n  if (localDate === '2026-10-25') return [{ json: { status: 'skipped_special_publication_day', publishDate: localDate,\n    format: 'reel', resumeDate: '2026-10-26', specialWorkflowId: 'EzekaSpecial20261025' } }];\n  const origin = String(env.EVENTZEKA_API_ORIGIN || '').replace(/\\/+$/, '');\n  const mediaOrigin = String(env.EVENTZEKA_REELS_PUBLIC_ORIGIN || 'https://eventzeka.com').replace(/\\/+$/, '');\n  const secret = String(env.EVENTZEKA_CRON_SECRET || '');\n  const token = String(env.EVENTZEKA_REELS_FB_ACCESS_TOKEN || '');\n  const userId = String(env.EVENTZEKA_REELS_IG_USER_ID || '');\n  const locationId = String(env.EVENTZEKA_REELS_LOCATION_ID || '');\n  const version = String(env.EVENTZEKA_REELS_GRAPH_VERSION || 'v25.0');\n  const replacementId = String(env.EVENTZEKA_REEL_REPLACE_ID || '');\n  const dry = forceDryRun || String(env.EVENTZEKA_SOCIAL_DRY_RUN || '').toLowerCase() === 'true';\n  if (!origin || !secret || !/^v\\d+\\.\\d+$/.test(version)) throw new Error('Invalid Reel runtime configuration.');\n  const dateInBelgrade = () => {\n    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Belgrade', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now());\n    return ['year','month','day'].map(key => parts.find(part => part.type === key).value).join('-');\n  };\n  const today = dateInBelgrade();\n  const tomorrow = day => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + 1); return value.toISOString().slice(0, 10); };\n  const state = dry ? null : getStaticData();\n  const redact = error => {\n    let message = error instanceof Error ? error.message : String(error);\n    for (const value of [token, secret]) if (value) message = message.replaceAll(value, '[redacted]');\n    return message;\n  };\n  if (state?.pending) return [{ json: { status: 'blocked_reconciliation_required', publishDate: today, pendingDate: state.pending.publishDate,\n    containerId: state.pending.containerId, reason: state.pending.error || 'A Reel publication has an unknown outcome.' } }];\n  const replacing = !dry && replacementId && state.lastPublishDate === today && state.lastReelId === replacementId;\n  if (!dry && replacementId && !replacing) throw new Error('Replacement does not match today\\'s published Reel.');\n  if (state?.lastPublishDate === today && !replacing) return [{ json: { status: 'skipped_already_published', publishDate: today, reelId: state.lastReelId } }];\n  const parse = body => { if (body && typeof body === 'object') return body; try { return JSON.parse(body || '{}'); } catch { return {}; } };\n  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));\n  async function graph(path, body) {\n    const response = await httpRequest({ method: body ? 'POST' : 'GET', url: `https://graph.facebook.com/${version}/${path}`,\n      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },\n      body: body ? Object.entries(body).map(([key,value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&') : undefined,\n      returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 120000 });\n    const data = parse(response.body);\n    if (Number(response.statusCode) < 200 || Number(response.statusCode) >= 300) throw new Error(redact(data.error?.message || `Instagram Reel request returned HTTP ${response.statusCode}.`));\n    return data;\n  }\n  let payload = !dry && state.prepared?.publishDate === today ? state.prepared : null;\n  if (!payload) {\n    const previewDate = dry ? String(env.EVENTZEKA_REEL_PREVIEW_DATE || '') : '';\n    if (previewDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(previewDate)) throw new Error('Invalid Reel preview date.');\n    let context;\n    if ((!dry || String(env.EVENTZEKA_SOCIAL_PREVIEW_HISTORY || '').toLowerCase() === 'true') && token && /^\\d+$/.test(userId)) {\n      context = await fetchEventZekaPublicationContext({ httpRequest, graphBase: 'https://graph.facebook.com', graphVersion: version,\n        accessToken: token, userId, today, state: state || {} });\n      const excludedEventIds = replacing ? String(state.lastSelectionKey || '').split(':').at(-1).split('@')[0].split(',') : [];\n      if (excludedEventIds.some(id => !/^[a-z0-9]{10,64}$/.test(id))) throw new Error('Could not verify the previous Reel events.');\n      context.excludedEventIds = excludedEventIds;\n    }\n    const response = await requestGenerator({ method: context ? 'POST' : 'GET', url: `${origin}/api/social/daily-reels${previewDate ? `?date=${previewDate}` : ''}`,\n      headers: { Authorization: `Bearer ${secret}`, Accept: 'application/json', ...(context ? { 'Content-Type': 'application/json' } : {}) },\n      body: context ? JSON.stringify(context) : undefined, returnFullResponse: true, ignoreHttpStatusErrors: true }, 'Reel generator');\n    if (Number(response.statusCode) !== 200) throw new Error('Reel generator request failed.');\n    payload = parse(response.body);\n  }\n  if (!dry && payload.publishDate !== today) throw new Error('Reel payload is not for the current Belgrade date.');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(payload.publishDate || '') || payload.eventDate !== tomorrow(payload.publishDate) ||\n    !Number.isInteger(payload.selectedCount) || !Array.isArray(payload.eventIds)) throw new Error('Reels must preview tomorrow\\'s events.');\n  if (payload.selectedCount === 0 && payload.eventIds.length === 0 && !payload.videoUrl && !payload.coverUrl) return [{ json: { status: payload.sourceEventCount > 0 ? 'skipped_no_new_events' : 'skipped_no_events', publishDate: payload.publishDate, eventDate: payload.eventDate } }];\n  const expected = `${mediaOrigin}/api/social/reels/days/${payload.eventDate}?`;\n  const videoQuery = typeof payload.videoUrl === 'string' ? payload.videoUrl.split('?')[1]?.split('&') || [] : [];\n  if (payload.selectedCount < 1 || payload.selectedCount > 4 || payload.eventIds.length !== payload.selectedCount ||\n    new Set(payload.eventIds).size !== payload.eventIds.length || !payload.selectionKey || payload.durationSeconds !== 18 || payload.hasClosingCta !== true ||\n    payload.selectionPolicy !== 'prefer_unposted' || !Array.isArray(payload.repeatedEventIds) || !Array.isArray(payload.excludedEventIds) || payload.eventIds.some(id => payload.excludedEventIds.includes(id)) ||\n    payload.locationName !== 'Belgrade, Serbia' || payload.musicMode !== 'instagram_catalog' || typeof payload.caption !== 'string' || !payload.caption || payload.caption.length > 2200 ||\n    ![payload.videoUrl,payload.coverUrl].every(url => typeof url === 'string' && url.startsWith(expected) && /[?&]v=r5-[a-z0-9]+(?:&|$)/.test(url)) ||\n    videoQuery.filter(value => value.startsWith('publishDate=')).length !== 1 || !videoQuery.includes(`publishDate=${payload.publishDate}`) ||\n    /[?&]cover=/.test(payload.videoUrl) || payload.coverUrl !== `${payload.videoUrl}&cover=1`) throw new Error('Invalid exact-image Reel payload: an 18-second closing CTA is required.');\n  const preview = { design: payload.design || null, publishDate: payload.publishDate, eventDate: payload.eventDate, selectedCount: payload.selectedCount,\n    repeatedEventIds: payload.repeatedEventIds, videoUrl: payload.videoUrl, coverUrl: payload.coverUrl, durationSeconds: 18, hasClosingCta: true, locationName: payload.locationName, musicMode: payload.musicMode };\n  for (const [url, type] of [[payload.videoUrl,'video/mp4'],[payload.coverUrl,'image/jpeg']]) {\n    const response = await httpRequest({ method: 'HEAD', url, returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 420000 });\n    if (Number(response.statusCode) !== 200 || !String(response.headers?.['content-type'] || response.headers?.['Content-Type'] || '').startsWith(type) ||\n      (type === 'video/mp4' && !/^bytes$/i.test(String(response.headers?.['accept-ranges'] || response.headers?.['Accept-Ranges'] || '')))) throw new Error('Exact Reel media preflight failed.');\n  }\n  const range = await httpRequest({ method: 'GET', url: payload.videoUrl, headers: { Range: 'bytes=0-31' },\n    encoding: 'arraybuffer', returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 420000 });\n  if (Number(range.statusCode) !== 206 || !/^bytes 0-31\\/[1-9]\\d*$/i.test(String(range.headers?.['content-range'] || range.headers?.['Content-Range'] || '')) ||\n    !/^video\\/mp4(?:;|$)/i.test(String(range.headers?.['content-type'] || range.headers?.['Content-Type'] || ''))) throw new Error('Exact Reel video byte-range preflight failed.');\n  if (dry) return [{ json: { status: 'dry_run', ...preview, caption: payload.caption } }];\n  if (!token || !/^\\d+$/.test(userId)) return [{ json: { status: 'blocked_facebook_login_required', ...preview } }];\n  if (!/^\\d+$/.test(locationId)) return [{ json: { status: 'blocked_belgrade_location_required', ...preview } }];\n  let prepared = payload;\n  if (!prepared.audioId) {\n    const catalog = await graph(`ig_audio?audio_type=music&user_id=${encodeURIComponent(userId)}`);\n    const seenSongs = new Set();\n    const tracks = (Array.isArray(catalog.audio) ? catalog.audio : []).map((track,index) => ({ ...track, catalogRank: index + 1 })).filter(track => /^\\d+$/.test(String(track.audio_id || '')) &&\n      Number(track.duration_in_ms) >= payload.durationSeconds * 1000 && typeof track.title === 'string' && track.title.trim() &&\n      (typeof track.audio_type !== 'string' || track.audio_type === 'music')).filter(track => {\n        const song = `${track.title}:${track.display_artist || ''}`.toLocaleLowerCase();\n        if (seenSongs.has(song)) return false;\n        seenSongs.add(song); return true;\n      }).slice(0,3);\n    if (!tracks.length) return [{ json: { status: 'blocked_no_catalog_music', ...preview } }];\n    const different = tracks.filter(track => String(track.audio_id) !== state.lastAudioId &&\n      !(track.title === state.lastAudioTitle && (track.display_artist || '') === (state.lastAudioArtist || '')));\n    const choices = different.length ? different : tracks;\n    const choice = choices[Math.min(choices.length - 1, Math.max(0, Math.floor(random() * choices.length)))];\n    prepared = { ...payload, audioId: String(choice.audio_id), audioTitle: choice.title, audioArtist: choice.display_artist || '', audioCatalogRank: choice.catalogRank, locationId };\n  }\n  if (prepared.locationId !== locationId) return [{ json: { status: 'blocked_location_changed', ...preview } }];\n  if (!prepared.containerId) {\n    const result = await graph(`${userId}/media`, { media_type: 'REELS', video_url: prepared.videoUrl, cover_url: prepared.coverUrl,\n      caption: prepared.caption, share_to_feed: 'false', location_id: prepared.locationId,\n      audio_configuration: JSON.stringify({ audio_id: prepared.audioId, audio_volume: 80, video_volume: 1 }) });\n    if (!result.id) throw new Error('Instagram did not return a Reel container ID.');\n    prepared = { ...prepared, containerId: result.id };\n  }\n  state.prepared = prepared;\n  let finished = false;\n  for (let attempt = 0; attempt < 36; attempt++) {\n    const status = await graph(`${prepared.containerId}?fields=status_code,status`);\n    if (status.status_code === 'FINISHED') { finished = true; break; }\n    if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') return [{ json: { status: 'blocked_container_failed', ...preview, containerId: prepared.containerId } }];\n    await wait(5000);\n  }\n  if (!finished) return [{ json: { status: 'blocked_container_processing', ...preview, containerId: prepared.containerId } }];\n  if (dateInBelgrade() !== prepared.publishDate) return [{ json: { status: 'blocked_stale_date', ...preview } }];\n  if (state.pending || (state.lastPublishDate === today && !(replacing && state.lastReelId === replacementId))) return [{ json: { status: 'blocked_reconciliation_required', ...preview } }];\n  state.pending = { publishDate: today, selectionKey: prepared.selectionKey, containerId: prepared.containerId,\n    audioId: prepared.audioId, locationId: prepared.locationId, startedAt: now().toISOString() };\n  let published;\n  try {\n    // An ambiguous publish is never retried automatically.\n    published = await graph(`${userId}/media_publish`, { creation_id: prepared.containerId });\n    if (!published.id) throw new Error('Instagram did not return a published Reel ID.');\n  } catch (error) {\n    state.pending.error = redact(error);\n    return [{ json: { status: 'blocked_reconciliation_required', ...preview, containerId: prepared.containerId, reason: state.pending.error } }];\n  }\n  if (replacing) state.previousPublications = [...(state.previousPublications || []), Object.fromEntries(Object.entries(state).filter(([key]) => key.startsWith('last')))].slice(-30);\n  state.lastPublishDate = today; state.lastEventDate = prepared.eventDate; state.lastReelId = published.id;\n  state.lastSelectionKey = prepared.selectionKey; state.lastAudioId = prepared.audioId; state.lastAudioTitle = prepared.audioTitle;\n  state.lastAudioArtist = prepared.audioArtist; state.lastLocationId = prepared.locationId; state.lastPublishedAt = now().toISOString();\n  state.lastAudioCatalogRank = prepared.audioCatalogRank;\n  rememberEventZekaSelection(state, prepared);\n  delete state.pending; delete state.prepared;\n  return [{ json: { status: 'published', ...preview, reelId: published.id, replacesReelId: replacing ? replacementId : null, audioId: state.lastAudioId, audioTitle: state.lastAudioTitle, audioArtist: state.lastAudioArtist, audioCatalogRank: state.lastAudioCatalogRank, locationId } }];\n}\n\nasync function fetchEventZekaPublicationContext({ httpRequest, graphBase, graphVersion, accessToken, userId, today, state = {} }) {\n  const since = new Date(`${today}T00:00:00Z`);\n  since.setUTCDate(since.getUTCDate() - 30);\n  const cutoff = since.getTime();\n  const captions = []; const cursors = new Set();\n  let after = '', complete = false;\n  for (let page = 0; page < 10; page++) {\n    let response;\n    try {\n      response = await httpRequest({ method: 'GET',\n        url: `${graphBase}/${graphVersion}/${userId}/media?fields=caption,timestamp&limit=50${after ? `&after=${encodeURIComponent(after)}` : ''}`,\n        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },\n        returnFullResponse: true, ignoreHttpStatusErrors: true, timeout: 45000 });\n    } catch { throw new Error('Could not verify recent publication history.'); }\n    let data;\n    try { data = typeof response.body === 'object' && response.body ? response.body : JSON.parse(response.body || '{}'); }\n    catch { throw new Error('Could not verify recent publication history.'); }\n    if (Number(response.statusCode) !== 200 || !Array.isArray(data.data)) throw new Error('Could not verify recent publication history.');\n    for (const media of data.data) {\n      const timestamp = Date.parse(media.timestamp);\n      if (!Number.isFinite(timestamp)) throw new Error('Publication history has an invalid timestamp.');\n      if (timestamp >= cutoff && typeof media.caption === 'string') {\n        if (media.caption.length > 2200) throw new Error('Publication history has an invalid caption.');\n        captions.push(media.caption);\n      }\n    }\n    if (!data.paging?.next || (data.data.length > 0 && data.data.every(media => Date.parse(media.timestamp) < cutoff))) { complete = true; break; }\n    const cursor = data.paging?.cursors?.after;\n    if (!cursor || cursors.has(cursor) || !data.data.length) throw new Error('Incomplete recent publication history.');\n    cursors.add(cursor); after = cursor;\n  }\n  if (!complete) throw new Error('Incomplete recent publication history.');\n  const ids = new Set();\n  const add = value => { if (typeof value === 'string' && /^[a-z0-9]{10,64}$/.test(value)) ids.add(value); };\n  for (const id of state.lastEventIds || []) add(id);\n  for (const item of state.publicationSelections || []) for (const id of item.eventIds || []) add(id);\n  for (const key of [state.lastSelectionKey, ...(state.previousPublications || []).map(item => item.lastSelectionKey)]) {\n    for (const id of String(key || '').match(/[a-z0-9]{10,64}/g) || []) add(id);\n  }\n  return { publishedCaptions: [...new Set(captions)], previouslyPublishedEventIds: [...ids].slice(-1000), excludedEventIds: [] };\n}\n\nfunction rememberEventZekaSelection(state, payload) {\n  const eventIds = payload.eventIds || (payload.slides || []).flatMap(slide => slide.eventIds || []) || [];\n  const ids = eventIds.length ? eventIds : (payload.frames || []).flatMap(frame => frame.eventIds || []);\n  state.lastEventIds = [...ids];\n  state.publicationSelections = [...(state.publicationSelections || []).filter(item => item.selectionKey !== payload.selectionKey),\n    { publishDate: payload.publishDate, selectionKey: payload.selectionKey, eventIds: [...ids], ...(payload.design ? { design: payload.design } : {}) }].slice(-31);\n}\n\nreturn await publishEventZekaReel({\n  env: $env,\n  httpRequest: this.helpers.httpRequest.bind(this.helpers),\n  getStaticData: () => $getWorkflowStaticData('global'),\n  forceDryRun: $execution.mode === 'manual',\n});"
+        }
+      },
+      {
+        "id": "verify-publication-result",
+        "name": "Verify Publication Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          100,
+          70
+        ],
+        "parameters": {
+          "jsCode": "function assertSocialPublicationResult(result) {\n  const allowed = new Set(['published', 'dry_run', 'skipped_already_published',\n    'skipped_no_events', 'skipped_special_publication_day',\n    'skipped_before_special_time', 'skipped_outside_special_date']);\n  if (!Array.isArray(result) || !result.length) throw new Error('Publication returned no result.');\n  for (const item of result) {\n    const output = item?.json;\n    if (!output || !allowed.has(output.status)) {\n      throw new Error(`Social publication failed (${output?.status || 'missing_status'}): ${output?.reason || 'Publication needs reconciliation.'}`);\n    }\n  }\n  return result;\n}\n\nreturn assertSocialPublicationResult($input.all());"
+        }
+      }
+    ],
+    "connections": {
+      "Manual Reel Preview": {
+        "main": [
+          [
+            {
+              "node": "Generate and Publish Tomorrow Reel",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Daily at 19:30 Belgrade": {
+        "main": [
+          [
+            {
+              "node": "Generate and Publish Tomorrow Reel",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate and Publish Tomorrow Reel": {
+        "main": [
+          [
+            {
+              "node": "Verify Publication Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Belgrade",
+      "saveDataSuccessExecution": "all",
+      "saveDataErrorExecution": "all",
+      "executionTimeout": 900
+    },
+    "staticData": null,
+    "versionId": "af7ff77a-ab53-472d-8978-58e58e1175d7",
+    "versionCounter": 1,
+    "tags": []
+  }
+]

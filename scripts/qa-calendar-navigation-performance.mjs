@@ -25,7 +25,7 @@ import * as calendarWindows from "../lib/events/public-calendar-windows.ts";
 import * as readCache from "../lib/events/public-event-read-cache.ts";
 
 const require = createRequire(import.meta.url);
-const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
+const jsx = (type, props, key) => type?.qaRender ? type(props) : ({ type, props: props ?? {}, key });
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
 function compile(file, mocks) {
   const output = ts.transpileModule(readFileSync(file, "utf8"), {
@@ -88,16 +88,19 @@ legacyOptions.push({ value: "id:venue-b", label: "Other venue", names: ["Old ali
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "Old alias", "Ambiguous legacy aliases must retain the existing name-matching behavior.");
 
 for (const mobile of [false, true]) {
+  const VirtualAgendaList = Object.assign(({ items, children }) => items.map(children), { qaRender: true });
   const { CalendarAgenda } = compile("components/calendar/calendar-agenda.tsx", {
-    react: { useMemo: callback => callback(), useSyncExternalStore: () => mobile },
+    react: { useMemo: callback => callback(), useSyncExternalStore: () => mobile, useState: value => [value, () => {}], useEffect: () => {} },
+    "./virtual-agenda-list": { VirtualAgendaList },
     "@/lib/taxonomy/event-categories": categories,
     "@/lib/events/calendar-time-band-definitions": bands,
     "@/lib/events/venue-day-grouping": grouping,
   });
   const tree = CalendarAgenda({ events: projected, hiddenDayCategories: [], selectedDayEventCount: 8, dayLabel: "Saturday", openNowActive: false, openNowHref: "/?open=now", now: 0, authEnabled: true, hasActiveFilters: false, clearFiltersHref: "/" });
   const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
-  assert.equal(rows.length, events.length, "Both responsive modes must render exactly one row for every event.");
-  assert.equal(new Set(rows.map(node => node.props["data-calendar-event-id"])).size, events.length);
+  const collapsedCount = mobile ? 0 : grouping.groupBusyVenuesForDay(projected).groups.reduce((sum, group) => sum + group.events.length, 0);
+  assert.equal(rows.length, events.length - collapsedCount, "Responsive modes retain individual events; busy venue contents mount on expansion.");
+  assert.equal(new Set(rows.map(node => node.props["data-calendar-event-id"])).size, rows.length);
   assert.equal(nodes(tree, node => node.props?.["data-calendar-venue-group"]).length, mobile ? 0 : 1, "Retain desktop busy-venue grouping and the mobile chronological list.");
   if (mobile) {
     const evening = nodes(tree, node => node.props?.["data-calendar-time-band"] === "evening")[0];

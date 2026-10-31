@@ -39,13 +39,13 @@ const page=load("app/(main)/saved/page.tsx",{
   }})},
 }).default;
 const guest=await page({searchParams:Promise.resolve({date:"2026-10-31"})});
-assert.equal(guest.props.children.type,SignInPromptCard,"Server-known guests must see usable sign-in links without waiting on useUser().isLoaded.");
+assert.equal(guest.props.children.type,SavedLibraryPanel,"Guests must receive the local Saved library without any private server read.");
 assert.equal(guest.props.children.props.returnPath,"/saved?date=2026-10-31");assert.equal(privateReads,0);assert.equal(venueReads,0);
 configured=false;
-const unavailable=await page({});assert.equal(unavailable.props.children.props.authEnabled,false);assert.equal(privateReads,0);
+const unavailable=await page({});assert.equal(unavailable.props.children.type,SavedLibraryPanel);assert.equal(unavailable.props.children.props.authEnabled,false);assert.equal(privateReads,0);
 configured=true;identity="real-account";
 let signedIn=await page({});assert.equal(signedIn.props.children.type,SavedLibraryPanel);assert.equal(privateReads,1);assert.equal(venueReads,0,"No favourite venues must mean no city-wide upcoming scan.");
 library={savedEventIds:["kept"],savedEvents:[{_id:"kept",title:"Kept",date:"2026-10-31",venue:"Venue",time:"21:00",eventType:"live"}],favoriteVenueIds:Array.from({length:9},(_,i)=>`venue-${i}`),favoriteVenues:[]};
 signedIn=await page({});assert.equal(venueReads,9);assert.ok(peak<=4);assert.equal(signedIn.props.children.props.initialSavedEvents[0]._id,"kept");assert.equal(signedIn.props.children.props.upcomingEvents.length,10);
 failVenue=true;signedIn=await page({});assert.equal(signedIn.props.children.props.initialSavedEvents[0]._id,"kept","A next-event lookup failure must not discard the authenticated saved library.");assert.ok(signedIn.props.children.props.initialError);
-console.log("QA passed: mobile navigation date context, public-only intent prefetch, immediate guest Saved prompt, authenticated library, and bounded favourite reads.");
+console.log("QA passed: mobile navigation date context, public-only intent prefetch, persistent guest Saved library, authenticated library, and bounded favourite reads.");

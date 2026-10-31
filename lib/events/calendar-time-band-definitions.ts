@@ -14,11 +14,6 @@ export type CalendarTimeBandDefinition = {
 
 export const CALENDAR_TIME_BANDS: readonly CalendarTimeBandDefinition[] = [
   {
-    key: "after-midnight",
-    label: "After midnight",
-    description: "00:00-05:59",
-  },
-  {
     key: "daytime",
     label: "Daytime",
     description: "06:00-17:59",
@@ -37,5 +32,10 @@ export const CALENDAR_TIME_BANDS: readonly CalendarTimeBandDefinition[] = [
     key: "time-not-announced",
     label: "Time not announced",
     description: "No source-confirmed start time",
+  },
+  {
+    key: "after-midnight",
+    label: "After midnight",
+    description: "00:00-05:59",
   },
 ] as const;

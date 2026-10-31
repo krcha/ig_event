@@ -3,7 +3,8 @@
 .next
 node_modules
 .convex
-data
+data/*
+!data/venue-coordinates-2026-10-15.json
 test-results
 npm-debug.log*
 yarn-debug.log*

@@ -1,6 +1,5 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
 import { Bookmark, CalendarDays, ChevronRight, Heart, Loader2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -50,6 +49,7 @@ export type SavedLibraryVenue = {
 };
 
 type SavedLibraryPanelProps = {
+  authEnabled?: boolean;
   initialError?: string;
   initialFavoriteVenueIds: string[];
   initialFavoriteVenues: SavedLibraryVenue[];
@@ -423,6 +423,7 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
           className="flex-none"
           defaultSaved
           eventId={event._id}
+          event={event}
           eventTitle={event.title}
           variant="icon"
         />
@@ -503,6 +504,7 @@ function PlaceRow({ item }: { item: FavoriteVenueWithNextEvent }) {
 }
 
 export function SavedLibraryPanel({
+  authEnabled = true,
   initialError,
   initialFavoriteVenueIds,
   initialFavoriteVenues,
@@ -511,12 +513,14 @@ export function SavedLibraryPanel({
   upcomingEvents,
   returnPath,
 }: SavedLibraryPanelProps) {
-  const { isLoaded, isSignedIn } = useUser();
   const {
     error: libraryError,
     favoriteVenueIds,
     favoriteVenues,
     isLibraryLoaded,
+    isSignedIn,
+    isSyncing,
+    refreshLibrary,
     savedEventIds,
     savedEvents,
   } = useUserLibrary();
@@ -574,12 +578,8 @@ export function SavedLibraryPanel({
   }, [activeFavoriteIds, hydratedFavoriteVenues, upcomingEvents]);
   const error = libraryError ?? initialError;
 
-  if (!isLoaded) {
+  if (!isLibraryLoaded) {
     return <LoadingCard />;
-  }
-
-  if (!isSignedIn) {
-    return <SignInPromptCard returnPath={returnPath} />;
   }
 
   return (
@@ -611,6 +611,10 @@ export function SavedLibraryPanel({
           </div>
         </div>
       </header>
+
+      {!isSignedIn ? <p className="text-sm leading-6 text-muted-foreground" data-guest-saved-notice="true">
+        Saved on this device. {authEnabled ? <Link className="text-primary underline underline-offset-4" href={`/sign-in?redirect_url=${encodeURIComponent(returnPath ?? "/saved")}`}>Sign in to sync your saved events.</Link> : null}
+      </p> : isSyncing ? <p className="text-sm text-muted-foreground" role="status">Syncing device saves...</p> : null}
 
       <div className="rounded-[1.25rem] border border-border/75 bg-card/90 p-1.5">
         <div className="grid grid-cols-2 gap-1.5">
@@ -648,9 +652,9 @@ export function SavedLibraryPanel({
       </div>
 
       {error ? (
-        <p className="rounded-[1rem] border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
+        <div className="rounded-[1rem] border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          {error} <button className="underline underline-offset-4" onClick={() => void refreshLibrary()} type="button">Try again</button>
+        </div>
       ) : null}
 
       {activeSegment === "events" ? (

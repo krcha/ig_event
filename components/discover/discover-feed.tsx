@@ -271,16 +271,15 @@ function DiscoverPost({
               <ExternalLink className="h-4 w-4" />
             </Link>
           </div>
-          {authEnabled ? (
             <div data-discover-save-action="true">
               <SaveEventButton
                 className="flex-none [&>button]:rounded-full"
                 eventId={event._id}
+                event={event}
                 eventTitle={event.title}
                 variant="icon"
               />
             </div>
-          ) : null}
         </div>
 
         <div className="space-y-1">
