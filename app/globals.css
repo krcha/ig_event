@@ -270,3 +270,22 @@
     }
   }
 }
+
+/* Keep complete, searchable event markup while deferring off-screen layout and
+   paint. Expanded posts opt out so media and scroll anchoring keep their size. */
+@supports (content-visibility: auto) {
+  [data-calendar-event-id] {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 80px;
+  }
+  li[data-calendar-event-id] {
+    contain-intrinsic-block-size: auto 48px;
+  }
+  [data-calendar-event-id]:has([data-expanded="true"]) {
+    content-visibility: visible;
+  }
+  [aria-labelledby="belgrade-events-guide"] {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 360px;
+  }
+}

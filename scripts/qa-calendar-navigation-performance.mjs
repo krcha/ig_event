@@ -17,9 +17,10 @@ import * as openNow from "../lib/venues/venue-open-now.ts";
 import * as seo from "../lib/seo/site.ts";
 import { buildCalendarOverviewPresentation } from "../lib/events/calendar-overview-data.ts";
 import { fetchCalendarOverview, peekCalendarOverview } from "../lib/events/calendar-overview-client.ts";
+import { chunkPublicVenueIds, loadPublicVenueBatches } from "../lib/events/public-venue-batching.ts";
 
 const require = createRequire(import.meta.url);
-const jsx = (type, props) => ({ type, props: props ?? {} });
+const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
 function compile(file, mocks) {
   const output = ts.transpileModule(readFileSync(file, "utf8"), {
@@ -191,4 +192,50 @@ const unavailableApi = compile("app/api/calendar/overview/route.ts", {
 const unavailable = await unavailableApi.GET(new NextRequest("https://eventzeka.com/api/calendar/overview?month=2026-10&weekStart=2026-10-30"));
 assert.equal(unavailable.status, 503);
 assert.ok(!(await unavailable.text()).includes("Internal backend failure"));
+
+// A new day must reset Suspense before the day-data promise is resolved.
+const home = compile("app/page.tsx", {
+  react: { Suspense: "suspense" }, "./(main)/events-browse-page": { __esModule: true, default: "DayPage" },
+  "@/lib/seo/site": seo,
+});
+const firstDay = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-30" }) });
+const secondDay = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31" }) });
+assert.notEqual(firstDay.key, secondDay.key, "Transitions must show the new day's loading boundary instead of retaining a stale list.");
+assert.equal(secondDay.props.fallback.props.day, "2026-10-31");
+assert.equal(secondDay.props.children.type, "DayPage");
+assert.equal((await secondDay.props.children.props.searchParams).day, "2026-10-31");
+
+// Independent venue batches overlap, keep deterministic order, and stop scheduling on failure.
+const batches = chunkPublicVenueIds(Array.from({ length: 350 }, (_, index) => String(index)));
+const releases = new Map(); let active = 0; let maximum = 0;
+const batchRead = loadPublicVenueBatches(batches, async ids => {
+  active++; maximum = Math.max(maximum, active);
+  await new Promise(resolve => releases.set(ids[0], resolve));
+  active--; return [ids[0]];
+});
+assert.equal(active, 2);
+releases.get("100")(); await new Promise(setImmediate);
+assert.ok(releases.has("200"), "The second batch must not wait for the first batch to finish.");
+releases.get("200")(); await new Promise(setImmediate);
+releases.get("300")(); releases.get("0")();
+assert.deepEqual(await batchRead, ["0", "100", "200", "300"]);
+assert.equal(maximum, 2, "Parallel reads must remain bounded.");
+let attempted = 0;
+await assert.rejects(loadPublicVenueBatches(batches, async () => { attempted++; throw new Error("venue query failed"); }), /venue query failed/);
+assert.equal(attempted, 2);
+
+const transport = compile("lib/events/calendar-convex-url.ts", { "server-only": {} });
+const previousPrivate = process.env.CONVEX_PUBLIC_READ_URL;
+const previousPublic = process.env.NEXT_PUBLIC_CONVEX_URL;
+try {
+  process.env.NEXT_PUBLIC_CONVEX_URL = "https://same-backend.example";
+  delete process.env.CONVEX_PUBLIC_READ_URL;
+  assert.equal(transport.getCalendarConvexUrl(), "https://same-backend.example");
+  process.env.CONVEX_PUBLIC_READ_URL = "http://private-same-backend:3210";
+  assert.equal(transport.getCalendarConvexUrl(), "http://private-same-backend:3210");
+  assert.equal(process.env.NEXT_PUBLIC_CONVEX_URL, "https://same-backend.example", "Internal server transport must not rewrite browser configuration.");
+} finally {
+  if (previousPrivate === undefined) delete process.env.CONVEX_PUBLIC_READ_URL; else process.env.CONVEX_PUBLIC_READ_URL = previousPrivate;
+  if (previousPublic === undefined) delete process.env.NEXT_PUBLIC_CONVEX_URL; else process.env.NEXT_PUBLIC_CONVEX_URL = previousPublic;
+}
 console.log("Calendar navigation QA passed: one responsive event tree, compact metadata parity, independent day rendering, selected-day counter authority, bounded overview API, shared requests, expiry and recovery.");

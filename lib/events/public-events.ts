@@ -23,7 +23,8 @@ import {
   normalizeHandle,
   toSearchableText,
 } from "@/lib/pipeline/venue-normalization";
-import { chunkPublicVenueIds } from "@/lib/events/public-venue-batching";
+import { chunkPublicVenueIds, loadPublicVenueBatches } from "@/lib/events/public-venue-batching";
+import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-windows";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
@@ -269,15 +270,9 @@ async function loadPublicVenueRecordsByIds(
   convex: ConvexHttpClient,
   venueIds: string[],
 ): Promise<VenueRecord[]> {
-  const venues: VenueRecord[] = [];
-  for (const batch of chunkPublicVenueIds(venueIds)) {
-    venues.push(
-      ...((await convex.query(listPublicVenueFieldsByIdsQuery, {
-        ids: batch,
-      })) as VenueRecord[]),
-    );
-  }
-  return venues;
+  return loadPublicVenueBatches(chunkPublicVenueIds(venueIds), async (ids) =>
+    await convex.query(listPublicVenueFieldsByIdsQuery, { ids }) as VenueRecord[],
+  );
 }
 
 async function loadVenueLookup(
@@ -567,7 +562,7 @@ function getCachedPublicCalendarEventsWindow(
 ): Promise<PublicEvent[]> {
   const now = Date.now();
   prunePublicEventsCache(now);
-  const cacheKey = `calendar:${fromDate}:${beforeDate}`;
+  const cacheKey = `calendar:${convex.url}:${fromDate}:${beforeDate}`;
   const cached = publicEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     publicEventsCache.delete(cacheKey);
@@ -595,7 +590,7 @@ export async function loadPublicCalendarEventsWindow(options: {
   events: PublicEvent[];
   error?: string;
 }> {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const convexUrl = getCalendarConvexUrl();
   const fromDate = normalizeDateBoundary(options.fromDate);
   const beforeDate = normalizeDateBoundary(options.beforeDate);
 

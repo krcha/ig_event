@@ -1,6 +1,6 @@
-export default function EventsLoading() {
+export default function EventsLoading({ day }: { day?: string } = {}) {
   return (
-    <main aria-busy="true" aria-label="Učitavanje događaja" className="app-page app-page-wide gap-4" role="status">
+    <main aria-busy="true" aria-label="Učitavanje događaja" className="app-page app-page-wide gap-4" data-calendar-loading-day={day ?? "today"} role="status">
       <span className="sr-only">Učitavanje događaja</span>
       <div aria-hidden="true" className="space-y-4 motion-safe:animate-pulse">
         <div className="h-10 w-52 rounded-xl bg-muted" />

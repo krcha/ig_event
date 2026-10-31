@@ -3,6 +3,7 @@ import "server-only";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { buildPublicCalendarDateWindows } from "./public-calendar-windows";
+import { getCalendarConvexUrl } from "./calendar-convex-url";
 import { toSearchableText } from "../pipeline/venue-normalization";
 import type {
   PublicCalendarOverviewGroup,
@@ -107,7 +108,7 @@ async function loadOverview(convex: ConvexHttpClient, options: Options): Promise
 
 /** Counters and venue choices only; event details are loaded separately for one day. */
 export async function loadPublicCalendarOverviewWindow(options: Options): Promise<Overview & { error?: string }> {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const convexUrl = getCalendarConvexUrl();
   if (!convexUrl) return { groups: [], venues: [], error: "Convex is not configured yet." };
   if (buildPublicCalendarDateWindows(options.fromDate, options.beforeDate).length === 0) {
     return { groups: [], venues: [], error: "Calendar overview requires valid date boundaries." };
