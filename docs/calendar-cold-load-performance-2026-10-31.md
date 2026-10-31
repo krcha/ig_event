@@ -82,6 +82,28 @@ the initial warm-up. The public calendar's 60 s data TTL remains unchanged.
 Admin authentication, background jobs and API behavior are unchanged; their
 modules initialize when those routes are actually used.
 
+## Work under concurrent public traffic
+
+The first `41bef81` production browser series still caught a 10315 ms transition
+to October 31. A subsequent opt-in server trace separated backend time from
+rendering: one 4814 ms server response spent about 2500 ms on three sequential
+event pages, then about 715 ms on parallel venue reads. Another trace of the
+same day finished in 1867 ms. These are variable shared-server observations.
+
+A separate 12-second sample of actual production requests observed 35 calendar
+HTML requests for dates spread across 2021-2034, alongside ordinary routes. A
+second sample used several browser-like user agents without browser fetch
+metadata; a third sample came from multiple source addresses. This is consistent
+with automated traffic, but the samples do not establish its owner or purpose.
+It competes with foreground navigation even when month counters are serialized.
+
+A 15.5-second CPU profile of that workload included 724 ms of self time in the
+page's date formatter, plus locale comparison and GC work. Reuse the three fixed
+date formats and the numeric, case-insensitive collators across requests rather
+than initializing ICU data for every month cell and comparison. Preserve the
+existing locale, formatting options, sorting order and 60-second data freshness.
+No source-address bans, date restrictions or backend policy changes are applied.
+
 ## Verification and rollout
 
 The navigation QA executes the root boundary with two dates, verifies that

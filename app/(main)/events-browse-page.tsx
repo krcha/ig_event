@@ -156,15 +156,15 @@ function isWeekendDate(date: Date): boolean {
   return day === 0 || day === 6;
 }
 
-function formatDisplayDate(date: Date, options: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat("en-US", options).format(date);
-}
+// These formats are fixed for this page. Reuse ICU formatters instead of
+// rebuilding their locale data for every calendar cell and every request.
+const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" });
+const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+const dayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" });
+const agendaCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function compareAlphabetical(left: string, right: string): number {
-  return left.trim().localeCompare(right.trim(), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  return agendaCollator.compare(left.trim(), right.trim());
 }
 
 function eventMatchesSearch(event: PublicEvent, query: string | undefined): boolean {
@@ -444,7 +444,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const previousDayKey = formatDateKey(previousDay);
   const nextDayKey = formatDateKey(nextDay);
   const monthDays = getMonthDays(monthStart);
-  const monthLabel = formatDisplayDate(monthStart, { month: "long", year: "numeric" });
+  const monthLabel = monthFormatter.format(monthStart);
   const activeDayCount = filteredMonthDayKeys.filter((dayKey) =>
     isUpcomingCalendarDay(dayKey, todayKey),
   ).length;
@@ -477,7 +477,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         month: monthParam,
         day: dayKey,
       })}`,
-      weekdayLabel: formatDisplayDate(day, { weekday: "short" }),
+      weekdayLabel: weekdayFormatter.format(day),
       dayNumber: day.getDate(),
       eventCount: dayBucket?.eventCount ?? 0,
       categoryCounts: dayBucket?.categoryCounts ?? createEmptyDayCategoryCounts(),
@@ -913,7 +913,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             events={projectCalendarAgendaEvents(selectedDayAgendaEvents, new Map([...selectedDayAgendaEvents].sort(compareAgendaEventsByTime).map((event, index) => [event._id, index])), openNowStates)}
             hiddenDayCategories={hiddenDayCategories}
             selectedDayEventCount={selectedDayEventCount}
-            dayLabel={formatDisplayDate(selectedDate, { weekday: "short", month: "short", day: "numeric" })}
+            dayLabel={dayFormatter.format(selectedDate)}
             openNowActive={openNowActive} openNowHref={openNowHref} now={now} authEnabled={authEnabled}
             hiddenSort={hiddenSort} hasActiveFilters={hasActiveFilters}
             clearFiltersHref={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`}

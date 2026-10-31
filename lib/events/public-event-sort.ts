@@ -8,22 +8,18 @@ export type PublicEventSortInput = {
   title: string;
 };
 
+const alphabeticalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 function compareAlphabetical(left: string, right: string): number {
   const normalizedLeft = normalizeAlphabeticalSortKey(left);
   const normalizedRight = normalizeAlphabeticalSortKey(right);
-  const normalizedResult = normalizedLeft.localeCompare(normalizedRight, undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  const normalizedResult = alphabeticalCollator.compare(normalizedLeft, normalizedRight);
 
   if (normalizedResult !== 0) {
     return normalizedResult;
   }
 
-  return left.trim().localeCompare(right.trim(), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  return alphabeticalCollator.compare(left.trim(), right.trim());
 }
 
 function normalizeAlphabeticalSortKey(value: string): string {
