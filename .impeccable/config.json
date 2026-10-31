@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "space grotesk",
+        "createdAt": "2026-10-31T17:45:19.689Z",
+        "reason": "User confirmed: explicitly requested keeping Space Grotesk in the approved Event Zeka redesign on 2026-10-31."
+      }
+    ]
+  }
+}
