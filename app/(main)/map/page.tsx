@@ -12,7 +12,7 @@ import {
 import {
   addDaysToDateKey,
   dateKeyToLocalNoonDate,
-  getNightlifeDefaultDateKey,
+  getCalendarDateKeyInTimeZone,
 } from "@/lib/events/nightlife-date";
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
 import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
@@ -78,8 +78,8 @@ export default async function EventMapPage({ searchParams }: EventMapPageProps) 
   const requestedDate = Array.isArray(resolvedSearchParams?.date)
     ? resolvedSearchParams.date[0]
     : resolvedSearchParams?.date;
-  const todayDate = openNowActive ? getEventMapOpenNowDateKey(initialNow) : getNightlifeDefaultDateKey(new Date(initialNow));
-  const selectedDate = openNowActive ? todayDate : normalizeMapDateKey(requestedDate, todayDate);
+  const todayDate = getCalendarDateKeyInTimeZone(new Date(initialNow));
+  const selectedDate = openNowActive ? getEventMapOpenNowDateKey(initialNow) : normalizeMapDateKey(requestedDate, todayDate);
 
   return (
     <Suspense fallback={<EventMapLoading />}>

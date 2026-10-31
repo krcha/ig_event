@@ -10,14 +10,13 @@ import {
   EventPriceChip,
 } from "@/components/events/event-meta";
 import { SaveEventButton } from "@/components/events/save-event-button";
-import { EventSessionLabel } from "@/components/events/event-session-label";
-import { ReadMoreText } from "@/components/ui/read-more-text";
 import { resolveEventTimeDisplay, type EventDayPeriod } from "@/lib/events/event-time";
 import { getEventSessionLabel } from "@/lib/events/event-session";
-import { cn } from "@/lib/utils";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 import { MobileDiscover } from "./mobile-discover";
 import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
+import { EventZekaMark } from "@/components/brand/event-zeka-brand";
+import styles from "./desktop-discover.module.css";
 
 export type DiscoverFeedEvent = {
   _id: string;
@@ -117,10 +116,6 @@ function formatEventDate(value: string): string {
   }).format(date);
 }
 
-function getAvatarInitial(event: DiscoverFeedEvent): string {
-  return (event.instagramHandle || event.venue || event.title).trim().charAt(0).toUpperCase() || "B";
-}
-
 function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
   const handle = event.instagramHandle?.replace(/^@/, "").trim();
   if (handle) {
@@ -149,35 +144,8 @@ function getInstagramCaption(event: DiscoverFeedEvent): string | null {
   return event.sourceCaption?.trim() || null;
 }
 
-function VenueNameLink({
-  className,
-  event,
-}: {
-  className?: string;
-  event: Pick<DiscoverFeedEvent, "venue" | "venueId">;
-}) {
-  if (!event.venueId) {
-    return <span className={className}>{event.venue}</span>;
-  }
-
-  return (
-    <Link
-      className={cn(className, "hover:text-primary focus-visible:text-primary focus-visible:outline-none")}
-      href={`/venues/${event.venueId}`}
-      prefetch={false}
-    >
-      {event.venue}
-    </Link>
-  );
-}
-
-function DiscoverPost({
-  authEnabled,
-  event,
-}: {
-  authEnabled: boolean;
-  event: DiscoverFeedEvent;
-}) {
+function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const time = getResolvedTime(event);
   const handleLabel = getInstagramHandleLabel(event);
   const instagramCaption = getInstagramCaption(event);
@@ -185,140 +153,23 @@ function DiscoverPost({
   const sessionLabel = getEventSessionLabel(event);
 
   return (
-    <article
-      className="overflow-hidden rounded-[1.25rem] border border-white/[0.07] bg-[#0d0f16] shadow-[0_26px_70px_-48px_rgba(0,0,0,0.92)]"
-      data-discover-post="true"
-      style={{ containIntrinsicSize: "780px", contentVisibility: "auto" }}
-    >
-      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link
-            aria-label={`Open ${event.title}`}
-            className="inline-flex h-10 w-10 flex-none items-center justify-center rounded-full border border-primary/25 bg-primary/[0.14] text-sm font-bold text-primary"
-            href={`/events/${event._id}`}
-            prefetch={false}
-          >
-            {getAvatarInitial(event)}
-          </Link>
-          <span className="min-w-0">
-            <Link
-              aria-label={`Open ${event.title}`}
-              className="block truncate text-sm font-semibold leading-5 text-foreground hover:text-primary"
-              href={`/events/${event._id}`}
-              prefetch={false}
-            >
-              {handleLabel}
-            </Link>
-            <span className="block truncate text-[11px] font-medium text-muted-foreground">
-              <VenueNameLink event={event} /> · {formatEventDate(event.date)}
-            </span>
-          </span>
-        </div>
-        <span className="inline-flex flex-none items-center rounded-full bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold text-muted-foreground ring-1 ring-white/[0.08]">
-          {time.label}
-        </span>
-      </div>
-
-      {imageUrl ? (
-        <Link
-          aria-label={`Open ${event.title}`}
-          className="relative block aspect-[4/5] overflow-hidden bg-black"
-          data-discover-image-source="event-proxy"
-          href={`/events/${event._id}`}
-        >
-          <Image
-            alt={event.title}
-            className="object-cover"
-            fill
-            loading="lazy"
-            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
-            src={imageUrl}
-            unoptimized
-          />
-        </Link>
-      ) : (
-        <div className="border-b border-white/[0.06] bg-black/[0.18] px-4 py-5 sm:px-5">
-          <Link aria-label={`Open ${event.title}`} className="block" href={`/events/${event._id}`}>
-            <p className="text-xs font-semibold uppercase text-primary">
-              {event.title}
-            </p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Image pending for this post.
-            </p>
-          </Link>
-        </div>
-      )}
-
-      <div className="space-y-3 px-3 pb-4 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-1.5">
-            {event.instagramPostUrl ? (
-              <a
-                aria-label={`Open ${event.title} on Instagram`}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.1] bg-white/[0.035] text-muted-foreground hover:border-primary/35 hover:bg-primary/[0.12] hover:text-primary"
-                href={event.instagramPostUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <Instagram className="h-4 w-4" />
-              </a>
-            ) : null}
-            <Link
-              aria-label={`Open details for ${event.title}`}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.1] bg-white/[0.035] text-muted-foreground hover:border-primary/35 hover:bg-primary/[0.12] hover:text-primary"
-              href={`/events/${event._id}`}
-            >
-              <ExternalLink className="h-4 w-4" />
-            </Link>
+    <article className={styles.post} data-discover-post="true" aria-label={event.title}>
+      <Link aria-label={`Open details for ${event.title}`} className={styles.posterLink} href={`/events/${event._id}`} prefetch={false}>
+        {imageUrl && !imageFailed ? <Image alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} unoptimized /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span>{imageFailed ? "Poster unavailable." : "Image pending for this post."}</span></span>}
+        <div className={styles.overlay} data-discover-hover-details="true">
+          <div className={styles.eventInfo}>
+            <span className={styles.eventTime}>{formatEventDate(event.date)} · {time.label}</span>
+            <h2>{event.title}</h2>
+            {sessionLabel ? <p className={styles.sessionLabel}>{sessionLabel}</p> : null}
+            <p className={styles.eventVenue}>{event.venue}</p>
+            <EventMetaChips event={event} />
+            {instagramCaption ? <p className={styles.caption} data-discover-caption-source="instagram">{instagramCaption}</p> : <p className={styles.caption} data-discover-caption-source="missing">{handleLabel} · caption unavailable from Instagram</p>}
+            <span className={styles.openDetails}>Event details <ExternalLink aria-hidden="true" size={14} /></span>
           </div>
-            <div data-discover-save-action="true">
-              <SaveEventButton
-                className="flex-none [&>button]:rounded-full"
-                eventId={event._id}
-                event={event}
-                eventTitle={event.title}
-                variant="icon"
-              />
-            </div>
         </div>
-
-        <div className="space-y-1">
-          {sessionLabel ? <div>
-            <Link className="text-sm font-semibold text-foreground hover:text-primary" href={`/events/${event._id}`} prefetch={false}>
-              {event.title}
-            </Link>
-            <EventSessionLabel event={event} />
-          </div> : null}
-          {instagramCaption ? (
-            <ReadMoreText
-              bodyClassName="text-muted-foreground"
-              buttonClassName="text-sm leading-6"
-              collapsedButtonClassName="bg-[#0d0f16] text-muted-foreground"
-              moreLabel="more"
-              paragraphProps={{ "data-discover-caption-source": "instagram" }}
-              prefix={<span className="font-semibold text-foreground">{handleLabel}</span>}
-              text={instagramCaption}
-              textClassName="text-sm leading-6 text-foreground"
-            />
-          ) : (
-            <p
-              className="text-sm leading-6 text-muted-foreground"
-              data-discover-caption-source="missing"
-            >
-              <span className="font-semibold text-foreground">{handleLabel}</span>{" "}
-              caption unavailable from Instagram
-            </p>
-          )}
-          <p className="mt-1 text-xs font-medium text-muted-foreground">
-            {event.title} · <VenueNameLink event={event} /> · {time.label}
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <EventMetaChips event={event} />
-          <span className="flex-none text-xs font-semibold text-primary">{time.label}</span>
-        </div>
-      </div>
+      </Link>
+      <div className={styles.saveAction} data-discover-save-action="true"><SaveEventButton eventId={event._id} event={event} eventTitle={event.title} variant="icon" /></div>
+      {event.instagramPostUrl ? <a aria-label={`Open ${event.title} on Instagram`} className={styles.sourceAction} href={event.instagramPostUrl} rel="noreferrer" target="_blank"><Instagram aria-hidden="true" size={16} /></a> : null}
     </article>
   );
 }
@@ -352,7 +203,6 @@ export function DiscoverFeed(props: DiscoverFeedProps) {
 }
 
 function DesktopDiscoverFeed({
-  authEnabled,
   dateTabs,
   error,
   events,
@@ -440,61 +290,29 @@ function DesktopDiscoverFeed({
   }, [hasMore, loadError, loadMore]);
 
   return (
-    <main className="app-page app-page-wide gap-3 sm:gap-4" data-discover-feed="instagram-scroll">
+    <main className="app-page app-page-wide gap-3 sm:gap-4" data-discover-feed="instagram-profile">
       <div className="mx-auto flex w-full max-w-[88rem] flex-col gap-3 sm:gap-4">
-        <header className="mx-auto w-full max-w-[38rem] px-1 py-1 sm:px-0 lg:max-w-none">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="section-kicker hidden sm:block">Belgrade feed</p>
-              <h1 className="whitespace-nowrap text-[clamp(1.25rem,6vw,1.875rem)] font-semibold leading-none tracking-tight text-foreground sm:mt-2 sm:whitespace-normal sm:text-5xl">
-                Discover Belgrade
-              </h1>
-              <p className="mt-2 text-sm font-medium text-muted-foreground">{subline}</p>
-              <p className="mt-1.5 hidden max-w-xl text-sm leading-6 text-muted-foreground sm:block">
-                {introduction}
-              </p>
+        <header>
+          <div className={styles.profile}>
+            <div className={styles.avatar}><EventZekaMark /></div>
+            <div className={styles.profileCopy}>
+              <div className={styles.profileTitle}><h1>Discover Belgrade</h1><span className={styles.count}><strong>{pagination.totalEvents}</strong> events</span></div>
+              <p className={styles.subline}>{subline}</p>
+              <p className={styles.intro}>{introduction}</p>
             </div>
-            <div className="flex flex-none items-center gap-2">
-              <Link
-                aria-label="Search events"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.05] text-muted-foreground ring-1 ring-white/[0.08] hover:bg-primary/[0.16] hover:text-primary"
-                href="/"
-              >
-                <Search className="h-4 w-4" />
-              </Link>
-            </div>
+            <Link aria-label="Search events" className={styles.search} href="/"><Search aria-hidden="true" size={18} /></Link>
           </div>
-          <nav
-            aria-label="Discover dates"
-            className="mt-4 grid grid-cols-3 gap-1 rounded-full border border-white/[0.07] bg-white/[0.035] p-1"
-          >
-            {dateTabs.map((tab) => (
-              <a
-                aria-current={tab.active ? "date" : undefined}
-                className={cn(
-                  "min-w-0 rounded-full px-2.5 py-2 text-center",
-                  tab.active
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
-                )}
-                href={tab.href}
-                key={tab.href}
-              >
-                <span className="block truncate text-xs font-semibold">{tab.label}</span>
-                <span className="mt-0.5 block truncate text-[10px] font-medium opacity-75">
-                  {tab.sublabel}
-                </span>
-              </a>
-            ))}
+          <nav aria-label="Discover dates" className={styles.dates}>
+            {dateTabs.map(tab => <a aria-current={tab.active ? "date" : undefined} className={styles.date} href={tab.href} key={tab.href}><strong>{tab.label}</strong><span>{tab.sublabel}</span></a>)}
           </nav>
         </header>
 
         <section
-          className="grid gap-3 sm:gap-4 lg:grid-cols-2 2xl:grid-cols-3"
+          className={styles.grid}
           data-discover-post-grid="true"
         >
           {visibleEvents.map((event) => (
-            <DiscoverPost authEnabled={authEnabled} event={event} key={event._id} />
+            <DiscoverPost event={event} key={event._id} />
           ))}
         </section>
         {hasMore ? (

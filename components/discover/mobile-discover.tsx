@@ -13,6 +13,7 @@ import { choicesForScope, DISCOVER_SCOPES, getDiscoverCategory, getDiscoverGestu
 import { cn } from "@/lib/utils";
 import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 import { useDiscoverSelections } from "./use-discover-selections";
+import { useDiscoverPhotoSnap } from "./use-discover-photo-snap";
 import styles from "./mobile-discover.module.css";
 
 type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:MobileDiscoverEvent[]; selectedDate:string; today:string};
@@ -49,7 +50,6 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   const [detail,setDetail] = useState<MobileDiscoverEvent|null>(null);
   const [removeError,setRemoveError] = useState(false);
   const stage = useRef<HTMLDivElement>(null);
-  const snapTrigger = useRef<HTMLSpanElement>(null);
   const categories = useRef<HTMLDivElement>(null);
   const restartDialog = useRef<HTMLDialogElement>(null);
   const generation = useRef(0);
@@ -76,19 +76,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     const requested = new URLSearchParams(window.location.search).get("category");
     if (DISCOVER_SCOPES.includes(requested as DiscoverScope)) setScope(requested as DiscoverScope);
   },[]);
-  useEffect(()=>{
-    if(showSummary || !snapTrigger.current || typeof IntersectionObserver === "undefined" || window.matchMedia("(prefers-reduced-motion: reduce)").matches)return;
-    const root=document.documentElement;
-    // Activate only after scrolling reaches the card, never when the page opens.
-    const observer=new IntersectionObserver(([entry])=>{
-      if(entry && entry.boundingClientRect.height>0 && !entry.isIntersecting && entry.boundingClientRect.top<12 && window.matchMedia("(max-width: 767px)").matches){
-        root.classList.add(styles.scrollRoot);
-        observer.disconnect();
-      }
-    },{rootMargin:"-12px 0px 0px",threshold:0});
-    observer.observe(snapTrigger.current);
-    return ()=>{observer.disconnect();root.classList.remove(styles.scrollRoot);};
-  },[showSummary]);
+  useDiscoverPhotoSnap(stage, !showSummary && selection.hydrated && cards.length > 0, styles.scrollRoot);
   useEffect(()=>{
     const chip = categories.current?.querySelector<HTMLElement>(`[data-category="${scope}"]`);
     if (chip && categories.current) {
@@ -206,7 +194,6 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     </section>:<section aria-label="Biraj događaje" className={styles.deck}>
       <div className={styles.progress}><div aria-label={`Pregledani događaji: ${labels[scope]}`} aria-valuemax={queue.length} aria-valuemin={0} aria-valuenow={activeCount} className={styles.progressTrack} role="progressbar"><div style={{width:queue.length?`${activeCount/queue.length*100}%`:"0%"}}/></div><span>{queue.length?`${Math.min(activeCount+1,queue.length)} / ${queue.length}`:"0 / 0"}</span></div>
       <div aria-label="Prevuci karticu levo ili desno" className={styles.stage} data-discover-anchor="card" onPointerCancel={event=>pointerUp(event,true)} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={event=>pointerUp(event)} ref={stage} tabIndex={0}>
-        <span aria-hidden="true" className={styles.snapTrigger} ref={snapTrigger}/>
         {!selection.hydrated || navigating ? <div aria-label="Učitavanje događaja" className={styles.empty} role="status"><LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={26}/></div> : cards.length ? cards.map((event,index)=><SwipeCard event={event} key={event._id} layer={index} onDetails={()=>setDetail(event)}/>).reverse() : <div className={styles.empty}><CalendarDays aria-hidden="true" size={30}/><h2>{error?"Događaji nisu učitani.":"Nema događaja u ovoj kategoriji."}</h2><p>{error?"Pokušaj ponovo kasnije.":"Izaberi drugu kategoriju ili datum."}</p>{error?<button className="button-secondary" onClick={()=>router.refresh()} type="button">Pokušaj ponovo</button>:null}</div>}
       </div>
       <div className={styles.actions}><button aria-label={`Vrati poslednju odluku: ${scopeLabel}`} className={styles.undo} disabled={locked||!scopedChoices.length} onClick={undo} type="button"><Undo2 aria-hidden="true" size={16}/></button><button aria-label="Preskoči događaj" className={styles.reject} disabled={locked||!remaining.length} onClick={()=>void decide("skip")} type="button"><X aria-hidden="true" size={20}/></button><button aria-label="Sviđa mi se događaj" className={styles.like} disabled={locked||!remaining.length} onClick={()=>void decide("like")} type="button"><Heart aria-hidden="true" size={20}/></button></div>
@@ -219,13 +206,12 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
 
 function SwipeCard({event,layer,onDetails}:{event:MobileDiscoverEvent;layer:number;onDetails:()=>void}) {
   const [failed,setFailed] = useState(false);
-  const [aspectRatio,setAspectRatio] = useState(4/5);
   const category=getDiscoverCategory(event), tone=EVENT_CATEGORY_TONES[category].color;
   return <article aria-hidden={layer>0?true:undefined} aria-label={layer===0?`${event.title}, ${event.venue}, ${timeLabel(event)}`:undefined} className={styles.card} data-event-id={event._id} data-layer={layer} inert={layer>0?true:undefined} style={{"--discover-tone":tone} as CSSProperties}>
     <div className={styles.cardTop}><span className={cn("inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",styles.cardCategory)} data-event-category={category} style={{backgroundColor:EVENT_CATEGORY_TONES[category].backgroundColor,color:tone}}><span className="truncate">{EVENT_CATEGORY_TONES[category].label}</span></span><span>{dateLabel(event.date)}</span></div>
-    <button aria-haspopup="dialog" aria-label={`Otvori detalje događaja: ${event.title}`} className={styles.photo} data-discover-photo={event._id} onClick={click=>{if(click.detail===0)onDetails();}} style={{aspectRatio:aspectRatio/.88}} tabIndex={layer===0?0:-1} type="button">
+    <button aria-haspopup="dialog" aria-label={`Otvori detalje događaja: ${event.title}`} className={styles.photo} data-discover-photo={event._id} onClick={click=>{if(click.detail===0)onDetails();}} tabIndex={layer===0?0:-1} type="button">
       <span className={styles.posterFallback}>{failed?<span>Fotografija nije dostupna.</span>:<Sparkles aria-hidden="true" size={48}/>}</span>
-      {!failed?<Image alt={`Originalna fotografija: ${event.title}`} className={styles.poster} draggable={false} fill loading={layer===0?"eager":"lazy"} onError={()=>setFailed(true)} onLoad={loaded=>{const {naturalWidth,naturalHeight}=loaded.currentTarget;if(naturalWidth>0 && naturalHeight>0)setAspectRatio(naturalWidth/naturalHeight);}} priority={layer===0} sizes="(max-width: 502px) 100vw, 470px" src={imageUrl(event)} unoptimized/>:null}
+      {!failed?<Image alt={`Originalna fotografija: ${event.title}`} className={styles.poster} draggable={false} fill loading={layer===0?"eager":"lazy"} onError={()=>setFailed(true)} priority={layer===0} sizes="(max-width: 502px) 100vw, 470px" src={imageUrl(event)} unoptimized/>:null}
     </button>
     <span aria-hidden="true" className={cn(styles.stamp,styles.likeStamp)} data-stamp="like">Sviđa mi se</span><span aria-hidden="true" className={cn(styles.stamp,styles.skipStamp)} data-stamp="skip">Preskačem</span>
     <div className={styles.cardBottom}><p className={styles.time}>{timeLabel(event)}</p><h2>{event.title}</h2><p className={styles.venue}><MapPin aria-hidden="true" size={13}/>{event.venue}</p><div className={styles.tags}><EventPriceChip value={event.ticketPrice}/>{event.tags.map(tag=><span className="inline-flex max-w-full items-center rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground" data-event-tag={tag} key={tag}><span className="truncate">{tag}</span></span>)}</div>{layer===0?<button className={styles.details} onClick={onDetails} type="button"><Info aria-hidden="true" size={13}/>Detalji događaja<ExternalLink aria-hidden="true" size={12}/></button>:null}</div>

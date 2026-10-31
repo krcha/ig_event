@@ -109,6 +109,7 @@ const checks = [
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },
   { script: "qa:discover-swipe", timeoutMs: 60_000 },
+  { script: "qa:discover-layout-and-map-date", timeoutMs: 60_000 },
   { script: "qa:apify", timeoutMs: 120_000 },
   { script: "qa:apify-recent-media", timeoutMs: 60_000 },
   { script: "qa:instaloader", timeoutMs: 60_000 },

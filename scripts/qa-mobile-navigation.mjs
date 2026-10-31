@@ -10,7 +10,7 @@ function load(path, imports) {
   return module.exports;
 }
 const nav=load("lib/navigation/mobile-navigation.ts",{});
-for(const [href,expected] of [["/","/?month=2026-10&day=2026-10-31"],["/discover","/discover?date=2026-10-31"],["/map","/map?date=2026-10-31"],["/saved","/saved?date=2026-10-31"]]) {
+for(const [href,expected] of [["/","/?month=2026-10&day=2026-10-31"],["/discover","/discover?date=2026-10-31"],["/map","/map"],["/saved","/saved?date=2026-10-31"]]) {
   assert.equal(nav.getMobileNavigationHref(href,"2026-10-31"),expected);
   assert.equal(nav.getMobileNavigationHref(href,null),href);
 }

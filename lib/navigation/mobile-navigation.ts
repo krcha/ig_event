@@ -1,7 +1,9 @@
 export function getMobileNavigationHref(href: string, date: string | null): string {
+  // Enter Map on today's events; its own date picker still supports other days.
+  if (href === "/map") return "/map";
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return href;
   if (href === "/") return `/?month=${date.slice(0, 7)}&day=${date}`;
-  if (["/discover", "/map", "/saved"].includes(href)) return `${href}?date=${date}`;
+  if (["/discover", "/saved"].includes(href)) return `${href}?date=${date}`;
   return href;
 }
 

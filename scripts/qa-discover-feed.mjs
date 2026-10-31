@@ -36,6 +36,7 @@ const discoverPageLoaderSource = read("lib/discover/feed-page.ts");
 const discoverPostsRouteSource = read("app/api/discover/posts/route.ts");
 const discoverErrorSource = read("app/(main)/discover/error.tsx");
 const discoverFeedSource = read("components/discover/discover-feed.tsx");
+const desktopStyles = read("components/discover/desktop-discover.module.css");
 const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
 const apifyPostAlignmentSource = read("lib/discover/apify-post-alignment.ts");
 const apifyPostsSource = read("lib/discover/apify-posts.ts");
@@ -134,7 +135,7 @@ assertIncludes(
 );
 assertIncludes(
   discoverPageLoaderSource,
-  "DISCOVER_PAGE_SIZE = 9",
+  "DISCOVER_PAGE_SIZE = 12",
   "Discover should load a small batch instead of hydrating a high-volume night at once.",
 );
 assertIncludes(
@@ -198,8 +199,8 @@ assertIncludes(
   "Discover batches should avoid stale browser and proxy caches.",
 );
 assertIncludes(
-  discoverFeedSource,
-  'contentVisibility: "auto"',
+  desktopStyles,
+  'content-visibility:auto',
   "Discover cards should skip off-screen rendering work.",
 );
 assertIncludes(
@@ -230,7 +231,7 @@ assertDoesNotInclude(
 
 assertIncludes(
   discoverFeedSource,
-  'data-discover-feed="instagram-scroll"',
+  'data-discover-feed="instagram-profile"',
   "Discover feed should expose a scroll-feed QA marker.",
 );
 assertIncludes(
@@ -245,8 +246,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  "lg:grid-cols-2 2xl:grid-cols-3",
-  "Discover desktop layout should show multiple columns while preserving the mobile single-column feed.",
+  "className={styles.grid}",
+  "Discover desktop layout uses the four-column profile grid.",
 );
 assertIncludes(
   discoverFeedSource,
@@ -255,7 +256,7 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  'paragraphProps={{ "data-discover-caption-source": "instagram" }}',
+  'data-discover-caption-source="instagram"',
   "Discover captions should identify exact Instagram caption rendering.",
 );
 assertIncludes(
@@ -290,13 +291,13 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  "ReadMoreText",
-  "Discover captions should use the shared two-line read-more component.",
+  "className={styles.caption}",
+  "Profile tiles retain exact source captions in a bounded hover preview.",
 );
 assertIncludes(
   discoverFeedSource,
-  'moreLabel="more"',
-  "Discover captions should expose an Instagram-style more affordance.",
+  'data-discover-hover-details="true"',
+  "Profile tiles expose their event details on hover and keyboard focus.",
 );
 assertIncludes(
   readMoreTextSource,
@@ -315,8 +316,8 @@ assertIncludes(
 );
 assertIncludes(
   discoverFeedSource,
-  "collapsedButtonClassName=\"bg-[#0d0f16] text-muted-foreground\"",
-  "Discover captions should give the inline more button the card background like Instagram.",
+  "styles.overlay",
+  "Profile tiles must include the legible image overlay.",
 );
 assertDoesNotInclude(
   discoverFeedSource,
@@ -532,4 +533,6 @@ assert.match(
   "Release gate should include Discover feed QA.",
 );
 
-console.log("QA passed: Discover feed uses exact Instagram captions, two-line read-more text, Apify images, scroll posts, and save actions.");
+assertIncludes(desktopStyles, "grid-template-columns:repeat(4,minmax(0,1fr))", "Desktop Discover must show four posters per row.");
+assertIncludes(desktopStyles, ".post:focus-within .overlay", "Keyboard focus must expose the same details as hover.");
+console.log("QA passed: Discover profile uses four-column posters, exact source captions, hover/focus details, first-party images, bounded batches, and save actions.");

@@ -8,7 +8,7 @@ import { loadPublicCalendarEventsWindow, type PublicEvent } from "@/lib/events/p
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import { projectMobileDiscoverEvent, type MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 
-export const DISCOVER_PAGE_SIZE = 9;
+export const DISCOVER_PAGE_SIZE = 12;
 
 function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
   const imageUrl = getDiscoverDisplayImageUrl(event, null);

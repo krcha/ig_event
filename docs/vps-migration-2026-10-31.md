@@ -205,3 +205,29 @@ Unified release verification on October 31:
   in flight, 19 individual failed receipts. The systemd service exited 0 and
   the next daily/weekly triggers remain scheduled. Individual source failures
   remain visible through the existing ingestion reporting.
+
+## Discover, map and authenticated Saved follow-up
+
+Authenticated Saved failed after a user had a stored reference because the
+repository called `paginate()` on both compatibility tables in one Convex
+execution. The production error was reproduced with an isolated synthetic
+Clerk account. Both reads now use the existing ownership/time indexes with
+bounded `take()` calls, a physical ceiling and a lookahead row. Logical dedupe,
+ordering, cutover controls and existing data are preserved. No schema migration
+was needed. This backend fix was pushed as `ba32a85` and deployed successfully.
+The regression test now enforces Convex's single-pagination restriction.
+
+Desktop Discover uses a four-column profile-style poster grid with hover and
+keyboard-focus details. Mobile keeps its swipe decisions but uses a large
+viewport-sized photo with overlaid metadata and a first-scroll photo anchor.
+The desktop batch size is 12. The ordinary map defaults to the current civil
+date in Europe/Belgrade; mobile navigation enters `/map` without carrying a
+previous calendar/Discover date. Explicit map dates and Open now retain their
+existing controls and semantics.
+
+The follow-up release gate passed 137 checks. The actual UserLibraryProvider
+was additionally driven through production Clerk-authenticated HTTPS with the
+synthetic account: guest saves made no private calls, additive import retained
+both account/device choices, a fresh read retained them, logout isolated the
+account library and a second login loaded the same stored choices. Private
+receipts contain the evidence; no customer account was impersonated.
