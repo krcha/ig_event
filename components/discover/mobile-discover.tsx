@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 import { useDiscoverSelections } from "./use-discover-selections";
 import { useDiscoverPhotoSnap } from "./use-discover-photo-snap";
+import { useDiscoverSwipeHint } from "./use-discover-swipe-hint";
 import styles from "./mobile-discover.module.css";
 
 type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:MobileDiscoverEvent[]; selectedDate:string; today:string};
@@ -77,6 +78,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     if (DISCOVER_SCOPES.includes(requested as DiscoverScope)) setScope(requested as DiscoverScope);
   },[]);
   useDiscoverPhotoSnap(stage, !showSummary && selection.hydrated && cards.length > 0, styles.scrollRoot);
+  useDiscoverSwipeHint(stage, !locked && !showSummary && !detail && cards.length > 0);
   useEffect(()=>{
     const chip = categories.current?.querySelector<HTMLElement>(`[data-category="${scope}"]`);
     if (chip && categories.current) {
@@ -196,7 +198,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
       <div aria-label="Prevuci karticu levo ili desno" className={styles.stage} data-discover-anchor="card" onPointerCancel={event=>pointerUp(event,true)} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={event=>pointerUp(event)} ref={stage} tabIndex={0}>
         {!selection.hydrated || navigating ? <div aria-label="Učitavanje događaja" className={styles.empty} role="status"><LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={26}/></div> : cards.length ? cards.map((event,index)=><SwipeCard event={event} key={event._id} layer={index} onDetails={()=>setDetail(event)}/>).reverse() : <div className={styles.empty}><CalendarDays aria-hidden="true" size={30}/><h2>{error?"Događaji nisu učitani.":"Nema događaja u ovoj kategoriji."}</h2><p>{error?"Pokušaj ponovo kasnije.":"Izaberi drugu kategoriju ili datum."}</p>{error?<button className="button-secondary" onClick={()=>router.refresh()} type="button">Pokušaj ponovo</button>:null}</div>}
       </div>
-      <div className={styles.actions}><button aria-label={`Vrati poslednju odluku: ${scopeLabel}`} className={styles.undo} disabled={locked||!scopedChoices.length} onClick={undo} type="button"><Undo2 aria-hidden="true" size={16}/></button><button aria-label="Preskoči događaj" className={styles.reject} disabled={locked||!remaining.length} onClick={()=>void decide("skip")} type="button"><X aria-hidden="true" size={20}/></button><button aria-label="Sviđa mi se događaj" className={styles.like} disabled={locked||!remaining.length} onClick={()=>void decide("like")} type="button"><Heart aria-hidden="true" size={20}/></button></div>
+      <div className={styles.actions}><button aria-label={`Vrati poslednju odluku: ${scopeLabel}`} className={styles.undo} disabled={locked||!scopedChoices.length} onClick={undo} type="button"><Undo2 aria-hidden="true" size={15}/></button><button aria-label="Preskoči događaj" className={styles.reject} disabled={locked||!remaining.length} onClick={()=>void decide("skip")} type="button"><X aria-hidden="true" size={18}/></button><button aria-label="Sviđa mi se događaj" className={styles.like} disabled={locked||!remaining.length} onClick={()=>void decide("like")} type="button"><Heart aria-hidden="true" size={18}/></button></div>
     </section>}
     <p aria-live="polite" className="sr-only" role="status">{announcement}</p>
     <dialog aria-labelledby="discover-reset-title" className={styles.dialog} ref={restartDialog}><div className={styles.dialogHead}><h2 id="discover-reset-title">Ponovo biraj · {labels[scope]}</h2><button aria-label="Odustani" onClick={()=>restartDialog.current?.close()} type="button"><X aria-hidden="true" size={18}/></button></div><p className={styles.dialogCopy}>{scope==="all"?"Ponovo biraš sve kategorije za ovaj dan.":`Ponovo biraš samo ${labels[scope]}. Odluke za ostale kategorije ostaju.`} Događaji koji su već sačuvani ostaju u Saved.</p><div className={styles.dialogActions}><button className="button-secondary" onClick={()=>restartDialog.current?.close()} type="button">Odustani</button><button className="button-primary" onClick={()=>{selection.restart(selectedDate,scope);setSummaryOpen(false);restartDialog.current?.close();}} type="button">Ponovo biraj</button></div></dialog>
@@ -214,7 +216,7 @@ function SwipeCard({event,layer,onDetails}:{event:MobileDiscoverEvent;layer:numb
       {!failed?<Image alt={`Originalna fotografija: ${event.title}`} className={styles.poster} draggable={false} fill loading={layer===0?"eager":"lazy"} onError={()=>setFailed(true)} priority={layer===0} sizes="(max-width: 502px) 100vw, 470px" src={imageUrl(event)} unoptimized/>:null}
     </button>
     <span aria-hidden="true" className={cn(styles.stamp,styles.likeStamp)} data-stamp="like">Sviđa mi se</span><span aria-hidden="true" className={cn(styles.stamp,styles.skipStamp)} data-stamp="skip">Preskačem</span>
-    <div className={styles.cardBottom}><p className={styles.time}>{timeLabel(event)}</p><h2>{event.title}</h2><p className={styles.venue}><MapPin aria-hidden="true" size={13}/>{event.venue}</p><div className={styles.tags}><EventPriceChip value={event.ticketPrice}/>{event.tags.map(tag=><span className="inline-flex max-w-full items-center rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground" data-event-tag={tag} key={tag}><span className="truncate">{tag}</span></span>)}</div>{layer===0?<button className={styles.details} onClick={onDetails} type="button"><Info aria-hidden="true" size={13}/>Detalji događaja<ExternalLink aria-hidden="true" size={12}/></button>:null}</div>
+    <div className={styles.cardBottom}><h2>{event.title}</h2><p className={styles.time}><CalendarDays aria-hidden="true" size={12}/>{timeLabel(event)}</p><p className={styles.venue}><MapPin aria-hidden="true" size={12}/>{event.venue}</p><div className={styles.tags}><EventPriceChip value={event.ticketPrice}/>{event.tags.map(tag=><span className="inline-flex max-w-full items-center rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium leading-4 text-muted-foreground" data-event-tag={tag} key={tag}><span className="truncate">{tag}</span></span>)}</div>{layer===0?<button aria-haspopup="dialog" aria-label={`Detalji događaja: ${event.title}`} className={styles.details} onClick={onDetails} type="button"><Info aria-hidden="true" size={22}/></button>:null}</div>
   </article>;
 }
 
