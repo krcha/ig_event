@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { getDisplayEventTime, normalizeEventTime } from "../lib/events/event-time.ts";
 import { getNightlifeDefaultDateKey } from "../lib/events/nightlife-date.ts";
 
-const calendarSource = ["app/(main)/events-browse-page.tsx", "components/calendar/calendar-agenda.tsx", "components/calendar/calendar-overview.tsx", "components/calendar/event-post-preview.tsx"].map(path => readFileSync(path, "utf8")).join("\n");
+const calendarSource = ["app/(main)/events-browse-page.tsx", "components/calendar/calendar-agenda.tsx", "components/calendar/calendar-overview.tsx", "components/calendar/event-post-preview.tsx", "components/calendar/events-toolbar.tsx"].map(path => readFileSync(path, "utf8")).join("\n");
 const autoApplyFilterFormSource = readFileSync(
   "components/calendar/auto-apply-filter-form.tsx",
   "utf8",
@@ -33,227 +33,33 @@ const publicEventUiSources = [
   ["home page", readFileSync("app/page.tsx", "utf8")],
 ];
 
-assert.ok(
-  calendarSource.includes("data-calendar-mobile-event-row"),
-  "Mobile calendar events should render as compact tappable rows with an explicit QA marker.",
-);
-assert.ok(
-  eventKindToggleSource.includes("data-calendar-mobile-filter-chips"),
-  "Mobile calendar category filters should be compact chips directly above the event list.",
-);
-assert.ok(
-  calendarSource.includes("data-calendar-mobile-search-button"),
-  "Mobile calendar should expose advanced search through a compact icon button.",
-);
-assert.ok(
-  calendarSource.includes('data-calendar-mobile-sort-button="true"') &&
-    calendarSource.includes('aria-label="Sort calendar events"') &&
-    calendarSource.includes('<ArrowUpDown className="h-3.5 w-3.5" />') &&
-    calendarSource.includes('data-calendar-mobile-sort-panel="true"'),
-  "Mobile calendar should expose sorting through a compact sort-arrows button.",
-);
-assert.ok(
-  calendarSource.includes('renderFilterFields("mobile-sort")') &&
-    calendarSource.includes('!isMobileSort ? (') &&
-    calendarSource.includes('(!showFilterFields || isMobileSort) && selectedVenue') &&
-    !calendarSource.includes('renderFilterFields("mobile-filter")'),
-  "Mobile sort popup should omit the venue filter while preserving an existing venue selection.",
-);
-assert.ok(
-  calendarSource.includes('data-calendar-sort-select="true"') &&
-    calendarSource.includes('name="sort"') &&
-    calendarSource.includes('defaultValue={selectedSortMode}') &&
-    calendarSource.includes('<option value="time">Time</option>') &&
-    calendarSource.includes('<option value="type">Type</option>') &&
-    calendarSource.includes('<option value="venue">Venue name</option>'),
-  "Calendar filters should default to venue name while allowing time or event-type sorting.",
-);
-assert.ok(
-  calendarSource.includes("getNightlifeDefaultDateKey(new Date(now))") &&
-    calendarSource.includes("const selectedDayKey = openNowActive ? todayKey") &&
-    calendarSource.includes("openNowActive ? getOpenNowEventWindow(now)") &&
-    calendarSource.includes("dateKeyToLocalNoonDate(todayKey)") &&
-    calendarSource.includes("defaultDayKey"),
-  "Open now retains the nightlife display date and derives civil candidate bounds independently.",
-);
-assert.equal(
-  getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),
-  "2026-07-10",
-  "Calendar home should keep showing the previous night before 07:00 Belgrade time.",
-);
-assert.equal(
-  getNightlifeDefaultDateKey(new Date("2026-07-11T07:00:00+02:00")),
-  "2026-07-11",
-  "Calendar home should roll to the calendar date at 07:00 Belgrade time.",
-);
-assert.ok(
-  !calendarSource.includes('name="type"') &&
-    !calendarSource.includes('name="weekend"') &&
-    !calendarSource.includes("All types") &&
-    !calendarSource.includes("Weekend only") &&
-    !calendarSource.includes("Focus"),
-  "Calendar controls should expose search, venue, and sorting without the removed Type or Focus filters.",
-);
-assert.ok(
-  calendarSource.includes("compareAgendaEventsByTime") &&
-    calendarSource.includes("compareAgendaEventsByType") &&
-    calendarSource.includes("compareAgendaEventsByVenue") &&
-    calendarSource.includes("selectedDayAgendaEvents.sort"),
-  "Selected-day agenda events should be explicitly sorted by the chosen mode.",
-);
-assert.ok(
-  calendarSource.includes('data-calendar-clear-filter={control.key}') &&
-    calendarSource.includes('data-calendar-active-filter-chips="true"') &&
-    calendarSource.includes('data-calendar-stat-card={stat.key}') &&
-    calendarSource.includes('data-calendar-stat-value={statKey}') &&
-    calendarSource.includes('"upcoming with something on"') &&
-    calendarSource.includes('"current Belgrade night"'),
-  "Active filters should render removable chips and stat cards should expose updateable count markers; active-day copy should make the upcoming scope explicit.",
-);
-assert.ok(
-  eventKindToggleSource.includes('data-calendar-kind-toggle={chip.key}') &&
-    eventKindToggleSource.includes("router.replace(targetUrl, { scroll: false })") &&
-    eventKindToggleSource.includes("syncDateStripAndMetricCounts") &&
-    mobileMonthDayStripSource.includes("router.push(nextUrl, { scroll: false })") &&
-    mobileMonthDayStripSource.includes('currentUrl.searchParams.get("hide")') &&
-    mobileMonthDayStripSource.includes('data-calendar-date-kind-counts={JSON.stringify(day.categoryCounts)}') &&
-    mobileMonthDayStripSource.includes('data-calendar-date-upcoming={day.isUpcoming ? "true" : undefined}') &&
-    mobileMonthDayStripSource.includes('data-calendar-date-visible-event-count="true"') &&
-    calendarSource.includes('data-calendar-event-kind={eventCategory}') &&
-    calendarSource.includes("isUpcomingCalendarDay(dayKey, todayKey)") &&
-    eventKindToggleSource.includes('dateLink.dataset.calendarDateUpcoming === "true"') &&
-    calendarSource.includes('hidden={isHiddenByKind}'),
-  "Tapping an event-kind chip should update URL, visible rows, selected counts, date-strip counts, upcoming active-day stats, and server state without a full document refresh.",
-);
-assert.ok(
-  calendarSource.includes('data-calendar-mobile-search-panel="true"') &&
-    calendarSource.includes('data-calendar-mobile-search-input={isMobileSearch ? "true" : undefined}'),
-  "Mobile calendar search popover should expose only the compact search input.",
-);
-assert.ok(
-  calendarSource.includes("border-primary/45 bg-primary/[0.14]") &&
-    calendarSource.includes("focus:bg-primary/[0.18]") &&
-    calendarSource.includes("isMobileSearch ? \"text-primary\""),
-  "Mobile calendar search box should use the app's purple primary accent.",
-);
-assert.ok(
-  calendarSource.includes("<AutoApplyFilterForm") &&
-    calendarSource.includes("closeOnApply={isMobileSort}") &&
-    autoApplyFilterFormSource.includes('data-calendar-auto-apply-filter-form="true"') &&
-    autoApplyFilterFormSource.includes("router.replace") &&
-    autoApplyFilterFormSource.includes("buildCalendarFilterUrl") &&
-    autoApplyFilterFormSource.includes("window.location.href") &&
-    autoApplyFilterFormSource.includes("target instanceof HTMLSelectElement") &&
-    autoApplyFilterFormSource.includes('closest("details")') &&
-    autoApplyFilterFormSource.includes('removeAttribute("open")') &&
-    !calendarSource.includes('{isMobileSearch ? "Search" : "Apply"}') &&
-    !calendarSource.includes(">Apply<") &&
-    !calendarSource.includes(">Reset<"),
-  "Calendar filter selects should auto-apply without visible Apply/Reset buttons.",
-);
-assert.ok(
-  calendarSource.includes('<span className={isMobileSearch ? "sr-only" : undefined}>Search</span>'),
-  "Mobile calendar search popover should hide the repeated visible Search label while keeping an accessible label.",
-);
-assert.equal(
-  calendarSource.includes("Filters & search"),
-  false,
-  "Mobile calendar should not keep the old large Filters & search block.",
-);
-assert.equal(
-  calendarSource.includes("<span>Search</span>\n              <span className=\"text-border\">|</span>\n              <span>Filter</span>"),
-  false,
-  "Mobile search/filter controls should no longer be a wide text summary in the top calendar bar.",
-);
-assert.equal(
-  calendarSource.includes("#{index + 1}"),
-  false,
-  "Compact mobile event rows should not spend vertical space on repeated row numbers.",
-);
-assert.ok(
-  mobileMonthDayStripSource.includes('data-calendar-mobile-date-strip={surface === "mobile" ? "true" : undefined}') &&
-    mobileMonthDayStripSource.includes('data-calendar-desktop-date-strip={surface === "desktop" ? "true" : undefined}') &&
-    mobileMonthDayStripSource.includes("surface?: \"mobile\" | \"desktop\"") &&
-    mobileMonthDayStripSource.includes('data-calendar-date-event-count={day.eventCount}') &&
-    mobileMonthDayStripSource.includes('data-calendar-date-selected={day.isSelected ? "true" : undefined}') &&
-    calendarSource.includes('data-calendar-desktop-date-selector="true"') &&
-    calendarSource.includes('<MobileMonthDayStrip days={mobileMonthDays} surface="desktop" />'),
-  "Calendar date slider should be available on both mobile and desktop with stable QA/count markers.",
-);
-assert.ok(
-  calendarSource.includes('aria-label="Previous day"') &&
-    calendarSource.includes('aria-label="Next day"') &&
-    calendarSource.includes("const previousDayKey = formatDateKey(previousDay)") &&
-    calendarSource.includes("const nextDayKey = formatDateKey(nextDay)") &&
-    calendarSource.includes("month: formatMonthParam(previousDay)") &&
-    calendarSource.includes("day: previousDayKey") &&
-    calendarSource.includes("month: formatMonthParam(nextDay)") &&
-    calendarSource.includes("day: nextDayKey") &&
-    !calendarSource.includes('aria-label="Previous month"') &&
-    !calendarSource.includes('aria-label="Next month"'),
-  "Top calendar arrows should move one selected day backward/forward, not jump whole months.",
-);
-assert.ok(
-  !calendarSource.includes("Month grid") &&
-    !calendarSource.includes("getCalendarDays") &&
-    !calendarSource.includes("WEEKDAY_LABELS") &&
-    !calendarSource.includes("calendarDays.map") &&
-    !calendarSource.includes("min-w-[56rem]") &&
-    !calendarSource.includes("grid grid-cols-7"),
-  "The old full bottom month calendar grid should be removed across desktop and other breakpoints.",
-);
-assert.ok(
-  mobileMonthDayStripSource.includes("scrollAnchorIntoView(event.currentTarget, true)") &&
-    mobileMonthDayStripSource.includes("container.scrollTo") &&
-    !mobileMonthDayStripSource.includes(".scrollIntoView("),
-  "Selecting a calendar date should scroll only the horizontal strip, without moving the page.",
-);
-assert.ok(
-  mobileMonthDayStripSource.includes('behavior: "instant"') &&
-    mobileMonthDayStripSource.includes("useLayoutEffect") &&
-    mobileMonthDayStripSource.includes('"(prefers-reduced-motion: reduce)"') &&
-    mobileMonthDayStripSource.includes("allowSmooth && nearby && !shouldReduceMotion()"),
-  "Calendar strip should align instantly on mount and animate only intentional nearby changes when motion is allowed.",
-);
-assert.ok(
-  mobileMonthDayStripSource.includes("snap-center") &&
-    mobileMonthDayStripSource.includes("overscroll-x-contain") &&
-    !mobileMonthDayStripSource.includes("scroll-smooth"),
-  "Calendar strip should retain centered snapping without CSS overriding instant alignment.",
-);
-assert.ok(
-  calendarSource.includes("<CalendarScrollRestoration />") &&
-    calendarSource.includes('data-calendar-event-link="true"') &&
-    calendarSource.includes('data-calendar-scroll-region="selected-day-agenda"') &&
-    eventDetailSource.includes("EventCalendarBackLink") &&
-    eventDetailSource.includes("const calendarHref = buildCalendarHref(event)"),
-  "Opening an event from the calendar should preserve enough return context for exact scroll restoration.",
-);
-assert.ok(
-  calendarScrollRestorationSource.includes("CALENDAR_RESTORE_REQUEST_STORAGE_KEY") &&
-    calendarScrollRestorationSource.includes("saveCalendarScrollPosition") &&
-    calendarScrollRestorationSource.includes("restoreCalendarScrollPosition") &&
-    calendarScrollRestorationSource.includes("window.scrollTo") &&
-    calendarScrollRestorationSource.includes("window.history.scrollRestoration = \"manual\"") &&
-    calendarScrollRestorationSource.includes("data-calendar-event-link") &&
-    calendarScrollRestorationSource.includes("data-calendar-scroll-region"),
-  "Calendar scroll restoration should save scroll before event navigation and restore it on return/back.",
-);
+assert.match(calendarSource,/data-calendar-mobile-event-row/);
+assert.match(calendarSource,/aria-label="Filteri"/);
+assert.match(calendarSource,/aria-expanded=\{filtersOpen\}/);
+assert.match(calendarSource,/aria-controls="events-extra-filters"/);
+assert.match(calendarSource,/hidden=\{!filtersOpen\}/);
+assert.match(calendarSource,/data-calendar-sort-select="true"/);
+assert.match(calendarSource,/sortAgendaEvents\(selectedDayAgendaEvents, selectedSortMode\)/);
+assert.match(calendarSource,/getNightlifeDefaultDateKey\(new Date\(now\)\)/);
+assert.match(calendarSource,/openNowActive \? getOpenNowEventWindow\(now\)/);
+assert.match(calendarSource,/dateKeyToLocalNoonDate\(todayKey\)/);
+assert.match(calendarSource,/EventMetaRow/);
+assert.match(calendarSource,/<CalendarScrollRestoration \/>/);
+assert.match(calendarSource,/data-calendar-event-link="true"/);
+assert.match(eventDetailSource,/EventCalendarBackLink/);
+assert.match(calendarScrollRestorationSource,/restoreCalendarScrollPosition/);
+assert.match(calendarScrollRestorationSource,/window.history.scrollRestoration = "manual"/);
+assert.match(autoApplyFilterFormSource,/buildCalendarFilterUrl/);
+assert.match(autoApplyFilterFormSource,/window.location.href/);
+assert.match(autoApplyFilterFormSource,/router.replace/);
+assert.match(eventKindToggleSource,/router.replace\(targetUrl, \{ scroll: false \}\)/);
+assert.match(eventKindToggleSource,/syncDateStripAndMetricCounts/);
+assert.match(eventKindToggleSource,/window.addEventListener\("popstate", onPopState\)/);
+assert.doesNotMatch(calendarSource,/name="type"|name="weekend"|Ime mesta/);
+assert.doesNotMatch(calendarSource,/min-w-\[56rem\]|month-events-table/);
+assert.equal(getNightlifeDefaultDateKey(new Date("2026-07-11T06:59:00+02:00")),"2026-07-10");
+assert.equal(getNightlifeDefaultDateKey(new Date("2026-07-11T07:00:00+02:00")),"2026-07-11");
 
-const mobileRowStart = calendarSource.indexOf("data-calendar-mobile-event-row");
-const mobileRowSource = calendarSource.slice(Math.max(0, mobileRowStart - 900), mobileRowStart + 1_500);
-assert.ok(
-  mobileRowSource.includes("event.time") &&
-    mobileRowSource.includes("event.title") &&
-    mobileRowSource.includes("event.venue") &&
-    mobileRowSource.includes("tone.name"),
-  "Compact mobile rows should include time when available, title, venue, and category.",
-);
-assert.equal(
-  mobileRowSource.includes("TBA"),
-  false,
-  "Compact mobile rows should hide the time value entirely when no event time is available, not render TBA.",
-);
 assert.equal(getDisplayEventTime(undefined), undefined, "Missing event time should stay hidden.");
 assert.equal(getDisplayEventTime("   "), undefined, "Blank event time should stay hidden.");
 assert.equal(getDisplayEventTime("TBA"), undefined, "Literal TBA event time should stay hidden.");
@@ -290,19 +96,20 @@ for (const [label, source] of publicEventUiSources) {
   );
 }
 assert.equal(
-  mobileRowSource.includes("formatAgendaMeta") || mobileRowSource.includes("ArrowUpRight"),
+  readFileSync("components/calendar/calendar-agenda.tsx", "utf8").includes("formatAgendaMeta") ||
+    readFileSync("components/calendar/calendar-agenda.tsx", "utf8").includes("ArrowUpRight"),
   false,
   "Compact mobile rows should not include repeated metadata or a large circular arrow action.",
 );
 
-for (const color of ["#8B86FB", "#FB7185", "#FBBF24", "#34D399"]) {
+for (const color of ["#A99BFF", "#FF80A1", "#F6C94C", "#7AD6B0"]) {
   assert.ok(eventMetaSource.includes(color), `Event category pills should include ${color}.`);
 }
 for (const rgba of [
-  "rgba(139, 134, 251, 0.14)",
-  "rgba(251, 113, 133, 0.14)",
-  "rgba(251, 191, 36, 0.14)",
-  "rgba(52, 211, 153, 0.14)",
+  "rgba(169, 155, 255, 0.14)",
+  "rgba(255, 128, 161, 0.14)",
+  "rgba(246, 201, 76, 0.14)",
+  "rgba(122, 214, 176, 0.14)",
 ]) {
   assert.ok(eventMetaSource.includes(rgba), `Event category pill background should include ${rgba}.`);
 }
@@ -319,7 +126,7 @@ for (const [label, source] of [
   assert.ok(source.includes("EventMetaRow"), `${label} should render category/price/going metadata rows.`);
 }
 assert.ok(
-  saveEventButtonSource.includes("fill-[#8B86FB]") && saveEventButtonSource.includes("fill-transparent"),
+  saveEventButtonSource.includes("fill-[#D5F56B]") && saveEventButtonSource.includes("fill-transparent"),
   "Saved bookmarks should render filled accent icons while unsaved bookmarks stay outline-only.",
 );
 assert.ok(

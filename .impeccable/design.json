@@ -1,0 +1,397 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-31T17:16:12.864Z",
+  "title": "Design System: Event Zeka",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "displayName": "Lime action",
+        "role": "primary",
+        "tonalRamp": [
+          "oklch(15% 0.0568 120.72)",
+          "oklch(26% 0.1062 120.72)",
+          "oklch(37% 0.1441 120.72)",
+          "oklch(48% 0.1645 120.72)",
+          "oklch(59% 0.1645 120.72)",
+          "oklch(70% 0.1441 120.72)",
+          "oklch(82% 0.1062 120.72)",
+          "oklch(95% 0.0568 120.72)"
+        ]
+      },
+      "primary-hover": {
+        "displayName": "Lime hover",
+        "role": "primary",
+        "tonalRamp": [
+          "oklch(15% 0.0594 121.16)",
+          "oklch(26% 0.1111 121.16)",
+          "oklch(37% 0.1506 121.16)",
+          "oklch(48% 0.1720 121.16)",
+          "oklch(59% 0.1720 121.16)",
+          "oklch(70% 0.1506 121.16)",
+          "oklch(82% 0.1111 121.16)",
+          "oklch(95% 0.0594 121.16)"
+        ]
+      },
+      "detail": {
+        "displayName": "Lavender detail",
+        "role": "secondary",
+        "tonalRamp": [
+          "oklch(15% 0.0483 288.87)",
+          "oklch(26% 0.0903 288.87)",
+          "oklch(37% 0.1225 288.87)",
+          "oklch(48% 0.1399 288.87)",
+          "oklch(59% 0.1399 288.87)",
+          "oklch(70% 0.1225 288.87)",
+          "oklch(82% 0.0903 288.87)",
+          "oklch(95% 0.0483 288.87)"
+        ]
+      },
+      "background": {
+        "displayName": "Dark canvas",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0079 268.76)",
+          "oklch(26% 0.0148 268.76)",
+          "oklch(37% 0.0200 268.76)",
+          "oklch(48% 0.0229 268.76)",
+          "oklch(59% 0.0229 268.76)",
+          "oklch(70% 0.0200 268.76)",
+          "oklch(82% 0.0148 268.76)",
+          "oklch(95% 0.0079 268.76)"
+        ]
+      },
+      "card": {
+        "displayName": "Card and control surface",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0115 266.80)",
+          "oklch(26% 0.0216 266.80)",
+          "oklch(37% 0.0292 266.80)",
+          "oklch(48% 0.0334 266.80)",
+          "oklch(59% 0.0334 266.80)",
+          "oklch(70% 0.0292 266.80)",
+          "oklch(82% 0.0216 266.80)",
+          "oklch(95% 0.0115 266.80)"
+        ]
+      },
+      "raised": {
+        "displayName": "Raised focus surface",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0143 266.81)",
+          "oklch(26% 0.0268 266.81)",
+          "oklch(37% 0.0363 266.81)",
+          "oklch(48% 0.0414 266.81)",
+          "oklch(59% 0.0414 266.81)",
+          "oklch(70% 0.0363 266.81)",
+          "oklch(82% 0.0268 266.81)",
+          "oklch(95% 0.0143 266.81)"
+        ]
+      },
+      "foreground": {
+        "displayName": "Primary text",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0032 93.57)",
+          "oklch(26% 0.0061 93.57)",
+          "oklch(37% 0.0082 93.57)",
+          "oklch(48% 0.0094 93.57)",
+          "oklch(59% 0.0094 93.57)",
+          "oklch(70% 0.0082 93.57)",
+          "oklch(82% 0.0061 93.57)",
+          "oklch(95% 0.0032 93.57)"
+        ]
+      },
+      "muted-foreground": {
+        "displayName": "Supporting text",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0093 266.55)",
+          "oklch(26% 0.0174 266.55)",
+          "oklch(37% 0.0235 266.55)",
+          "oklch(48% 0.0269 266.55)",
+          "oklch(59% 0.0269 266.55)",
+          "oklch(70% 0.0235 266.55)",
+          "oklch(82% 0.0174 266.55)",
+          "oklch(95% 0.0093 266.55)"
+        ]
+      },
+      "border": {
+        "displayName": "Decorative border",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0162 265.08)",
+          "oklch(26% 0.0303 265.08)",
+          "oklch(37% 0.0411 265.08)",
+          "oklch(48% 0.0469 265.08)",
+          "oklch(59% 0.0469 265.08)",
+          "oklch(70% 0.0411 265.08)",
+          "oklch(82% 0.0303 265.08)",
+          "oklch(95% 0.0162 265.08)"
+        ]
+      },
+      "input": {
+        "displayName": "Interactive boundary",
+        "role": "neutral",
+        "tonalRamp": [
+          "oklch(15% 0.0183 262.90)",
+          "oklch(26% 0.0341 262.90)",
+          "oklch(37% 0.0463 262.90)",
+          "oklch(48% 0.0529 262.90)",
+          "oklch(59% 0.0529 262.90)",
+          "oklch(70% 0.0463 262.90)",
+          "oklch(82% 0.0341 262.90)",
+          "oklch(95% 0.0183 262.90)"
+        ]
+      },
+      "category-club": {
+        "displayName": "Club category",
+        "role": "semantic",
+        "tonalRamp": [
+          "oklch(15% 0.0483 288.87)",
+          "oklch(26% 0.0903 288.87)",
+          "oklch(37% 0.1225 288.87)",
+          "oklch(48% 0.1399 288.87)",
+          "oklch(59% 0.1399 288.87)",
+          "oklch(70% 0.1225 288.87)",
+          "oklch(82% 0.0903 288.87)",
+          "oklch(95% 0.0483 288.87)"
+        ]
+      },
+      "category-live": {
+        "displayName": "Live music category",
+        "role": "semantic",
+        "tonalRamp": [
+          "oklch(15% 0.0534 5.15)",
+          "oklch(26% 0.0998 5.15)",
+          "oklch(37% 0.1354 5.15)",
+          "oklch(48% 0.1546 5.15)",
+          "oklch(59% 0.1546 5.15)",
+          "oklch(70% 0.1354 5.15)",
+          "oklch(82% 0.0998 5.15)",
+          "oklch(95% 0.0534 5.15)"
+        ]
+      },
+      "category-culture": {
+        "displayName": "Culture category",
+        "role": "semantic",
+        "tonalRamp": [
+          "oklch(15% 0.0501 88.70)",
+          "oklch(26% 0.0936 88.70)",
+          "oklch(37% 0.1269 88.70)",
+          "oklch(48% 0.1450 88.70)",
+          "oklch(59% 0.1450 88.70)",
+          "oklch(70% 0.1269 88.70)",
+          "oklch(82% 0.0936 88.70)",
+          "oklch(95% 0.0501 88.70)"
+        ]
+      },
+      "category-event": {
+        "displayName": "Other events category",
+        "role": "semantic",
+        "tonalRamp": [
+          "oklch(15% 0.0356 165.36)",
+          "oklch(26% 0.0665 165.36)",
+          "oklch(37% 0.0901 165.36)",
+          "oklch(48% 0.1029 165.36)",
+          "oklch(59% 0.1029 165.36)",
+          "oklch(70% 0.0901 165.36)",
+          "oklch(82% 0.0665 165.36)",
+          "oklch(95% 0.0356 165.36)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Events heading",
+        "purpose": "Compact panorama heading."
+      },
+      "section": {
+        "displayName": "Time-band heading",
+        "purpose": "Scan result groups."
+      },
+      "event-title": {
+        "displayName": "Event title",
+        "purpose": "Scannable event rows."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Shared public text and search."
+      },
+      "caption": {
+        "displayName": "Original caption",
+        "purpose": "Source context with long-text wrapping."
+      },
+      "label": {
+        "displayName": "Navigation label",
+        "purpose": "Compact public links."
+      }
+    },
+    "shadows": [
+      {
+        "name": "month-dialog",
+        "value": "0 24px 90px rgb(0 0 0 / .6)",
+        "purpose": "Existing modal calendar depth."
+      },
+      {
+        "name": "map-pin",
+        "value": "0 4px 14px #0008",
+        "purpose": "Existing map marker separation."
+      },
+      {
+        "name": "map-control",
+        "value": "0 6px 20px #0006",
+        "purpose": "Existing local map controls."
+      },
+      {
+        "name": "heading",
+        "value": "0 2px 12px var(--background)",
+        "purpose": "Events heading over the supplied panorama."
+      }
+    ],
+    "motion": [
+      {
+        "name": "search-debounce",
+        "value": "300ms",
+        "purpose": "Events auto-applied text query."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion: reduce",
+        "purpose": "Preserve existing motion reduction across calendar, post, Discover, and map interactions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "350px"
+      },
+      {
+        "name": "desktop-navigation",
+        "value": "768px"
+      },
+      {
+        "name": "compact-nav-labels",
+        "value": "900px"
+      },
+      {
+        "name": "events-overview-rail",
+        "value": "1100px"
+      }
+    ],
+    "evidence": {
+      "scope": "Implemented production application; distinct from the earlier standalone HTML proposal.",
+      "tokens": "app/globals.css",
+      "layout": "app/layout.tsx",
+      "components": [
+        "components/calendar/events-toolbar.tsx",
+        "components/calendar/calendar-agenda.tsx",
+        "components/calendar/calendar-event-preview.tsx",
+        "components/calendar/event-post-preview.tsx"
+      ],
+      "styles": [
+        "components/calendar/mobile-events-home.module.css",
+        "components/calendar/mobile-week-calendar.module.css"
+      ],
+      "reviewCaptures": ".impeccable/review/events-{320,390,768,1440}-{closed,open}.jpg; discover/map-{390,1440}.jpg",
+      "assets": "Self-hosted font files and licenses in public/fonts/; supplied panorama in public/images/.",
+      "tonalRamps": "Synthesized eight-step OKLCH previews only; DESIGN.md and application CSS own actual tokens.",
+      "samples": "Self-contained documentation samples, without routing, persistence, or ingestion behavior.",
+      "developmentIndicator": "The Next.js badge visible in development captures is not product UI."
+    }
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Shared lime primary action.",
+      "html": "<button class=\"ds-primary\">Save event</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;border:0;border-radius:12px;background:var(--primary,#D5F56B);color:var(--primary-foreground,#10141F);font-size:14px;font-weight:600;line-height:20px;cursor:pointer;transition:background-color .15s;font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-primary:hover{background:#C9EB58}.ds-primary:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Existing shared pill action, distinct from Events form controls.",
+      "html": "<button class=\"ds-secondary\">View event</button>",
+      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;border:1px solid color-mix(in srgb,var(--border,#34405A) 80%,transparent);border-radius:9999px;background:rgb(255 255 255 / .035);color:var(--foreground,#F4F2EB);font-size:14px;font-weight:600;line-height:20px;cursor:pointer;transition:background-color .15s,border-color .15s;font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-secondary:hover{border-color:color-mix(in srgb,var(--primary,#D5F56B) 40%,transparent);background:rgb(255 255 255 / .065)}.ds-secondary:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}"
+    },
+    {
+      "name": "Events search",
+      "kind": "input",
+      "refersTo": "events-search",
+      "description": "Preserved title, artist, and venue-alias search; 48px desktop and 46px mobile. Placeholder wording remains unchanged.",
+      "html": "<label class=\"ds-search\"><svg width=\"19\" height=\"19\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" aria-hidden=\"true\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\"/><path d=\"m16 16 4.5 4.5\"/></svg><input type=\"search\" aria-label=\"Search events\" placeholder=\"Doga\u0111aj, mesto ili \u017eanr\"></label>",
+      "css": ".ds-search{display:flex;align-items:center;gap:10px;height:48px;padding:0 13px;border:1px solid var(--input,#667797);border-radius:12px;background:var(--card,#1B2233);color:var(--muted-foreground,#A8B0C2);font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-search input{min-width:0;width:100%;height:46px;padding:0;border:0;background:none;outline:none;color:var(--foreground,#F4F2EB);font:inherit;font-size:16px;line-height:24px;caret-color:var(--primary,#D5F56B)}.ds-search input::placeholder{color:var(--muted-foreground,#A8B0C2);opacity:1}.ds-search:hover{background:var(--card,#1B2233)}.ds-search:focus-within{outline:2px solid var(--detail,#A99BFF);outline-offset:2px}.ds-search input:focus-visible{outline:none}@media(max-width:767px){.ds-search{height:46px;padding:0 11px;gap:9px;border-radius:11px}.ds-search input{height:44px}}"
+    },
+    {
+      "name": "Events expanded controls",
+      "kind": "custom",
+      "description": "Exactly two equal-width controls. Venue names remain in the main search.",
+      "html": "<section class=\"ds-filters\"><button class=\"ds-filter-trigger\" aria-expanded=\"true\" aria-controls=\"ds-extra\" aria-label=\"Filteri\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" aria-hidden=\"true\"><path d=\"M4 7h16M4 17h16M8 4v6m8 4v6\"/></svg></button><div class=\"ds-extra\" id=\"ds-extra\"><button aria-pressed=\"false\">Otvoreno sada</button><select aria-label=\"Sortiranje\"><option>Po vremenu</option><option>Kasnije prvo</option><option>Po nazivu</option><option>Po imenu mesta</option></select></div></section>",
+      "css": ".ds-filters{font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-filter-trigger{display:grid;place-items:center;width:48px;height:48px;border:1px solid var(--detail,#A99BFF);border-radius:12px;background:color-mix(in srgb,var(--detail,#A99BFF) 7%,var(--card,#1B2233));color:var(--detail,#A99BFF);cursor:pointer}.ds-extra{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:10px}.ds-extra button,.ds-extra select{width:100%;min-width:0;height:48px;padding:0 14px;border:1px solid var(--input,#667797);border-radius:12px;background:var(--card,#1B2233);color:var(--foreground,#F4F2EB);font:inherit;font-size:14px;font-weight:500;text-align:left}.ds-extra select{padding-right:30px}.ds-filter-trigger:hover{color:var(--detail,#A99BFF)}.ds-filters button:focus-visible,.ds-filters select:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}.ds-extra button[aria-pressed=true]{background:var(--primary,#D5F56B);border-color:var(--primary,#D5F56B);color:var(--primary-foreground,#10141F)}@media(max-width:767px){.ds-filter-trigger{width:46px;height:46px;border-radius:11px}.ds-extra{gap:9px;margin-top:9px}.ds-extra button,.ds-extra select{height:46px;font-size:13px;border-radius:11px;padding-left:10px}}"
+    },
+    {
+      "name": "Date strip button",
+      "kind": "button",
+      "refersTo": "selected-day",
+      "description": "Selected date on the overlapping Events week strip.",
+      "html": "<div class=\"ds-week\"><button class=\"ds-day\" aria-current=\"date\"><span>Danas</span><strong>31</strong></button><button class=\"ds-day\"><span>Sutra</span><strong>1</strong></button></div>",
+      "css": ".ds-week{display:flex;gap:7px;background:var(--background,#10141F);padding:4px;font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-day{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-width:44px;height:58px;padding:7px 4px;border:0;border-radius:12px;background:transparent;cursor:pointer}.ds-day span{font-size:12px;line-height:16px;font-weight:500;color:var(--muted-foreground,#A8B0C2)}.ds-day strong{font-size:23px;line-height:26px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--foreground,#F4F2EB)}.ds-day[aria-current=date]{background:var(--primary,#D5F56B)}.ds-day[aria-current=date] span,.ds-day[aria-current=date] strong{color:var(--primary-foreground,#10141F)}.ds-day:hover{filter:brightness(.98)}.ds-day:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}@media(max-width:767px){.ds-day{height:54px;padding:4px}.ds-day span{font-size:11px;line-height:15px}.ds-day strong{font-size:22px;line-height:24px}}"
+    },
+    {
+      "name": "Desktop public navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Compact navigation links and active marker; mobile uses its separate bottom navigation.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Public pages\"><a href=\"#events\" aria-current=\"page\">Events</a><a href=\"#discover\">Discover</a><a href=\"#map\">Map</a><a href=\"#saved\">Saved</a></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;justify-content:center;gap:22px;min-height:50px;padding:4px 12px;border:1px solid var(--border,#34405A);border-radius:16px;background:var(--background,#10141F);font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-nav a{position:relative;display:flex;align-items:center;min-height:40px;padding:0 3px;color:var(--muted-foreground,#A8B0C2);font-size:13px;font-weight:500;text-decoration:none}.ds-nav a[aria-current=page],.ds-nav a:hover{color:var(--foreground,#F4F2EB)}.ds-nav a[aria-current=page]::after{content:'';position:absolute;bottom:-5px;left:0;right:0;height:3px;background:var(--primary,#D5F56B)}.ds-nav a:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}"
+    },
+    {
+      "name": "Events category tabs",
+      "kind": "chip",
+      "description": "Events-specific underlined category state over the shared category control.",
+      "html": "<div class=\"ds-tabs\" role=\"group\" aria-label=\"Category\"><button aria-pressed=\"true\">Sve</button><button aria-pressed=\"false\"><span></span>\u017durke</button><button aria-pressed=\"false\">U\u017eivo</button></div>",
+      "css": ".ds-tabs{display:flex;align-items:center;gap:28px;border-bottom:1px solid var(--border,#34405A);background:var(--background,#10141F);font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-tabs button{position:relative;display:inline-flex;align-items:center;gap:6px;min-height:49px;min-width:44px;padding:0 3px;border:0;border-radius:0;background:none;color:var(--muted-foreground,#A8B0C2);font:inherit;font-size:14px;font-weight:500;cursor:pointer}.ds-tabs button[aria-pressed=true]{color:var(--foreground,#F4F2EB);font-weight:700}.ds-tabs button[aria-pressed=true]::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--primary,#D5F56B)}.ds-tabs button span{height:6px;width:6px;border-radius:50%;background:var(--detail,#A99BFF)}.ds-tabs button:hover{opacity:.9}.ds-tabs button:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}@media(max-width:767px){.ds-tabs{justify-content:space-between;gap:5px}.ds-tabs button{min-height:47px;font-size:12px;padding:0 1px}}"
+    },
+    {
+      "name": "Events row",
+      "kind": "card",
+      "refersTo": "event-row",
+      "description": "Time, title, venue, category, independent Save, and expansion affordance. Static documentation sample.",
+      "html": "<article class=\"ds-row\"><div class=\"ds-time\">22:00<small>04:00</small></div><div class=\"ds-info\"><h3>Naziv doga\u0111aja</h3><a href=\"#venue\">Mesto u Beogradu</a><small><span aria-hidden=\"true\">\u25cf</span> \u017durke</small></div><button class=\"ds-save\" aria-label=\"Save event\" aria-pressed=\"false\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" aria-hidden=\"true\"><path d=\"M6 3h12v18l-6-4-6 4Z\"/></svg></button><button class=\"ds-expand\" aria-expanded=\"false\" aria-label=\"Open original post\">\u2304</button></article>",
+      "css": ".ds-row{display:flex;align-items:center;gap:14px;min-height:94px;padding:14px;border:1px solid var(--border,#34405A);border-radius:14px;background:var(--card,#1B2233);color:var(--foreground,#F4F2EB);font-family:var(--font-sans,'Space Grotesk','Event Zeka Cyrillic',sans-serif);}.ds-time{display:flex;flex:none;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:50px;width:58px;padding:7px 4px;border:1px solid var(--border,#34405A);border-radius:10px;background:var(--background,#10141F);font-size:15px;line-height:19px;font-weight:600;font-variant-numeric:tabular-nums}.ds-time small{font-size:12px;font-weight:500;color:var(--muted-foreground,#A8B0C2)}.ds-info{min-width:0;flex:1}.ds-info h3{margin:0;font-size:16px;line-height:1.3;font-weight:600;letter-spacing:-.02em;overflow-wrap:anywhere}.ds-info a{display:block;width:fit-content;margin-top:3px;color:var(--muted-foreground,#A8B0C2);font-size:14px;line-height:1.4;text-decoration:none}.ds-info small{display:block;margin-top:5px;color:var(--muted-foreground,#A8B0C2);font-size:11px}.ds-info small span{color:var(--detail,#A99BFF)}.ds-save{display:grid;place-items:center;flex:none;width:44px;height:44px;border:1px solid var(--input,#667797);border-radius:12px;background:transparent;color:var(--muted-foreground,#A8B0C2);cursor:pointer}.ds-expand{border:0;padding:0;background:none;color:var(--muted-foreground,#A8B0C2);cursor:pointer}.ds-row:focus-within{background:var(--raised,#242D43)}.ds-info a:hover{color:var(--detail,#A99BFF)}.ds-save:hover{color:var(--foreground,#F4F2EB)}.ds-expand:hover{color:var(--primary,#D5F56B)}.ds-row button:focus-visible,.ds-row a:focus-visible{outline:2px solid var(--detail,#A99BFF);outline-offset:3px;}.ds-save[aria-pressed=true]{color:var(--primary,#D5F56B)}@media(max-width:767px){.ds-row{gap:10px;min-height:104px;padding:12px}.ds-time{width:48px;font-size:13px;line-height:17px;padding:6px 2px}.ds-time small{font-size:11px}.ds-info h3{font-size:15px}.ds-info a{font-size:13px}}"
+    }
+  ],
+  "narrative": {
+    "overview": "The public interface uses the user's approved dark palette, Space Grotesk, and supplied Belgrade panorama. Events is compact and organized around choosing a date, narrowing the results, inspecting the original post, and saving an event. Lime marks selection and primary action; lavender supports detail and focus.\n\nDiscover keeps its established desktop poster gallery and mobile swipe workflow. Map keeps its existing controls, pins, pan, zoom, and venue rail. Their geometry and interactions remain authoritative while the shared theme and font extend across the public site. This records the implemented application; the earlier standalone HTML proposal is a separate artifact.",
+    "keyCharacteristics": [
+      "Compact navigation, heading, and date strip.",
+      "Dark tonal surfaces with distinct decorative and interactive boundaries.",
+      "Original event imagery and source context.",
+      "Established public browsing, post expansion, and save behavior."
+    ],
+    "rules": [
+      {
+        "name": "The Boundary Rule",
+        "body": "Keep `input` for Events control boundaries and `border` for decorative grouping; do not collapse the two roles.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do use the approved palette, self-hosted fonts, and supplied panorama.",
+      "Do preserve the compact Events dimensions and equal-width expanded controls.",
+      "Do sort the complete result set before virtualization, including venue-name sorting.",
+      "Do preserve original post context, time uncertainty, Save, and account synchronization.",
+      "Do preserve Discover and Map interactions when changing their theme."
+    ],
+    "donts": [
+      "Don't add the prototype's separate venue filter to the implemented Events toolbar.",
+      "Don't substitute `--accent` for the lime `--primary` token.",
+      "Don't equate venue hours or Open now with a confirmed event start.",
+      "Don't treat development indicators or review snapshot dates as product requirements.",
+      "Don't replace authentication, data, ingestion, or moderation behavior during visual work."
+    ]
+  }
+}

@@ -54,7 +54,7 @@ function uniqueScenes(scenes: readonly string[]): string[] {
 
 function ProfileLoadingCard() {
   return (
-    <section className="mx-auto w-full max-w-xl rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-5 sm:px-5">
+    <section className="mx-auto w-full max-w-xl rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-5 sm:px-5">
       <div className="animate-pulse space-y-4">
         <div className="mx-auto h-[60px] w-[60px] rounded-[18px] bg-white/[0.08]" />
         <div className="mx-auto h-6 w-44 rounded-full bg-white/[0.08]" />
@@ -85,7 +85,7 @@ function SignInPromptCard() {
           </div>
         </div>
 
-        <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] p-3 sm:p-4">
+        <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] p-3 sm:p-4">
           <div className="flex items-start gap-3">
             <span className="inline-flex h-11 w-11 flex-none items-center justify-center rounded-full bg-primary/[0.12] text-primary">
               <UserRound className="h-5 w-5" />
@@ -131,9 +131,9 @@ function ProfileAuthUnavailableCard() {
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 flex-1 rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-4">
+    <div className="min-w-0 flex-1 rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-4">
       <p
-        className="text-4xl font-bold leading-none tracking-[-0.06em] text-[#8B86FB] sm:text-[2.6rem]"
+        className="text-4xl font-bold leading-none tracking-[-0.06em] text-[#D5F56B] sm:text-[2.6rem]"
         style={{ fontFamily: '"Space Grotesk", var(--font-sans)' }}
       >
         {value}
@@ -255,7 +255,7 @@ export function YouProfilePanel() {
 
   return (
     <section className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-3 pb-5 sm:gap-4">
-      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-5 text-center sm:px-5">
+      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-5 text-center sm:px-5">
         {/* Clerk avatars may come from multiple identity-provider domains. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -267,7 +267,7 @@ export function YouProfilePanel() {
           {displayName}
         </h1>
         <p className="mx-auto mt-2 flex max-w-full items-center justify-center gap-2 truncate text-sm text-muted-foreground">
-          <Mail className="h-4 w-4 flex-none text-[#8B86FB]" />
+          <Mail className="h-4 w-4 flex-none text-[#D5F56B]" />
           <span className="min-w-0 truncate">{email}</span>
         </p>
       </div>
@@ -277,7 +277,7 @@ export function YouProfilePanel() {
         <StatTile label="Favourite places" value={favoritePlacesValue} />
       </div>
 
-      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-4 sm:px-5">
+      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-4 sm:px-5">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold tracking-[-0.02em] text-foreground">Your scenes</h2>
         </div>
@@ -291,8 +291,8 @@ export function YouProfilePanel() {
                 className={cn(
                   "inline-flex min-h-10 items-center rounded-full border px-3.5 text-sm font-semibold",
                   selected
-                    ? "border-[#8B86FB]/50 bg-[#8B86FB]/18 text-[#DAD8FF]"
-                    : "border-[rgba(255,255,255,0.07)] bg-white/[0.035] text-muted-foreground hover:border-[#8B86FB]/35 hover:text-foreground",
+                    ? "border-[#D5F56B]/50 bg-[#D5F56B]/18 text-[#DAD8FF]"
+                    : "border-[rgba(255,255,255,0.07)] bg-white/[0.035] text-muted-foreground hover:border-[#D5F56B]/35 hover:text-foreground",
                 )}
                 key={scene}
                 onClick={() => toggleScene(scene)}
@@ -303,7 +303,7 @@ export function YouProfilePanel() {
             );
           })}
           <button
-            className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-dashed border-[#8B86FB]/45 bg-[#8B86FB]/10 px-3.5 text-sm font-semibold text-[#BDBAFF] hover:bg-[#8B86FB]/16"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-dashed border-[#D5F56B]/45 bg-[#D5F56B]/10 px-3.5 text-sm font-semibold text-[#BDBAFF] hover:bg-[#D5F56B]/16"
             onClick={addScene}
             type="button"
           >
@@ -313,7 +313,7 @@ export function YouProfilePanel() {
         </div>
       </div>
 
-      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#13151D] px-4 py-4 sm:px-5">
+      <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-4 sm:px-5">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-foreground">Remind me before saved events</p>
@@ -325,7 +325,7 @@ export function YouProfilePanel() {
             className={cn(
               "relative h-8 w-14 flex-none rounded-full border p-1",
               remindersEnabled
-                ? "border-[#8B86FB]/60 bg-[#8B86FB]"
+                ? "border-[#D5F56B]/60 bg-[#D5F56B]"
                 : "border-[rgba(255,255,255,0.07)] bg-white/[0.08]",
             )}
             onClick={() => setRemindersEnabled((current) => !current)}
@@ -343,7 +343,7 @@ export function YouProfilePanel() {
       </div>
 
       <button
-        className="mt-auto inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[rgba(255,255,255,0.12)] bg-transparent px-4 text-sm font-semibold text-foreground hover:border-[#8B86FB]/55 hover:bg-[#8B86FB]/10 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-auto inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[rgba(255,255,255,0.12)] bg-transparent px-4 text-sm font-semibold text-foreground hover:border-[#D5F56B]/55 hover:bg-[#D5F56B]/10 disabled:cursor-not-allowed disabled:opacity-60"
         disabled={isSigningOut}
         onClick={() => {
           void signOut();

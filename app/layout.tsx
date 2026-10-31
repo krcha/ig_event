@@ -7,6 +7,7 @@ import { VisitorTracker } from "@/components/analytics/visitor-tracker";
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
 import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
+import { EventsUiProvider } from "@/components/calendar/events-ui-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -55,7 +56,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#050609",
+  themeColor: "#10141F",
 };
 
 const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -63,18 +64,18 @@ const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const clerkAppearance = {
   variables: {
     borderRadius: "1rem",
-    colorBackground: "#0B0D12",
+    colorBackground: "#1B2233",
     colorDanger: "#fb7185",
-    colorInputBackground: "#11141B",
-    colorInputText: "#F7F8F8",
-    colorPrimary: "#8B86FB",
-    colorText: "#F7F8F8",
-    colorTextSecondary: "#939AA7",
+    colorInputBackground: "#10141F",
+    colorInputText: "#F4F2EB",
+    colorPrimary: "#D5F56B",
+    colorText: "#F4F2EB",
+    colorTextSecondary: "#A8B0C2",
   },
   elements: {
-    cardBox: "bg-[#0B0D12] text-[#F7F8F8] shadow-[0_34px_90px_-58px_rgba(0,0,0,0.9)]",
-    footerActionLink: "text-[#8B86FB] hover:text-[#A6A2FF]",
-    formButtonPrimary: "bg-[#8B86FB] text-[#080A17] hover:bg-[#A6A2FF]",
+    cardBox: "bg-[#1B2233] text-[#F4F2EB] shadow-[0_34px_90px_-58px_rgba(0,0,0,0.9)]",
+    footerActionLink: "text-[#D5F56B] hover:text-[#C9EB58]",
+    formButtonPrimary: "bg-[#D5F56B] text-[#10141F] hover:bg-[#C9EB58]",
     modalBackdrop: "bg-black/70 backdrop-blur-sm",
   },
 };
@@ -95,12 +96,13 @@ function AppDocument({
       <Suspense fallback={null}>
         <AppToolbar />
       </Suspense>
-      {children}
+      <EventsUiProvider>{children}</EventsUiProvider>
     </div>
   );
 
   return (
     <html className="dark" lang="en-RS">
+      <head><link rel="preload" href="/fonts/space-grotesk-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" /><link rel="preload" href="/fonts/space-grotesk-700.woff2" as="font" type="font/woff2" crossOrigin="anonymous" /></head>
       <body className="min-h-screen bg-background text-foreground antialiased">
         {authEnabled ? (
           <AuthUserProvider>

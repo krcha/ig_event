@@ -2,13 +2,21 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/space-grotesk-400.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/space-grotesk-500.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/space-grotesk-600.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/space-grotesk-700.woff2") format("woff2"); }
+@font-face { font-family: "Event Zeka Cyrillic"; font-style: normal; font-weight: 100 900; font-display: swap; unicode-range: U+0400-04FF; src: url("/fonts/cyrillic-fallback.woff2") format("woff2"); }
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --color-detail: var(--detail);
+  --color-raised: var(--raised);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans:
-    "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    "Space Grotesk", "Event Zeka Cyrillic", sans-serif;
   --font-mono:
     "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
@@ -51,71 +59,73 @@
 
 :root {
   --radius: 0.78rem;
-  --background: #050609;
-  --foreground: #f7f8f8;
-  --card: #0b0d12;
-  --card-foreground: #f7f8f8;
-  --popover: #11141b;
-  --popover-foreground: #f7f8f8;
-  --primary: #8B86FB;
-  --primary-foreground: #080a17;
-  --secondary: #11141b;
-  --secondary-foreground: #f7f8f8;
-  --muted: #11141a;
-  --muted-foreground: #939aa7;
-  --accent: #171b2a;
-  --accent-foreground: #f7f8f8;
+  --detail: #A99BFF;
+  --raised: #242D43;
+  --background: #10141F;
+  --foreground: #F4F2EB;
+  --card: #1B2233;
+  --card-foreground: #F4F2EB;
+  --popover: #1B2233;
+  --popover-foreground: #F4F2EB;
+  --primary: #D5F56B;
+  --primary-foreground: #10141F;
+  --secondary: #1B2233;
+  --secondary-foreground: #F4F2EB;
+  --muted: #1B2233;
+  --muted-foreground: #A8B0C2;
+  --accent: #242D43;
+  --accent-foreground: #F4F2EB;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.12);
-  --ring: #8B86FB;
+  --border: #34405A;
+  --input: #667797;
+  --ring: #A99BFF;
   --chart-1: #8B86FB;
   --chart-2: #38bdf8;
   --chart-3: #f59e0b;
   --chart-4: #10b981;
   --chart-5: #f472b6;
-  --sidebar: #0f1011;
-  --sidebar-foreground: #f7f8f8;
-  --sidebar-primary: #8B86FB;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #191a1b;
-  --sidebar-accent-foreground: #f7f8f8;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #8B86FB;
+  --sidebar: #1B2233;
+  --sidebar-foreground: #F4F2EB;
+  --sidebar-primary: #D5F56B;
+  --sidebar-primary-foreground: #10141F;
+  --sidebar-accent: #242D43;
+  --sidebar-accent-foreground: #F4F2EB;
+  --sidebar-border: #34405A;
+  --sidebar-ring: #A99BFF;
 }
 
 .dark {
-  --background: #050609;
-  --foreground: #f7f8f8;
-  --card: #0b0d12;
-  --card-foreground: #f7f8f8;
-  --popover: #11141b;
-  --popover-foreground: #f7f8f8;
-  --primary: #8B86FB;
-  --primary-foreground: #080a17;
-  --secondary: #11141b;
-  --secondary-foreground: #f7f8f8;
-  --muted: #11141a;
-  --muted-foreground: #939aa7;
-  --accent: #171b2a;
-  --accent-foreground: #f7f8f8;
+  --background: #10141F;
+  --foreground: #F4F2EB;
+  --card: #1B2233;
+  --card-foreground: #F4F2EB;
+  --popover: #1B2233;
+  --popover-foreground: #F4F2EB;
+  --primary: #D5F56B;
+  --primary-foreground: #10141F;
+  --secondary: #1B2233;
+  --secondary-foreground: #F4F2EB;
+  --muted: #1B2233;
+  --muted-foreground: #A8B0C2;
+  --accent: #242D43;
+  --accent-foreground: #F4F2EB;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.12);
-  --ring: #8B86FB;
+  --border: #34405A;
+  --input: #667797;
+  --ring: #A99BFF;
   --chart-1: #8B86FB;
   --chart-2: #38bdf8;
   --chart-3: #f59e0b;
   --chart-4: #10b981;
   --chart-5: #f472b6;
-  --sidebar: #0f1011;
-  --sidebar-foreground: #f7f8f8;
-  --sidebar-primary: #8B86FB;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #191a1b;
-  --sidebar-accent-foreground: #f7f8f8;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #8B86FB;
+  --sidebar: #1B2233;
+  --sidebar-foreground: #F4F2EB;
+  --sidebar-primary: #D5F56B;
+  --sidebar-primary-foreground: #10141F;
+  --sidebar-accent: #242D43;
+  --sidebar-accent-foreground: #F4F2EB;
+  --sidebar-border: #34405A;
+  --sidebar-ring: #A99BFF;
 }
 
 @layer base {
@@ -131,16 +141,11 @@
 
   body {
     @apply bg-background text-foreground;
-    background-color: #050609;
-    background-image:
-      radial-gradient(circle at 8% -6%, rgba(130, 143, 255, 0.18), transparent 23rem),
-      radial-gradient(circle at 92% 0%, rgba(56, 189, 248, 0.1), transparent 22rem),
-      radial-gradient(circle at 50% 100%, rgba(16, 185, 129, 0.06), transparent 28rem),
-      linear-gradient(180deg, #050609 0%, #080a10 46%, #050609 100%);
-    background-attachment: fixed;
+    background: var(--background);
+    font-family: var(--font-sans);
     min-height: 100svh;
     overflow-x: hidden;
-    font-feature-settings: "cv01", "ss03";
+    font-feature-settings: normal;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -158,7 +163,7 @@
   a,
   button,
   summary {
-    -webkit-tap-highlight-color: rgba(139, 134, 251, 0.18);
+    -webkit-tap-highlight-color: color-mix(in srgb, var(--primary) 18%, transparent);
   }
 
   button,
@@ -184,7 +189,8 @@
   }
 
   ::selection {
-    background: rgba(113, 112, 255, 0.34);
+    background: var(--primary);
+    color: var(--primary-foreground);
   }
 }
 
@@ -221,7 +227,7 @@
 
   .section-kicker {
     @apply text-[10px] font-semibold uppercase tracking-[0.24em] text-muted-foreground;
-    font-feature-settings: "cv01", "ss03";
+    font-feature-settings: normal;
   }
 
   .app-chip {
@@ -233,11 +239,11 @@
   }
 
   .input-control {
-    @apply h-12 w-full rounded-2xl border border-border/80 bg-card px-3 text-base font-medium normal-case tracking-normal text-foreground outline-none placeholder:text-muted-foreground/70 focus:border-primary/45 focus:ring-2 focus:ring-primary/15;
+    @apply h-12 w-full rounded-2xl border border-input bg-card px-3 text-base font-medium normal-case tracking-normal text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-primary/15;
   }
 
   .button-primary {
-    @apply inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-[0_18px_38px_-24px_rgba(113,112,255,0.72)] hover:-translate-y-0.5 hover:bg-[#8B86FB] hover:shadow-[0_22px_46px_-22px_rgba(113,112,255,0.72)];
+    @apply inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-[#C9EB58];
   }
 
   .button-secondary {
@@ -249,7 +255,7 @@
   }
 
   .mobile-topbar {
-    @apply sticky top-0 z-30 px-3 pt-2 md:hidden;
+    @apply sticky top-0 z-30 px-3 pt-1 md:hidden;
   }
 
   .mobile-topbar-scrolling {
@@ -293,3 +299,30 @@
     contain-intrinsic-block-size: auto 360px;
   }
 }
+
+/* Public palette and compact navigation; route handlers remain in AppToolbar. */
+html { scrollbar-color: var(--input) var(--background); }
+input,textarea { caret-color: var(--primary); }
+:is(a,button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--detail); outline-offset: 3px; }
+.hero-panel,.glass-panel { background:var(--card); box-shadow:none; backdrop-filter:none; }
+.app-mobile-header { min-height:46px;padding:3px 9px;border:1px solid var(--border);border-radius:15px;background:var(--background); }
+.app-mobile-header>div { min-height:38px;gap:8px; }
+.app-header-width { width:100%;max-width:1240px;margin:0 auto; }
+.app-desktop-header { padding:6px 24px 0; }
+.app-desktop-panel { position:relative;min-height:50px;padding:4px 12px;border:1px solid var(--border);border-radius:16px;background:var(--background); }
+.app-header-row { display:flex;align-items:center;justify-content:space-between;min-height:40px;gap:12px; }
+.app-header-controls { display:flex;align-items:center;gap:10px; }
+.app-desktop-panel .brand-tagline { display:none; }
+.app-desktop-panel nav { position:absolute;left:50%;transform:translateX(-50%);display:flex;flex-wrap:nowrap;align-items:center;gap:22px; }
+.app-desktop-panel nav a { position:relative;min-height:40px;padding:0 3px;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--muted-foreground);font-size:13px;font-weight:500; }
+.app-desktop-panel nav a[aria-current=page] { color:var(--foreground); }
+.app-desktop-panel nav a[aria-current=page]::after { content:"";position:absolute;bottom:-5px;left:0;right:0;height:3px;background:var(--primary); }
+.app-desktop-panel nav a:hover { color:var(--foreground); }
+.app-desktop-panel nav a>span:first-child { display:none; }
+.mobile-nav-shell>.glass-panel { background:var(--background);border-color:var(--border); }
+.mobile-nav-shell [data-global-navigation] { position:relative;background:transparent;box-shadow:none;color:var(--muted-foreground); }
+.mobile-nav-shell [data-navigation-selected=true] { color:var(--primary); }
+.mobile-nav-shell [data-navigation-selected=true]::before { content:"";position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:28px;height:3px;background:var(--primary); }
+@media(max-width:900px) { .app-desktop-panel nav { gap:14px; }.app-desktop-panel nav a { font-size:12px; } }
+@media(max-width:350px) { .app-mobile-header a[title^="Follow"] span { display:none; }.app-mobile-header a[title^="Follow"] { min-width:40px;justify-content:center; } }
+@media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }

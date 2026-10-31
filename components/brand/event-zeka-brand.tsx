@@ -30,14 +30,14 @@ export function EventZekaBrand({
       <span
         className={cn(
           "inline-flex items-center rounded-full bg-primary font-semibold tracking-[-0.01em] text-primary-foreground",
-          compact ? "h-9 gap-1.5 px-2.5 text-xs" : "h-9 gap-2 px-3.5 text-sm",
+          compact ? "h-7.5 gap-1.5 px-2.5 text-sm" : "h-8 gap-2 px-3 text-sm",
         )}
       >
         <EventZekaMark className={compact ? "h-5 w-5" : "h-5.5 w-5.5"} />
         <span className="whitespace-nowrap">Event Zeka</span>
       </span>
       {showTagline ? (
-        <span className="hidden text-sm font-medium text-muted-foreground lg:inline">
+        <span className="brand-tagline hidden text-sm font-medium text-muted-foreground lg:inline">
           Belgrade, happening now
         </span>
       ) : null}

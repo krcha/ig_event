@@ -21,7 +21,7 @@ export function ProfileAvatarLink({
       aria-label="Your profile"
       className={cn(
         "inline-flex flex-none items-center justify-center rounded-full ring-1 transition",
-        variant === "desktop" ? "h-10 w-10" : "h-9 w-9",
+        variant === "desktop" ? "h-8.5 w-8.5" : "h-8 w-8",
         isActive
           ? "bg-primary text-primary-foreground ring-primary/30 shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
           : "bg-white/[0.05] text-muted-foreground ring-white/[0.08] hover:bg-primary/[0.16] hover:text-primary",

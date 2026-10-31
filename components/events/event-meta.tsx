@@ -47,23 +47,23 @@ const EVENT_CATEGORY_LABELS = Object.fromEntries(
 
 export const EVENT_CATEGORY_TONES: Record<EventCategoryKind, EventCategoryTone> = {
   club: {
-    backgroundColor: "rgba(139, 134, 251, 0.14)",
-    color: "#8B86FB",
+    backgroundColor: "rgba(169, 155, 255, 0.14)",
+    color: "#A99BFF",
     label: EVENT_CATEGORY_LABELS.club,
   },
   live: {
-    backgroundColor: "rgba(251, 113, 133, 0.14)",
-    color: "#FB7185",
+    backgroundColor: "rgba(255, 128, 161, 0.14)",
+    color: "#FF80A1",
     label: EVENT_CATEGORY_LABELS.live,
   },
   culture: {
-    backgroundColor: "rgba(251, 191, 36, 0.14)",
-    color: "#FBBF24",
+    backgroundColor: "rgba(246, 201, 76, 0.14)",
+    color: "#F6C94C",
     label: EVENT_CATEGORY_LABELS.culture,
   },
   event: {
-    backgroundColor: "rgba(52, 211, 153, 0.14)",
-    color: "#34D399",
+    backgroundColor: "rgba(122, 214, 176, 0.14)",
+    color: "#7AD6B0",
     label: EVENT_CATEGORY_LABELS.event,
   },
 };
@@ -229,7 +229,7 @@ export function EventPriceChip({
     <span
       className={cn(
         "inline-flex max-w-full items-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4",
-        price.isFree ? "bg-[#34D399]/[0.14] text-[#34D399]" : "bg-white/[0.06] text-foreground",
+        price.isFree ? "bg-[#7AD6B0]/[0.14] text-[#7AD6B0]" : "bg-white/[0.06] text-foreground",
         className,
       )}
       data-event-price={price.isFree ? "free" : "paid"}

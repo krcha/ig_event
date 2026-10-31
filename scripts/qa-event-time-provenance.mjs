@@ -573,7 +573,10 @@ assert.equal(
 );
 assert.ok(calendarSource.includes("resolveEventTimePresentation"));
 assert.ok(detailSource.includes("resolveEventTimePresentation"));
-assert.ok(calendarSource.includes("font-normal leading-4 tabular-nums"), "Calendar opening-hour fallbacks use regular weight.");
+const agendaRowSource = readFileSync("components/calendar/calendar-agenda.tsx", "utf8");
+assert.ok(agendaRowSource.includes('Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown"'), "Calendar rows require an announced event start; venue hours and unknown times cannot become a start.");
+assert.ok(agendaRowSource.includes('known ? event.timeParts.startLabel || "—" : "—"'), "Unannounced starts stay unspecified in compact rows.");
+assert.ok(agendaRowSource.includes('!event.presentation.inferredEnd'), "Compact rows cannot present an inferred closing hour as an announced event end.");
 assert.ok(detailSource.includes('eventTime.kind === "venue_hours" ? "font-normal"'), "Detail opening-hour fallbacks use regular weight.");
 assert.ok(venueHoursSource.includes('>Hours</h3>'), "The weekly schedule has a concise Hours heading.");
 assert.equal(

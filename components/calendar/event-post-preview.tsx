@@ -50,7 +50,7 @@ export default function EventPostPreview({ eventId, onClose, title }: {
 
   return (
     <div
-      className="relative overflow-hidden border-t border-primary/15 bg-[#0d0f16]"
+      className="relative overflow-hidden border-t border-primary/15 bg-[#10141F]"
       data-calendar-event-post={eventId}
       onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}
     >
@@ -117,7 +117,7 @@ export default function EventPostPreview({ eventId, onClose, title }: {
                 {post.caption ? (
                   <ReadMoreText
                     buttonClassName="text-xs leading-5"
-                    collapsedButtonClassName="bg-[#0d0f16]"
+                    collapsedButtonClassName="bg-[#10141F]"
                     lines={3}
                     paragraphProps={{ "data-calendar-event-caption-source": post.captionSource ?? "missing" }}
                     text={post.caption}

@@ -375,7 +375,7 @@ function EventRow({ event }: { event: SavedLibraryEvent }) {
   const supplementalDisplayTime = getSupplementalDisplayTime(event);
 
   return (
-    <article className="group box-border flex items-center gap-3 overflow-hidden rounded-[18px] border border-white/[0.07] bg-[#13151D] p-[13px] transition hover:border-primary/25 hover:bg-[#171923]">
+    <article className="group box-border flex items-center gap-3 overflow-hidden rounded-[18px] border border-white/[0.07] bg-[#1B2233] p-[13px] transition hover:border-primary/25 hover:bg-[#171923]">
       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
         <Link
           aria-label={`Open ${event.title}`}

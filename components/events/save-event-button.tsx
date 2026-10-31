@@ -54,13 +54,14 @@ export function SaveEventButton({
         aria-pressed={isSaved}
         className={cn(
           variant === "icon"
-            ? "inline-flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[12px] border border-white/[0.12] bg-white/[0.035] text-muted-foreground hover:border-[#8B86FB]/45 hover:bg-[#8B86FB]/[0.08] hover:text-[#8B86FB]"
+            ? "inline-flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[12px] border border-white/[0.12] bg-white/[0.035] text-muted-foreground hover:border-[#D5F56B]/45 hover:bg-[#D5F56B]/[0.08] hover:text-[#D5F56B]"
             : "button-secondary min-h-11 gap-2 px-4 py-0",
           isSaved &&
-            "border-transparent bg-[#8B86FB]/[0.14] text-[#8B86FB] hover:bg-[#8B86FB]/[0.18] hover:text-[#8B86FB]",
-          isBusy && "ring-1 ring-[#8B86FB]/35",
+            "border-transparent bg-[#D5F56B]/[0.14] text-[#D5F56B] hover:bg-[#D5F56B]/[0.18] hover:text-[#D5F56B]",
+          isBusy && "ring-1 ring-[#D5F56B]/35",
         )}
         data-auth-action="save-event"
+        data-save-event="true"
         data-pending={isBusy ? "true" : "false"}
         data-saved={isSaved ? "true" : "false"}
         onClick={(click) => {
@@ -70,7 +71,7 @@ export function SaveEventButton({
         }}
         type="button"
       >
-        <Bookmark className={cn("h-4 w-4", isSaved ? "fill-[#8B86FB] text-[#8B86FB]" : "fill-transparent")} />
+        <Bookmark className={cn("h-4 w-4", isSaved ? "fill-[#D5F56B] text-[#D5F56B]" : "fill-transparent")} />
         {variant === "full" ? <span>{displayLabel}</span> : null}
       </button>
       {error ? (

@@ -126,7 +126,7 @@ function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
       title="Follow @eventzeka on Instagram"
     >
       <Instagram aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
-      <span>Follow{compact ? null : " @eventzeka"}</span>
+      <span>Follow</span>
     </a>
   );
 }
@@ -212,7 +212,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   return (
     <>
       <div className={cn("mobile-topbar", mobileHeaderScrolls && "mobile-topbar-scrolling")}>
-        <div className="glass-panel px-3 py-2">
+        <div className="app-mobile-header">
           <div className="flex items-center justify-between gap-3">
             <Link aria-label="Event Zeka home" className="inline-flex min-w-0" href="/">
               <EventZekaBrand compact />
@@ -227,17 +227,17 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
 
       <header
         className={cn(
-          "sticky top-0 z-40 hidden px-4 pt-4 transition duration-300 md:block lg:px-8",
+          "app-desktop-header sticky top-0 z-40 hidden transition duration-300 md:block",
           isHidden && "-translate-y-[calc(100%+1rem)] opacity-0",
         )}
       >
-        <div className="mx-auto w-full max-w-[88rem]">
-          <div className="glass-panel px-4 py-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="app-header-width">
+          <div className="app-desktop-panel">
+            <div className="app-header-row">
               <Link aria-label="Event Zeka home" className="inline-flex w-fit" href="/">
                 <EventZekaBrand showTagline />
               </Link>
-              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <div className="app-header-controls">
                 <nav
                   aria-label="Global"
                   className="flex flex-wrap items-center gap-1.5"
@@ -308,6 +308,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   key={item.href}
                   data-global-navigation="client"
                   data-navigation-pending={pending ? "true" : undefined}
+                  data-navigation-selected={selected ? "true" : undefined}
                   onBlur={cancelIntent}
                   onClick={(event) => navigateMobile(event, href)}
                   onFocus={() => prefetchIntent(href)}

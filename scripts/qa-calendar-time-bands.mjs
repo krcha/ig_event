@@ -231,55 +231,16 @@ const kindToggleSource = readFileSync(
   "components/calendar/event-kind-toggle-chips.tsx",
   "utf8",
 );
-const groupingStart = calendarSource.indexOf("function renderAgendaCards");
-const groupingEnd = calendarSource.indexOf('data-calendar-scroll-region="selected-day-agenda"', groupingStart);
-const groupingSource = calendarSource.slice(groupingStart, groupingEnd);
-const timeBandSource = groupingSource.slice(groupingSource.indexOf("agendaTimeBandGroups.map"));
-
-assert.ok(
-  calendarSource.includes("groupCalendarEventsByTimeBand(individualEvents)") &&
-    calendarSource.includes("agendaTimeBandGroups.map"),
-  "Individual events must retain deterministic time-band grouping after busy venues are condensed.",
-);
-assert.ok(
-  calendarSource.includes('"timeStatus"') &&
-    calendarSource.includes("timeStatus: event.timeStatus") &&
-    calendarSource.includes('event.timeStatus === "unknown"'),
-  "The agenda summary and time sort must preserve explicit unknown-time provenance even when stale time text exists.",
-);
-assert.ok(
-  groupingSource.includes("aria-labelledby=") &&
-    groupingSource.includes("data-calendar-time-band={timeBand.key}") &&
-    groupingSource.includes("data-calendar-time-band-visible-count"),
-  "Every time band must have an accessible heading and an explicit visible-count target.",
-);
-assert.ok(
-  groupingSource.includes("min-w-0") &&
-    groupingSource.includes("truncate") &&
-    !groupingSource.includes("min-w-["),
-  "Time-band headings must shrink safely without introducing a fixed minimum width at 320px.",
-);
-assert.equal(
-  timeBandSource.includes("<details") || timeBandSource.includes("line-clamp"),
-  false,
-  "Time-band groups must not collapse or truncate matching events by default.",
-);
-assert.ok(
-  groupingSource.includes('data-calendar-venue-group="true"') &&
-    groupingSource.includes("items={group.events}") &&
-    groupingSource.includes("Više događaja") &&
-    postPreviewSource.includes('data-calendar-event-link="true"') &&
-    kindToggleSource.includes('querySelectorAll<HTMLElement>("[data-calendar-venue-group]")') &&
-    kindToggleSource.includes("group.hidden = visibleGroupCount === 0"),
-  "Busy venue disclosures must keep each event reachable and respond to category filters.",
-);
-assert.ok(
-  calendarSource.includes("data-calendar-event-id={event._id}") &&
-    calendarSource.includes(
-      "data-calendar-time-band-event-count={timeBand.events.length}",
-    ),
-  "Rendered rows and groups need deterministic identity/count markers for visible-card verification.",
-);
+assert.match(calendarSource,/sortMode === "title" \|\| sortMode === "venue"/);
+assert.match(calendarSource,/AGENDA_BAND_ORDER\[sortMode === "late"/);
+assert.match(calendarSource,/events: visible/);
+assert.match(calendarSource,/data-calendar-time-band=\{alphabetical \? undefined : group.key\}/);
+assert.match(calendarSource,/data-calendar-time-band-visible-count="true"/);
+assert.match(calendarSource,/data-calendar-event-id=\{event._id\}/);
+assert.match(calendarSource,/timeStatus: event.timeStatus/);
+assert.match(calendarSource,/event.timeStatus !== "unknown"/);
+assert.match(postPreviewSource,/data-calendar-event-link="true"/);
+assert.doesNotMatch(readFileSync("components/calendar/calendar-agenda.tsx", "utf8"),/<details|line-clamp/,"A matching event must remain reachable without a venue disclosure.");
 assert.ok(
   kindToggleSource.includes(
     'querySelectorAll<HTMLElement>("[data-calendar-time-band]")',

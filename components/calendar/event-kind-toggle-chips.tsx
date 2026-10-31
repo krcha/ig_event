@@ -22,6 +22,7 @@ const CATEGORY_KEYS = CATEGORY_CHIPS.map((chip) => chip.key).filter(
 const CALENDAR_DATE_COUNT_SELECTOR = "[data-calendar-date-kind-counts]";
 
 type EventKindToggleChipsProps = {
+  appearance?: "chips" | "tabs";
   afterAll?: ReactNode;
   children?: ReactNode;
   initialHiddenCategories?: readonly EventCategoryKind[];
@@ -241,6 +242,7 @@ function applyAgendaVisibility(categories: readonly EventCategoryKind[]) {
 }
 
 export function EventKindToggleChips({
+  appearance = "chips",
   afterAll,
   children,
   initialHiddenCategories = [],
@@ -374,7 +376,7 @@ export function EventKindToggleChips({
                 onClick={() => setHiddenCategoriesAndUrl([])}
                 type="button"
               >
-                {chip.label}
+                {appearance === "tabs" ? "Sve" : chip.label}
               </button>
             );
             return afterAll ? [allChip, <span className="contents" key="after-all">{afterAll}</span>] : [allChip];
@@ -403,7 +405,7 @@ export function EventKindToggleChips({
               type="button"
             >
               {singleSelection ? <span aria-hidden="true" className="mr-1.5 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: isActive ? "currentColor" : tone.color }} /> : null}
-              <span className={!singleSelection && isHidden ? "line-through" : undefined}>{chip.label}</span>
+              <span className={!singleSelection && isHidden ? "line-through" : undefined}>{appearance === "tabs" ? ({club:"Žurke",live:"Uživo",culture:"Kultura",event:"Ostalo"}[category]) : chip.label}</span>
               {!singleSelection && isHidden ? (
                 <span aria-hidden="true" className="ml-1 text-[10px] opacity-80">
                   off

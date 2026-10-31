@@ -499,7 +499,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                       <ReadMoreText
                         buttonClassName="text-sm leading-6 text-primary hover:text-primary/85"
                         className="mt-2"
-                        collapsedButtonClassName="bg-[#0d0f16]"
+                        collapsedButtonClassName="bg-[#10141F]"
                         lessLabel="show less"
                         moreLabel="read more"
                         paragraphProps={{ "data-event-description": "true" }}

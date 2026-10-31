@@ -24,6 +24,9 @@ import * as venueNormalization from "../lib/pipeline/venue-normalization.ts";
 import * as calendarWindows from "../lib/events/public-calendar-windows.ts";
 import * as readCache from "../lib/events/public-event-read-cache.ts";
 
+import * as agendaSort from "../lib/events/agenda-sort.ts";
+import * as agendaOptions from "../lib/events/agenda-sort-options.ts";
+
 const require = createRequire(import.meta.url);
 const jsx = (type, props, key) => type?.qaRender ? type(props) : ({ type, props: props ?? {}, key });
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
@@ -36,6 +39,10 @@ function compile(file, mocks) {
     if (name in mocks) return mocks[name];
     if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
     if (name === "lucide-react" || name.startsWith("@/components/") || name.startsWith("./calendar-") || name === "./event-kind-toggle-chips" || name === "./open-now-filter") return components;
+    if (name === "next/image") return { __esModule: true, default: "image" };
+    if (name.endsWith(".png")) return { __esModule: true, default: {src:"/skyline.png",width:2170,height:725} };
+    if (name === "@/lib/events/agenda-sort-options") return agendaOptions;
+    if (name === "@/lib/events/agenda-sort") return agendaSort;
     if (name === "next/link") return { __esModule: true, default: "link" };
     if (name.endsWith(".module.css")) return { __esModule: true, default: new Proxy({}, { get: (_target, name) => String(name) }) };
     if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
@@ -87,26 +94,19 @@ assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).va
 legacyOptions.push({ value: "id:venue-b", label: "Other venue", names: ["Old alias"] });
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "Old alias", "Ambiguous legacy aliases must retain the existing name-matching behavior.");
 
-for (const mobile of [false, true]) {
-  const VirtualAgendaList = Object.assign(({ items, children }) => items.map(children), { qaRender: true });
-  const { CalendarAgenda } = compile("components/calendar/calendar-agenda.tsx", {
-    react: { useMemo: callback => callback(), useSyncExternalStore: () => mobile, useState: value => [value, () => {}], useEffect: () => {} },
-    "./virtual-agenda-list": { VirtualAgendaList },
-    "@/lib/taxonomy/event-categories": categories,
-    "@/lib/events/calendar-time-band-definitions": bands,
-    "@/lib/events/venue-day-grouping": grouping,
+for (const mobile of [false, true]) for (const sortMode of ["time","late","title","venue"]) {
+  const VirtualAgendaList = Object.assign(({items,children})=>items.map(children),{qaRender:true});
+  const {CalendarAgenda}=compile("components/calendar/calendar-agenda.tsx",{
+    react:{useMemo:cb=>cb(),useState:v=>[v,()=>{}],useEffect:()=>{}},"./virtual-agenda-list":{VirtualAgendaList},
+    "@/lib/events/calendar-time-band-definitions":bands,
   });
-  const tree = CalendarAgenda({ events: projected, hiddenDayCategories: [], selectedDayEventCount: 8, dayLabel: "Saturday", openNowActive: false, openNowHref: "/?open=now", now: 0, authEnabled: true, hasActiveFilters: false, clearFiltersHref: "/" });
-  const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
-  const collapsedCount = mobile ? 0 : grouping.groupBusyVenuesForDay(projected).groups.reduce((sum, group) => sum + group.events.length, 0);
-  assert.equal(rows.length, events.length - collapsedCount, "Responsive modes retain individual events; busy venue contents mount on expansion.");
-  assert.equal(new Set(rows.map(node => node.props["data-calendar-event-id"])).size, rows.length);
-  assert.equal(nodes(tree, node => node.props?.["data-calendar-venue-group"]).length, mobile ? 0 : 1, "Retain desktop busy-venue grouping and the mobile chronological list.");
-  if (mobile) {
-    const evening = nodes(tree, node => node.props?.["data-calendar-time-band"] === "evening")[0];
-    const ids = nodes(evening, node => node.props?.["data-calendar-event-id"]).map(node => node.props["data-calendar-event-id"]);
-    assert.deepEqual(ids, projected.filter(event => event.band === "evening").sort((a, b) => a.mobileOrder - b.mobileOrder).map(event => event._id));
-  }
+  const ordered=agendaSort.sortAgendaEvents(events,sortMode);
+  const compact=projection.projectCalendarAgendaEvents(ordered,new Map(ordered.map((e,i)=>[e._id,i])),new Map());
+  const tree=CalendarAgenda({events:compact,hiddenDayCategories:[],sortMode,selectedDayEventCount:8,openNowActive:false,hasActiveFilters:false,clearFiltersHref:"/"});
+  const rows=nodes(tree,node=>node.props?.["data-calendar-event-id"]);
+  assert.deepEqual(rows.map(node=>node.props["data-calendar-event-id"]),ordered.map(e=>e._id),`The whole ${sortMode} ordering must survive the ${mobile?"mobile":"desktop"} rendering path.`);
+  assert.equal(new Set(rows.map(node=>node.props["data-calendar-event-id"])).size,events.length);
+  if(sortMode==="title"||sortMode==="venue")assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Alphabetical lists cannot be regrouped by time.");
 }
 
 let dayReads = 0;
@@ -213,6 +213,8 @@ assert.equal(secondDay.props.fallback.props.day, "2026-10-31");
 assert.equal(secondDay.props.children.type, "DayPage");
 assert.equal((await secondDay.props.children.props.searchParams).day, "2026-10-31");
 const categoryOnly = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31", hide: "live,culture,event" }) });
+const sortedOnly=await home.default({searchParams:Promise.resolve({month:"2026-10",day:"2026-10-31",sort:"venue",q:"jazz"})});
+assert.equal(secondDay.key,sortedOnly.key,"Sorting/searching should retain the toolbar DOM and keyboard focus.");
 assert.equal(secondDay.key, categoryOnly.key, "Optimistic category filtering must retain its current content boundary.");
 
 const budget = compile("lib/events/calendar-overview-budget.ts", { "server-only": {} });

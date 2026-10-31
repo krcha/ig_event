@@ -12,6 +12,7 @@
 !.yarn/versions
 
 # root-level generated test output
+/.impeccable/review/
 /.seo-cache/
 /coverage/
 /coverage [0-9]/

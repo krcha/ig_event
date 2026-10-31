@@ -1,3 +1,5 @@
+import { sortAgendaEvents, normalizeAgendaSortMode } from "../lib/events/agenda-sort.ts";
+import { AGENDA_SORT_OPTIONS, AGENDA_BAND_ORDER } from "../lib/events/agenda-sort-options.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
@@ -107,14 +109,33 @@ assert.match(
 );
 
 const browsePageSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
-assert.ok(
-  browsePageSource.includes('type AgendaSortMode = "time" | "type" | "venue"') &&
-    browsePageSource.includes("compareAgendaEventsByVenue") &&
-    browsePageSource.includes('return value === "time" || value === "type" ? value : "venue"') &&
-    browsePageSource.includes('selectedSortMode === "venue" ? undefined : selectedSortMode') &&
-    browsePageSource.includes('<option value="venue">Venue name</option>'),
-  "Public event filters should use venue-name sorting by default.",
-);
+assert.match(browsePageSource, /sortAgendaEvents\(selectedDayAgendaEvents, selectedSortMode\)/);
+assert.equal(normalizeAgendaSortMode(), "time");
+assert.equal(normalizeAgendaSortMode("venue"), "venue");
+assert.equal(normalizeAgendaSortMode("invalid"), "time");
+assert.deepEqual(AGENDA_SORT_OPTIONS.map(option => [option.value, option.label]), [["time","Po vremenu"],["late","Kasnije prvo"],["title","Po nazivu"],["venue","Po imenu mesta"]]);
+const ordered = [
+  makeEvent({_id:"tie-b",time:"20:00",timeStatus:"confirmed"}),
+  makeEvent({_id:"unknown-a",time:"22:00",timeStatus:"unknown"}),
+  makeEvent({_id:"day",time:"10:00",timeStatus:"confirmed"}),
+  makeEvent({_id:"night",time:"23:00",timeStatus:"confirmed"}),
+  makeEvent({_id:"tie-a",time:"20:00",timeStatus:"confirmed"}),
+  makeEvent({_id:"after",time:"01:00",timeStatus:"confirmed"}),
+  makeEvent({_id:"unknown-b",time:undefined,timeStatus:"unknown"}),
+];
+assert.deepEqual(sortAgendaEvents(ordered,"time").map(e=>e._id),["day","tie-b","tie-a","night","unknown-a","unknown-b","after"]);
+assert.deepEqual(sortAgendaEvents(ordered,"late").map(e=>e._id),["after","night","tie-b","tie-a","day","unknown-a","unknown-b"]);
+assert.deepEqual(AGENDA_BAND_ORDER.time,["daytime","evening","night","time-not-announced","after-midnight"]);
+const words=["Žurka","Đir","Čarolija","Centrala","Ćaskanje","Zabava","Šetnja","Džez"];
+const alphaFixtures=words.map((word,index)=>makeEvent({_id:String(index),title:word,venue:word,time:index%2?"10:00":"23:00"}));
+const expected=["Centrala","Čarolija","Ćaskanje","Džez","Đir","Šetnja","Zabava","Žurka"];
+assert.deepEqual(sortAgendaEvents(alphaFixtures,"title").map(e=>e.title),expected);
+assert.deepEqual(sortAgendaEvents(alphaFixtures,"venue").map(e=>e.venue),expected);
+const many=Array.from({length:125},(_,i)=>makeEvent({_id:String(i),venue:`Mesto ${124-i}`,title:`Događaj ${124-i}`}));
+assert.deepEqual(sortAgendaEvents(many,"venue").slice(0,3).map(e=>e.venue),["Mesto 0","Mesto 1","Mesto 2"],"Sort the whole selection before any display page/window.");
+const original=ordered.map(e=>e._id);sortAgendaEvents(ordered,"title");assert.deepEqual(ordered.map(e=>e._id),original,"Never mutate input snapshots.");
+const display=[makeEvent({_id:"normalized",time:"23:00",displayTimeStart:"18:00",timeStatus:"confirmed"}),makeEvent({_id:"raw",time:"19:00",timeStatus:"confirmed"})];
+assert.equal(sortAgendaEvents(display,"time")[0]._id,"normalized");
 assert.equal(
   browsePageSource.includes("month-events-table"),
   false,

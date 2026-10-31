@@ -156,7 +156,7 @@ export function CalendarEventPreviewRow({
 
 function CalendarPostLoading() {
   return (
-    <div className="border-t border-border/75 bg-[#0d0f16] p-3" role="status">
+    <div className="border-t border-border/75 bg-[#10141F] p-3" role="status">
       <div className="h-[min(38svh,18rem)] min-h-48 rounded-lg bg-white/[0.035] motion-safe:animate-pulse" />
       <p className="mt-2 text-xs text-muted-foreground">Loading Instagram post...</p>
     </div>

@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Belgrade events today: nightlife, concerts, DJ nights, exhibitions, theatre, film, festivals, and culture for locals and visitors.",
     start_url: "/",
     display: "standalone",
-    background_color: "#050609",
-    theme_color: "#8B86FB",
+    background_color: "#10141F",
+    theme_color: "#D5F56B",
     icons: [
       {
         src: "/event-zeka-icon-192.png",
