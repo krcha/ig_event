@@ -593,6 +593,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           <Link
             className="app-chip bg-card/95 text-primary hover:border-primary/35 hover:bg-primary/[0.08]"
             data-calendar-clear-filter={control.key}
+            data-calendar-client-navigation="true"
             href={control.href}
             key={control.key}
             prefetch={false}
@@ -743,6 +744,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         <div className="flex items-center gap-1.5">
           <div className="inline-flex h-9 min-w-0 flex-1 items-center rounded-full border border-border/75 bg-white/[0.035]">
             <Link prefetch={false}
+              data-calendar-client-navigation="true"
               aria-label="Previous day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
@@ -758,6 +760,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
               {monthLabel}
             </span>
             <Link prefetch={false}
+              data-calendar-client-navigation="true"
               aria-label="Next day"
               className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               href={`/${buildQueryString({
@@ -772,6 +775,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
           </div>
 
           <Link prefetch={false}
+              data-calendar-client-navigation="true"
             className="inline-flex h-9 flex-none items-center rounded-full border border-primary/25 bg-primary/10 px-3 text-xs font-semibold text-primary"
             href={`/${buildQueryString({
               ...dateNavigationFilters,
@@ -809,6 +813,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
               <div className="inline-flex w-fit items-center gap-1 rounded-full border border-border/80 bg-white/[0.035] p-1 shadow-[0_18px_48px_-38px_rgba(0,0,0,0.8)]">
                 <Link prefetch={false}
+                  data-calendar-client-navigation="true"
                   aria-label="Previous day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
@@ -821,6 +826,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   <ChevronLeft className="h-4 w-4" />
                 </Link>
                 <Link prefetch={false}
+                  data-calendar-client-navigation="true"
                   className="inline-flex h-10 items-center justify-center rounded-full px-4 text-sm font-semibold text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
                     ...dateNavigationFilters,
@@ -832,6 +838,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   Today
                 </Link>
                 <Link prefetch={false}
+                  data-calendar-client-navigation="true"
                   aria-label="Next day"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
                   href={`/${buildQueryString({
@@ -844,7 +851,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
                   <ChevronRight className="h-4 w-4" />
                 </Link>
               </div>
-              <Link prefetch={false} className="button-secondary hidden min-h-11 gap-2 px-4 py-0 sm:inline-flex" href="/">
+              <Link prefetch={false} data-calendar-client-navigation="true" className="button-secondary hidden min-h-11 gap-2 px-4 py-0 sm:inline-flex" href="/">
                 <ListMusic className="h-4 w-4" />
                 All events
               </Link>

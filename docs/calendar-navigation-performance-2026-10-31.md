@@ -33,6 +33,9 @@ overview reads on the selected day's critical path.
   alias URLs exceptionally retain the previous month-wide ambiguity resolution;
   navigation then uses the resolved filter. This prevents cross-day alias and
   duplicate-name regressions while keeping ordinary day navigation independent.
+- Weekly dates, date arrows and filter-clearing links explicitly retain client
+  navigation. The prior composite production source lacked the weekly marker,
+  allowing the global same-path handler to force full document reloads.
 
 ## Verification
 

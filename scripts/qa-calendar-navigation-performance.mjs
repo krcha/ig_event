@@ -122,6 +122,9 @@ const agendas = nodes(tree, node => node.type === "CalendarAgenda");
 assert.equal(agendas.length, 1);
 assert.equal(agendas[0].props.events.length, 8);
 assert.ok(!JSON.stringify(agendas[0].props.events).includes("private-sized-hours-data"));
+for (const link of nodes(tree, node => node.type === "link" && node.props.href?.startsWith("/?"))) {
+  assert.equal(link.props["data-calendar-client-navigation"], "true", "Calendar date/filter links must opt out of the global document-reload handler.");
+}
 
 const data = { generatedAt: 1, venues: [], groups: [
   { date: "2026-10-31", category: "club", venueValue: "id:a", count: 99, legacyVenueMatchCount: 99 },

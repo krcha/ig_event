@@ -422,6 +422,7 @@ export function CalendarAgenda({ events: selectedDayAgendaEvents, hiddenDayCateg
             </p>
             {hasActiveFilters ? (
               <Link prefetch={false}
+                data-calendar-client-navigation="true"
                 className="button-secondary mt-4 min-h-10 px-4 py-0"
                 href={clearFiltersHref}
                 scroll={false}
