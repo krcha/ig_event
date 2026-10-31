@@ -204,6 +204,22 @@ assert.notEqual(firstDay.key, secondDay.key, "Transitions must show the new day'
 assert.equal(secondDay.props.fallback.props.day, "2026-10-31");
 assert.equal(secondDay.props.children.type, "DayPage");
 assert.equal((await secondDay.props.children.props.searchParams).day, "2026-10-31");
+const categoryOnly = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31", hide: "live,culture,event" }) });
+assert.equal(secondDay.key, categoryOnly.key, "Optimistic category filtering must retain its current content boundary.");
+
+const budget = compile("lib/events/calendar-overview-budget.ts", { "server-only": {} });
+let releaseBudget; const budgetOrder = [];
+const monthRead = budget.runCalendarOverviewRead(async () => { budgetOrder.push("month"); await new Promise(resolve => { releaseBudget = resolve; }); });
+const weekRead = budget.runCalendarOverviewRead(async () => { budgetOrder.push("week"); throw new Error("counter failure"); });
+const retryRead = budget.runCalendarOverviewRead(async () => { budgetOrder.push("retry"); return "ok"; });
+const weekFailure = assert.rejects(weekRead, /counter failure/);
+assert.deepEqual(budgetOrder, ["month"], "Month and extra-week scopes share one counter RPC slot.");
+const foreground = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31" }) });
+assert.equal(nodes(foreground, node => node.type === "CalendarAgenda").length, 1, "The shipped day page must render while background counter work is pending.");
+assert.doesNotMatch(readFileSync("lib/events/public-events.ts", "utf8"), /runCalendarOverviewRead/, "Day detail reads must never enter the background counter queue.");
+releaseBudget(); await monthRead; await weekFailure;
+assert.equal(await retryRead, "ok");
+assert.deepEqual(budgetOrder, ["month", "week", "retry"], "A rejected counter read must release the slot in FIFO order.");
 
 // Independent venue batches overlap, keep deterministic order, and stop scheduling on failure.
 const batches = chunkPublicVenueIds(Array.from({ length: 350 }, (_, index) => String(index)));

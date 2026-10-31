@@ -4,6 +4,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { buildPublicCalendarDateWindows } from "./public-calendar-windows";
 import { getCalendarConvexUrl } from "./calendar-convex-url";
+import { runCalendarOverviewRead } from "./calendar-overview-budget";
 import { toSearchableText } from "../pipeline/venue-normalization";
 import type {
   PublicCalendarOverviewGroup,
@@ -22,7 +23,7 @@ const overviewCache = new Map<string, Entry>();
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 48;
 const OVERVIEW_WINDOW_DAYS = 7;
-const OVERVIEW_WINDOW_CONCURRENCY = 4;
+const OVERVIEW_WINDOW_CONCURRENCY = 1;
 const overviewAction = "publicCalendarOverviewAction:listWindow" as unknown as FunctionReference<"action">;
 
 async function loadOverview(convex: ConvexHttpClient, options: Options): Promise<Overview> {
@@ -39,15 +40,15 @@ async function loadOverview(convex: ConvexHttpClient, options: Options): Promise
       let cursor: string | null = null;
       const seenCursors = new Set<string>();
       try {
-        // Cursors belong to one bounded date window and remain sequential.
-        // Independent windows can read concurrently without broadening scope.
+        // Cursors stay sequential; background scopes share a single RPC budget
+        // so independent month/week work cannot crowd out selected-day reads.
         while (!failed) {
-          const result: PublicCalendarOverviewPage = await convex.action(overviewAction, {
+          const result: PublicCalendarOverviewPage = await runCalendarOverviewRead(() => convex.action(overviewAction, {
             ...window,
             cursor,
             ...(options.q ? { q: options.q } : {}),
             ...(options.venue ? { venue: options.venue } : {}),
-          });
+          }));
           pages.push(result);
           if (result.isDone) break;
           if (!result.continueCursor || seenCursors.has(result.continueCursor)) {

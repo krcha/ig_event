@@ -45,6 +45,22 @@ It records public route/date timings, not authentication tokens or user data.
   future-date bounds and trigger focus restoration remain intact. Instagram
   preview code and images retain their existing on-demand loading.
 
+## Foreground scheduling follow-up
+
+Initial public verification of `1a900e1` caught a 4624 ms first desktop transition
+overlapping a 9830 ms counter refresh. Other first production transitions were
+1666, 3031 and 1285 ms. This confirmed remaining contention despite separate
+HTTP requests and motivated a stricter background budget before final handoff.
+
+All counter month/week/filter scopes now share one backend RPC slot per web
+process. At most 64 reads may wait; overflow uses the existing recoverable
+counter-unavailable response. Foreground day queries do not use that queue.
+Cursor chains, exact aggregation and the 60-second successful-cache lifetime
+are preserved. Counter throughput is intentionally lower so an unused month
+overview cannot fill several backend execution slots. Periodic refresh skips
+active navigation/loading states, and category-only toggles retain their
+existing optimistic content boundary.
+
 ## Verification and rollout
 
 The navigation QA executes the root boundary with two dates, verifies that

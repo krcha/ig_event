@@ -34,8 +34,14 @@ export function CalendarOverviewProvider({ options, selectedDay, openNow, childr
   const { month, weekStart, q, venue } = options;
   useEffect(() => {
     let active = true;
+    let deferred: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
+      clearTimeout(deferred);
       if (document.visibilityState === "hidden") return;
+      if (document.querySelector("[data-calendar-loading-day]") || document.documentElement.dataset.navigationPending === "true") {
+        deferred = setTimeout(refresh, 250);
+        return;
+      }
       if (!peekCalendarOverview({ month, weekStart, q, venue })) setRefreshingKey(key);
       void fetchCalendarOverview({ month, weekStart, q, venue }).then(data => {
         if (!active) return;
@@ -49,6 +55,7 @@ export function CalendarOverviewProvider({ options, selectedDay, openNow, childr
     document.addEventListener("visibilitychange", refresh);
     return () => {
       active = false;
+      clearTimeout(deferred);
       clearInterval(interval);
       document.removeEventListener("visibilitychange", refresh);
     };

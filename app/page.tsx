@@ -59,7 +59,7 @@ export default async function HomePage({ searchParams }: RootPageProps) {
   const params = await searchParams ?? {};
   // A new day is new content. Without a key, a transition retains the old day
   // until every read finishes and the loading boundary never becomes visible.
-  const key = JSON.stringify([params.month, params.day, params.q, params.venue, params.hide, params.sort, params.open]);
+  const key = JSON.stringify([params.month, params.day, params.q, params.venue, params.sort, params.open]);
   const day = typeof params.day === "string" ? params.day : undefined;
   return <Suspense key={key} fallback={<EventsLoading day={day} />}><EventsBrowsePage searchParams={Promise.resolve(params)} /></Suspense>;
 }

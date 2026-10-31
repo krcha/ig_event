@@ -69,11 +69,11 @@ try {
   const pending = loadPublicCalendarOverviewWindow(options);
   const coalesced = loadPublicCalendarOverviewWindow({ ...options, q: "artist", venue: "Source Venue" });
   await turn();
-  assert.equal(calls.length, 4, "Start four independent windows without waiting for the first cursor chain.");
-  assert.equal(peak, 4);
+  assert.equal(calls.length, 1, "Background counters must leave room for foreground day reads.");
+  assert.equal(peak, 1);
   now += 120_000;
   const slowCoalesced = loadPublicCalendarOverviewWindow({ ...options, q: "artist", venue: "Source Venue" });
-  assert.equal(calls.length, 4, "A slow pending load must not expire and dispatch duplicate reads.");
+  assert.equal(calls.length, 1, "A slow pending load must not expire and dispatch duplicate reads.");
   let waves = 0;
   while (gates.length) {
     // Each gate wave represents one equal-latency round trip. Resolve in reverse
@@ -87,8 +87,8 @@ try {
   assert.deepEqual(await coalesced, result);
   assert.deepEqual(await slowCoalesced, result);
   assert.equal(calls.length, 10, "Coalesced callers must share the five two-page window reads.");
-  assert.equal(peak, 4, "Overview reads must never exceed four simultaneous requests.");
-  assert.equal(waves, 4, "Ten serial round trips should require four deterministic bounded waves.");
+  assert.equal(peak, 1, "Only one background counter RPC may occupy the backend at once.");
+  assert.equal(waves, 10, "Counter work deliberately yields throughput to foreground day requests.");
   assert.equal(result.error, undefined);
   assert.deepEqual(result.groups, windows.flatMap((window, index) => [{
     date: window.fromDate, category: "live", venueValue: "id:shared", count: index === 1 ? 2 : 3, legacyVenueMatchCount: 1,
@@ -136,7 +136,7 @@ try {
   const failedOptions = { ...options, q: "transient failure" };
   const failures = await Promise.all([loadPublicCalendarOverviewWindow(failedOptions), loadPublicCalendarOverviewWindow(failedOptions)]);
   for (const failed of failures) assert.deepEqual(failed, { groups: [], venues: [], error: "Authoritative page failed" });
-  assert.equal(failureCalls, 4, "Stop dispatching new windows once a concurrent page fails.");
+  assert.equal(failureCalls, 1, "Stop dispatching new windows as soon as an authoritative page fails.");
   ConvexHttpClient.prototype.action = async function () {
     directCalls++;
     return { page: [], venues: [], continueCursor: "", isDone: true };
@@ -216,7 +216,7 @@ try {
   await loadPublicCalendarOverviewWindow({ ...day, q: "lru-0" });
   assert.equal(longCalls.length, beforeEvicted + 1, "Keep the existing 48-entry cache bound.");
 
-  console.log("Calendar overview loader QA passed: four-request bound, sequential cursors, 10-to-4 deterministic latency waves, exact merge, coalescing, TTL, origin/filter/error isolation, empty windows and bounded LRU.");
+  console.log("Calendar overview loader QA passed: one background RPC slot, sequential cursors, exact merge, coalescing, TTL, origin/filter/error isolation, empty windows and bounded LRU.");
 } finally {
   ConvexHttpClient.prototype.action = originalAction;
   ConvexHttpClient.prototype.query = originalQuery;
