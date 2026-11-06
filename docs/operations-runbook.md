@@ -268,6 +268,17 @@ make a cleanup result appear complete.
 
 ## Automatic approval of server-verified unique events
 
+The November 7, 2026 Drugstore ANTIBO correction has a separate frozen operator,
+`reviewedDrugstoreNovember2026Repairs:getContext` and `:consolidate`. It admits
+only the four reviewed Instagram posts for that party, binds the retained
+22:00 occurrence to the canonical public Drugstore venue, and preserves source
+evidence, receipt integrity and saved-event references. Preview the full context
+and pass its exact digest before applying; a changed context requires a new
+preview. This is an incident repair, not a new automatic merge rule. The existing
+seven November repair groups remain frozen. Verified Drugstore spelling variants
+belong in the venue's aliases for subsequent ingestion; approved historical
+events still require their existing source-bound venue repair.
+
 Instagram event extraction may use the posting account's canonical venue when
 the account is registered as a venue and the event does not name another
 physical venue. Explicit event, schedule-row, and shared venue claims retain

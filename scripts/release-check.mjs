@@ -69,6 +69,7 @@ const checks = [
   { script: "qa:reviewed-fold-safety", timeoutMs: 60_000 },
   { script: "qa:reviewed-november-repairs", timeoutMs: 60_000 },
   { script: "qa:reviewed-november-operator", timeoutMs: 60_000 },
+  { script: "qa:reviewed-drugstore-november-operator", timeoutMs: 60_000 },
   { script: "qa:reviewed-fabrika-dj-night-enrichment", timeoutMs: 60_000 },
   { script: "qa:reviewed-fabrika-program-enrichment", timeoutMs: 60_000 },
   { script: "qa:reviewed-pending-performer-correction", timeoutMs: 60_000 },
