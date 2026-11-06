@@ -279,6 +279,33 @@ seven November repair groups remain frozen. Verified Drugstore spelling variants
 belong in the venue's aliases for subsequent ingestion; approved historical
 events still require their existing source-bound venue repair.
 
+The subsequent reviewed venue-link corrections use the existing single-source
+and multi-source venue repair APIs for independent events. Source-confirmed
+duplicate campaigns use the separate frozen
+`reviewedVenueLinksNovember2026Repairs:getContext` and `:consolidate` operator.
+Its exact reviewed cohorts are not an automatic same-venue/day merge policy.
+Preserve independent cinema/theatre times, the two Sava Centar performances,
+and the separately sourced Jura & Film concert at Hangar. Add only reviewed
+aliases to their physical venue; a broad area such as Beton Hala and a combined
+Vinyl/Tavan label are not interchangeable with one catalog venue.
+
+The exact Vinyl/Tavan New Year poster has a separate reviewed segmentation
+operator. Preserve its original combined observation as superseded evidence,
+retain existing saved references on the original Vinyl representative, and
+materialize only the two source-reviewed programmes with their respective
+artists and physical venues. The November 11 shared two-floor party remains
+one event with both venue names in its public description and Vinyl as its
+source-confirmed principal physical host. Never make a global combined-name
+alias or infer a per-floor artist allocation for that shared programme.
+
+The Elektropionir monthly source `DfW2QnXgNTq` has one separately reviewed cached
+receipt recovery. Correct the existing Lika Kolorado event from its exact saved
+poster/caption, then use the frozen retry-admission preflight for that source
+and receipt only. It may clear the obsolete retry deadline after the missing
+representative has been corrected; normal source revision/lease fences and
+occurrence-satisfaction APIs still perform completion. Never insert a second
+Lika event or use fresh extraction/provider transport for this cached repair.
+
 Instagram event extraction may use the posting account's canonical venue when
 the account is registered as a venue and the event does not name another
 physical venue. Explicit event, schedule-row, and shared venue claims retain
