@@ -123,8 +123,14 @@ try {
     h => { h.tables.get("sourceOccurrences").get(review.occurrences[0][0]).factsJson = "changed"; },
     h => { h.tables.get("events").get(review.occurrences[0][2]).artists = ["Different act"]; },
   ]) {
-    const { h } = fixture(); const before = h.snapshot(); damage(h); const damaged = h.snapshot();
-    await assert.rejects(() => h.transaction(admitCachedRetry._handler, { serviceSecret: secret, expectedContextSha256: "a".repeat(64), moderationNote: "Exact reviewed cached-only source admission." }));
+    const { h } = fixture(); const valid = await getContext._handler(h.ctx, { serviceSecret: secret });
+    const before = h.snapshot(); damage(h); const damaged = h.snapshot();
+    const changedContext = structuredClone(valid.context);
+    for (const field of ["source", "lika", "receipt", "venue"]) changedContext[field] = await h.db.get(changedContext[field]._id);
+    for (const field of ["occurrences", "siblings", "links", "likaLinks", "admissions"]) changedContext[field] = await Promise.all(changedContext[field].map(row => h.db.get(row._id)));
+    // A fresh digest must not mask a missing semantic/model/lease guard.
+    const freshDigest = sha256Hex(stable(changedContext));
+    await assert.rejects(() => h.transaction(admitCachedRetry._handler, { serviceSecret: secret, expectedContextSha256: freshDigest, moderationNote: "Exact reviewed cached-only source admission." }));
     assert.deepEqual(h.snapshot(), damaged, "Rejected admission performs zero writes."); assert.notDeepEqual(damaged, before);
   }
   for (const partial of [false, true]) {
