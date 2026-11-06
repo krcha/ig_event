@@ -4,6 +4,7 @@ import { NOVEMBER_2026_REVIEWS } from "../convex/internal/eventRepairs/reviewedN
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
+import { deleteExpiredEventWithSavedReferences } from "../convex/eventDomain/persistence.ts";
 import { updateEvent, mergeApprovedEvents, deleteApprovedEvent, recordInstagramSourceOccurrenceSatisfaction } from "../convex/events.ts";
 
 const clone = (value) => structuredClone(value);
@@ -137,6 +138,9 @@ function fixture(groupKey) {
   seed.savedEvents.push({ _id: "qa-save-primary", userId: "same-user", eventId: original._id, createdAt: 1 },
     { _id: "qa-save-component-same", userId: "same-user", eventId: review.rows[1][0], createdAt: 2 },
     { _id: "qa-save-component-new", userId: "other-user", eventId: review.rows[1][0], createdAt: 2 });
+  seed.userSavedEvents.push({ _id: "qa-legacy-primary", userId: "qa-legacy-user", eventId: original._id, savedAt: 1 },
+    { _id: "qa-legacy-component-same", userId: "qa-legacy-user", eventId: review.rows[1][0], savedAt: 2 },
+    { _id: "qa-legacy-component-new", userId: "qa-legacy-other", eventId: review.rows[1][0], savedAt: 2 });
   return { seed, review, firstSource };
 }
 
@@ -152,7 +156,7 @@ try {
     const observedBefore = before.occurrences.map((row) => [row._id, row.factsJson, row.canonicalEventJson]);
     const result = await h.transaction(consolidate._handler, args);
     assert.equal(result.rejectedIds.length, review.rows.length - 1);
-    assert.equal(result.movedSaveCount, 1); assert.equal(result.dedupedSaveCount, 1);
+    assert.equal(result.movedSaveCount, 2); assert.equal(result.dedupedSaveCount, 2);
     const after = await getContext._handler(h.ctx, { groupKey, serviceSecret: secret });
     assert.equal(after.complete, true);
     assert.equal(after.events[0].publicationState, "publishable");
@@ -174,6 +178,9 @@ try {
       expectedKeys: receipt.expectedKeys, expectedOccurrences: receipt.expectedOccurrences, deferredChildCount: 0, deferredChildKeys: [], observedChildKeys: receipt.expectedKeys };
     await assert.rejects(() => h.transaction(recordInstagramSourceOccurrenceSatisfaction._handler, { plan, satisfiedKey: before.links[0].sourceOccurrenceKey, representativeEventId: before.events[0]._id,
       processingFence: { handle: firstSource.handle, scrapedPostId: firstSource._id, owner: "qa-owner", sourceRevision: 1 }, serviceSecret: secret }), /[Cc]ampaign|[Ll]ineage|[Ff]olded|re-attestation/u);
+    const retention = await h.transaction((ctx) => deleteExpiredEventWithSavedReferences(ctx, after.events[0], { isoDate: "2026-11-10", minutesSinceMidnight: 0 }), {});
+    assert.deepEqual(retention, { deletedEventIds: [], deletedReferenceCount: 0, retainedEventCount: 1, topologyMutated: false },
+      "Generic retention must preserve a reviewed incident until a dedicated audited retirement exists.");
     assert.deepEqual(h.snapshot(), immutable, "Every rejected replay/generic edit must roll back completely.");
     for (const corrupt of [
       (state) => { state.tables.get("events").get(review.rows[1][0]).updatedAt += 1; },
@@ -186,6 +193,16 @@ try {
       assert.deepEqual(fresh.snapshot(), corruptBefore);
     }
     await assert.rejects(() => getContext._handler(h.ctx, { groupKey, serviceSecret: "wrong" }), /Authentication|Admin/u);
+    await assert.rejects(() => getContext._handler(h.adminCtx, { groupKey, serviceSecret: "wrong" }), /service authentication/u);
+    const interrupted = harness(seed);
+    const originalPatch = interrupted.db.patch;
+    interrupted.db.patch = async (id, patch) => {
+      if (id === review.rows[1][0]) throw new Error("Forced post-receipt transaction failure.");
+      return originalPatch(id, patch);
+    };
+    const interruptedBefore = interrupted.snapshot();
+    await assert.rejects(() => interrupted.transaction(consolidate._handler, args), /Forced post-receipt/u);
+    assert.deepEqual(interrupted.snapshot(), interruptedBefore, "A failure after primary/receipt writes rolls back all tables.");
     h.tables.get("events").get(review.rows[0][0]).status = "pending";
     await assert.rejects(() => getContext._handler(h.ctx, { groupKey, serviceSecret: secret }), /applied incident/u);
   }

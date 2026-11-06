@@ -36,7 +36,10 @@ Independent receipt siblings and their visibility must remain intact.
 
 The existing reviewed-fold lineage guards protect the resulting bindings from
 ordinary replay and generic event edits/merges. The general duplicate rules
-remain unchanged. Do not add new incidents to this frozen list as an automatic
+remain unchanged. Generic retention also preserves these finite reviewed groups;
+their eventual retirement requires a dedicated audited operation, as for the
+existing reviewed folds. Other event cleanup retains its existing behavior.
+Do not add new incidents to this frozen list as an automatic
 deduplication mechanism.
 
 `scripts/repair-reviewed-november-2026.mjs` previews one step and applies it only
