@@ -69,6 +69,9 @@ export async function loadReviewedNovemberSnapshot(adapter, groupKey) {
       `Reviewed backend returned an invalid context: ${group.key}.`);
     assert(context.groupKey === group.key && context.primaryId === group.primaryId,
       "Reviewed backend returned the wrong pinned group or primary event.");
+    const { contextSha256, ...reviewedContext } = context;
+    assert(/^[a-f0-9]{64}$/u.test(contextSha256 ?? "") && contextSha256 === sha256(reviewedContext),
+      "Reviewed backend context digest does not bind its complete returned evidence.");
     return { ...group, context };
   });
   return { groups: reviewedGroups, protectedEvents: protectedRows };
@@ -81,8 +84,9 @@ export function buildReviewedNovemberPlan(snapshot) {
     functionName: API.consolidate,
     args: {
       groupKey: pending.key,
-      // Preserve the server's deterministic serialization for its atomic fence.
-      expectedContextJson: JSON.stringify(pending.context),
+      // The complete snapshot stays in the private receipt; a fixed-size CAS
+      // digest avoids passing multi-source monthly schedules as one large string.
+      expectedContextSha256: pending.context.contextSha256,
       moderationNote: NOTE,
     },
   } : null;

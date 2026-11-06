@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { buildReviewedNovemberPlan, loadReviewedNovemberSnapshot, REVIEWED_NOVEMBER_GROUPS, runReviewedNovemberRepair } from "./repair-reviewed-november-2026.mjs";
+import { createHash } from "node:crypto";
+import { buildReviewedNovemberPlan, loadReviewedNovemberSnapshot, REVIEWED_NOVEMBER_GROUPS, runReviewedNovemberRepair, stableReviewedJson } from "./repair-reviewed-november-2026.mjs";
 
 const clone = (value) => structuredClone(value);
+const contextDigest = (value) => createHash("sha256").update(stableReviewedJson(value)).digest("hex");
 function fixture() {
   const state = {
     events: [
@@ -24,12 +26,14 @@ function fixture() {
       state.afterRead?.(name, args);
       if (name === "events:getManyByIds") return clone(state.events);
       assert.equal(name, "reviewedNovember2026Repairs:getContext");
-      return clone(state.contexts[args.groupKey]);
+      const context = clone(state.contexts[args.groupKey]);
+      return { ...context, contextSha256: contextDigest(context) };
     },
     async mutation(name, args) {
       state.mutations.push({ name, args: clone(args) });
       assert.equal(name, "reviewedNovember2026Repairs:consolidate");
-      assert.equal(args.expectedContextJson, JSON.stringify(state.contexts[args.groupKey]), "Backend receives the exact reviewed context, including saved references.");
+      assert.equal(args.expectedContextSha256, contextDigest(state.contexts[args.groupKey]), "Backend receives the digest of the complete reviewed context, including saved references.");
+      assert.equal(Object.hasOwn(args, "expectedContextJson"), false, "Large source evidence stays in the private receipt instead of a function argument string.");
       state.contexts[args.groupKey].complete = true;
       state.afterMutation?.();
       return { complete: true, primaryId: state.contexts[args.groupKey].events[0]._id };
@@ -149,6 +153,18 @@ for (const { key } of REVIEWED_NOVEMBER_GROUPS) {
   state.contexts["dksg-nov6"].primaryId = "a-different-event";
   await assert.rejects(runReviewedNovemberRepair(adapter), /wrong pinned group/u);
   assert.equal(state.mutations.length, 0);
+}
+
+{
+  const { state, adapter } = fixture();
+  const query = adapter.query;
+  adapter.query = async (name, args) => {
+    const result = await query(name, args);
+    if (name === "reviewedNovember2026Repairs:getContext") result.contextSha256 = "0".repeat(64);
+    return result;
+  };
+  await assert.rejects(runReviewedNovemberRepair(adapter), /digest does not bind/u);
+  assert.equal(state.mutations.length, 0, "A malformed server evidence digest cannot become an actionable preview.");
 }
 
 console.log("Reviewed November operator QA passed: exact preview/apply fences, protected sessions, private receipts and uncertain-write recovery.");

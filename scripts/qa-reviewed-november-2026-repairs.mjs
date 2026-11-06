@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { getContext, consolidate } from "../convex/reviewedNovember2026Repairs.ts";
-import { NOVEMBER_2026_REVIEWS } from "../convex/internal/eventRepairs/reviewedNovember2026Repairs.ts";
+import { NOVEMBER_2026_REVIEWS, withNovember2026ReadCache } from "../convex/internal/eventRepairs/reviewedNovember2026Repairs.ts";
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 import { buildEventOccurrenceIndexPatch } from "../convex/sourceOccurrences.ts";
@@ -20,10 +20,13 @@ export function harness(seed) {
   const tables = new Map(Object.entries(seed).map(([name, rows]) => [name, new Map(rows.map((row) => [row._id, clone(row)]))]));
   const getTable = (name) => { if (!tables.has(name)) tables.set(name, new Map()); return tables.get(name); };
   let counter = 0;
+  const queryReads = [];
+  const rangeCallbacks = [];
   const find = (id) => [...tables.values()].find((table) => table.has(id));
   const rows = (name, predicates) => [...getTable(name).values()].filter((row) => predicates.every((predicate) => predicate(row))).map(clone);
   const result = (name, predicates = []) => ({
     withIndex(_index, callback) {
+      rangeCallbacks.push(_index);
       const filters = [];
       const builder = Object.fromEntries(["eq", "gt", "gte", "lt", "lte"].map((op) => [op, (field, value) => {
         filters.push((row) => op === "eq" ? row[field] === value : op === "gt" ? row[field] > value : op === "gte" ? row[field] >= value : op === "lt" ? row[field] < value : row[field] <= value);
@@ -32,9 +35,9 @@ export function harness(seed) {
       callback(builder); return result(name, [...predicates, ...filters]);
     },
     order() { return this; },
-    async take(limit) { return rows(name, predicates).slice(0, limit); },
-    async first() { return rows(name, predicates)[0] ?? null; },
-    async unique() { const found = rows(name, predicates); assert.ok(found.length < 2); return found[0] ?? null; },
+    async take(limit) { queryReads.push([name, "take", limit]); return rows(name, predicates).slice(0, limit); },
+    async first() { queryReads.push([name, "first"]); return rows(name, predicates)[0] ?? null; },
+    async unique() { queryReads.push([name, "unique"]); const found = rows(name, predicates); assert.ok(found.length < 2); return found[0] ?? null; },
     async collect() { throw new Error("Unbounded QA query forbidden."); },
   });
   const db = {
@@ -47,6 +50,7 @@ export function harness(seed) {
       for (const [key, item] of Object.entries(value)) if (item === undefined) delete value[key];
       table.set(id, value);
     },
+    async replace(id, value) { const table = find(id); assert.ok(table); table.set(id, { _id: id, ...clone(value) }); },
     async delete(id) { assert.ok(find(id)?.delete(id)); },
     async insert(name, value) {
       const id = `qa-${name}-${++counter}`;
@@ -61,7 +65,7 @@ export function harness(seed) {
     try { return await handler(context, args); }
     catch (error) { tables.clear(); for (const [name, entries] of before) tables.set(name, new Map(entries)); throw error; }
   }
-  return { ctx, adminCtx, db, tables, snapshot, transaction };
+  return { ctx, adminCtx, db, tables, snapshot, transaction, queryReads, rangeCallbacks };
 }
 
 function fixture(groupKey) {
@@ -121,6 +125,46 @@ function fixture(groupKey) {
     receipt.expectedKeys.push(key); receipt.satisfiedKeys.push(key);
     receipt.expectedOccurrences.push({ key, title, date: event.date, time, venue: event.venue, artists }); receipt.satisfiedOccurrences.push({ key, eventId: id });
   }
+  if (groupKey === "bitef-nov6") {
+    const event = seed.events[2];
+    const latestLink = seed.instagramEventSources[2];
+    const latestOccurrence = seed.sourceOccurrences[2];
+    const latestFields = JSON.parse(event.normalizedFieldsJson);
+    const oldKey = "instagram-occurrence-v2:7af554834084ea90cf27a67569daa431b09663b522787571476a64bd0a6409bc";
+    const latestKey = "instagram-occurrence-v2:31126e9cc2382e4b46f75f6f3948de874b267682576dff6124038334c6af13db";
+    const previousKey = latestLink.sourceOccurrenceKey;
+    event.sourceOccurrenceKey = oldKey;
+    latestFields.sourceOccurrenceKey = latestKey;
+    event.normalizedFieldsJson = JSON.stringify(latestFields);
+    latestLink._id = "kx71vqyt7qghnyn7wa8e964pds8hfxht";
+    latestLink.sourceOccurrenceKey = latestKey;
+    latestOccurrence.sourceOccurrenceKey = latestKey;
+    const latestReceipt = seed.instagramSourceOccurrenceReceipts.find((row) => row.sourceIdentity === latestLink.sourceIdentity);
+    latestReceipt.expectedKeys = latestReceipt.expectedKeys.map((key) => key === previousKey ? latestKey : key);
+    latestReceipt.satisfiedKeys = latestReceipt.satisfiedKeys.map((key) => key === previousKey ? latestKey : key);
+    latestReceipt.expectedOccurrences = latestReceipt.expectedOccurrences.map((row) => ({ ...row, key: latestKey }));
+    latestReceipt.satisfiedOccurrences = latestReceipt.satisfiedOccurrences.map((row) => ({ ...row, key: latestKey }));
+    const oldCaption = "Earlier independently saved November performance schedule.";
+    const oldFingerprint = buildInstagramSourceOccurrenceFingerprint({ caption: oldCaption });
+    const oldSource = { ...clone(seed.scrapedPosts[2]), _id: "qa-old-bitef-source", postId: "qa-old-bitef-post-id",
+      instagramPostUrl: "https://www.instagram.com/p/DfEpAnJtj4U/", caption: oldCaption,
+      analysisResultJson: JSON.stringify({ extraction_contract_version: "event_evidence_v2", is_event: true, source_caption: oldCaption }) };
+    seed.scrapedPosts.push(oldSource);
+    const oldFields = { ...latestFields, sourceOccurrenceKey: oldKey, sourceOccurrenceSourceFingerprint: oldFingerprint,
+      sourceGroundingSourceCaption: oldCaption, sourceGroundingInstagramPostId: oldSource.postId, sourceGroundingInstagramPostUrl: oldSource.instagramPostUrl };
+    const oldOccurrence = { ...clone(latestOccurrence), _id: "qa-old-bitef-occurrence", sourceIdentity: "instagram-source-identity-v1:DfEpAnJtj4U",
+      sourceFingerprint: oldFingerprint, sourceOccurrenceKey: oldKey, sourceDocumentId: oldSource._id,
+      canonicalSourceUrl: oldSource.instagramPostUrl,
+      canonicalEventJson: JSON.stringify({ normalizedFieldsJson: JSON.stringify(oldFields), requestedStatus: "pending", sourceConflictFields: [],
+        time: "20:00", timeConfidence: 0.95, timeSource: "schedule_entry", timeStatus: "confirmed" }) };
+    seed.sourceOccurrences.push(oldOccurrence);
+    seed.instagramEventSources.push({ ...clone(latestLink), _id: "kx7evzc6gnhcypf755bm8a8r558h9sp9", sourceIdentity: oldOccurrence.sourceIdentity,
+      sourceFingerprint: oldFingerprint, sourceOccurrenceKey: oldKey, sourceOccurrenceId: oldOccurrence._id,
+      instagramPostId: oldSource.postId, instagramPostUrl: oldSource.instagramPostUrl });
+    seed.instagramSourceOccurrenceReceipts.push({ _id: "qa-old-bitef-receipt", _creationTime: 1, sourceIdentity: oldOccurrence.sourceIdentity,
+      sourceFingerprint: oldFingerprint, expectedKeys: [oldKey], expectedOccurrences: [{ key: oldKey, title: event.title, date: event.date, time: event.time, venue: event.venue, artists: event.artists }],
+      satisfiedKeys: [oldKey], satisfiedOccurrences: [{ key: oldKey, eventId: event._id }], deferredChildCount: 0, deferredChildKeys: [], createdAt: 1, updatedAt: 1 });
+  }
   // Independent rows at the same venue, including a different-time performance,
   // must survive exactly. A shared-receipt sibling also exercises source-wide reads.
   const original = seed.events[0];
@@ -135,6 +179,10 @@ function fixture(groupKey) {
   seed.sourceOccurrences.push({ ...clone(seed.sourceOccurrences[0]), _id: "qa-unrelated-source-occurrence", sourceOccurrenceKey: sibling.sourceOccurrenceKey, canonicalEventId: sibling._id,
     normalizedOccurrenceJson: JSON.stringify({ title: sibling.title, date: sibling.date, time: sibling.time, artists: sibling.artists, venue: sibling.venue, venueId: sibling.venueId, eventType: sibling.eventType }) });
   seed.instagramEventSources.push({ ...clone(seed.instagramEventSources[0]), _id: "qa-unrelated-link", eventId: sibling._id, sourceOccurrenceKey: sibling.sourceOccurrenceKey, sourceOccurrenceId: "qa-unrelated-source-occurrence" });
+  if (groupKey === "kuko-nov7") {
+    for (const link of seed.instagramEventSources) delete link.sourceOccurrenceId;
+    seed.sourceOccurrences = seed.sourceOccurrences.filter((row) => row._id !== "qa-source-occurrence-0");
+  }
   seed.savedEvents.push({ _id: "qa-save-primary", userId: "same-user", eventId: original._id, createdAt: 1 },
     { _id: "qa-save-component-same", userId: "same-user", eventId: review.rows[1][0], createdAt: 2 },
     { _id: "qa-save-component-new", userId: "other-user", eventId: review.rows[1][0], createdAt: 2 });
@@ -145,12 +193,61 @@ function fixture(groupKey) {
 }
 
 try {
+  const pointReads = [];
+  const cacheHarness = harness({ events: [{ _id: "cache-a", title: "before" }, { _id: "cache-b", title: "unchanged" }] });
+  const rawGet = cacheHarness.db.get;
+  cacheHarness.db.get = async (...args) => { pointReads.push(args); return rawGet(...args); };
+  const cachedCtx = withNovember2026ReadCache(cacheHarness.ctx);
+  await cachedCtx.db.get("cache-a"); await cachedCtx.db.get("cache-a"); await cachedCtx.db.get("cache-b");
+  assert.equal(pointReads.length, 2, "Repeated point reads share one invocation snapshot.");
+  await cachedCtx.db.patch("cache-a", { title: "after patch" });
+  assert.equal((await cachedCtx.db.get("cache-a")).title, "after patch");
+  await cachedCtx.db.get("cache-b");
+  assert.equal(pointReads.length, 4, "Every write clears the entire point-read cache.");
+  await cachedCtx.db.replace("cache-a", { title: "after replace" });
+  assert.equal((await cachedCtx.db.get("cache-a")).title, "after replace");
+  const inserted = await cachedCtx.db.insert("events", { title: "inserted" });
+  assert.equal((await cachedCtx.db.get(inserted)).title, "inserted");
+  await cachedCtx.db.delete(inserted);
+  assert.equal(await cachedCtx.db.get(inserted), null);
+  await withNovember2026ReadCache(cacheHarness.ctx).db.get("cache-a");
+  assert.equal(pointReads.length, 8, "A new invocation never reuses another invocation's cached values.");
+  const queryHarness = harness({ events: [
+    { _id: "query-a", title: "same", score: 1 }, { _id: "query-b", title: "same", score: 2 },
+    { _id: "query-c", title: "different", score: 3 },
+  ], other: [{ _id: "query-other", title: "same", score: 1 }] });
+  const queryCtx = withNovember2026ReadCache(queryHarness.ctx);
+  const byTitle = (title, table = "events") => queryCtx.db.query(table).withIndex("by_title", (q) => q.eq("title", title));
+  const originalOrder = await byTitle("same").take(10);
+  originalOrder.reverse();
+  assert.deepEqual((await byTitle("same").take(10)).map((row) => row._id), ["query-a", "query-b"]);
+  assert.equal(queryHarness.queryReads.length, 1, "Identical bounded queries reuse their result and preserve cached array order.");
+  assert.equal(queryHarness.rangeCallbacks.length, 2, "Each original native range callback executes exactly once, including cached queries.");
+  assert.deepEqual((await byTitle("different").take(10)).map((row) => row._id), ["query-c"], "Same closure body with different captured bound values must not share results.");
+  assert.equal((await byTitle("same").take(1)).length, 1, "Different limits are different queries.");
+  await byTitle("same").order("asc").take(10);
+  await byTitle("same").order("desc").take(10);
+  assert.equal(queryHarness.queryReads.length, 5, "Order is part of the cache key.");
+  assert.equal((await byTitle("same").first())._id, "query-a");
+  assert.equal((await byTitle("different").unique())._id, "query-c");
+  assert.equal((await byTitle("same", "other").take(10))[0]._id, "query-other");
+  const byRange = (lower) => queryCtx.db.query("events").withIndex("by_score", (q) => q.gte("score", lower).lt("score", 3));
+  assert.equal((await byRange(1).take(10)).length, 2);
+  assert.equal((await byRange(2).take(10)).length, 1);
+  const readsBeforePatch = queryHarness.queryReads.length;
+  await queryCtx.db.patch("query-a", { title: "different" });
+  assert.deepEqual((await byTitle("same").take(10)).map((row) => row._id), ["query-b"]);
+  assert.equal((await byTitle("different").take(10)).length, 2);
+  assert.equal(queryHarness.queryReads.length, readsBeforePatch + 2, "Every write invalidates ALL query result cohorts.");
+  await withNovember2026ReadCache(queryHarness.ctx).db.query("events").withIndex("by_title", (q) => q.eq("title", "same")).take(10);
+  assert.equal(queryHarness.queryReads.length, readsBeforePatch + 3, "Query results never cross invocation boundaries.");
   for (const groupKey of Object.keys(NOVEMBER_2026_REVIEWS)) {
     const { seed, review, firstSource } = fixture(groupKey);
     const h = harness(seed);
     const before = await getContext._handler(h.ctx, { groupKey, serviceSecret: secret });
     assert.equal(before.complete, false);
-    const args = { groupKey, expectedContextJson: JSON.stringify(before), moderationNote: "User reviewed these exact public source rows and requested one consolidated occurrence.", serviceSecret: secret };
+    assert.match(before.contextSha256, /^[a-f0-9]{64}$/u);
+    const args = { groupKey, expectedContextSha256: before.contextSha256, moderationNote: "User reviewed these exact public source rows and requested one consolidated occurrence.", serviceSecret: secret };
     const siblingBefore = await h.db.get("qa-unrelated-performance");
     const sourceBefore = clone(seed.scrapedPosts);
     const observedBefore = before.occurrences.map((row) => [row._id, row.factsJson, row.canonicalEventJson]);
@@ -165,7 +262,7 @@ try {
     for (const [id, facts, canonical] of observedBefore) { const occurrence = await h.db.get(id); assert.equal(occurrence.factsJson, facts); assert.equal(occurrence.canonicalEventJson, canonical); }
     for (const event of after.events) assert.equal(isCrossPostCampaignLineageEvent(event), true);
     for (const component of after.events.slice(1)) assert.equal(component.status, "rejected");
-    assert.equal(after.links.length, review.rows.length);
+    assert.equal(after.links.length, review.rows.length + (groupKey === "bitef-nov6" ? 1 : 0));
     assert.ok(after.saves.slice(1).every((item) => item.canonical.length === 0 && item.legacy.length === 0));
     if (groupKey === "bife-nov7") { assert.equal(after.events[0].ticketPrice, undefined); assert.match(after.events[0].description, /700 RSD per dish.*20:00/u); }
     const immutable = h.snapshot();

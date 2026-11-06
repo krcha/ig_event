@@ -25,7 +25,7 @@ export const getContext = query({
 export const consolidate = mutation({
   args: {
     groupKey,
-    expectedContextJson: v.string(),
+    expectedContextSha256: v.string(),
     moderationNote: v.string(),
     serviceSecret: v.string(),
   },

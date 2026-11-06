@@ -30,9 +30,18 @@ coverage, not model fine-tuning or a guarantee for every future poster.
 operator APIs for seven fixed incident groups. They accept a group key rather
 than arbitrary event IDs or replacement public facts. The exact reviewed
 context fences event, source, occurrence, receipt, venue, sibling and saved
-reference revisions. Existing source evidence is retained, selected component
+reference revisions. The server returns its SHA-256 digest and recomputes it
+inside the write; the full snapshot stays in the private receipt instead of a
+large string argument. Existing source evidence is retained, selected component
 listings are rejected, and saved references move to the retained listing.
 Independent receipt siblings and their visibility must remain intact.
+
+The operation caches identical indexed reads only within its own invocation,
+with actual index bounds and limits in each key. Every write invalidates that
+cache. This preserves all before/after proofs while fitting the self-hosted
+transaction read limit; ordinary ingestion does not use this cache. Regression
+and private real-data checks cover the historical KUKO compatibility link and
+both independent retained Bitef sources.
 
 The existing reviewed-fold lineage guards protect the resulting bindings from
 ordinary replay and generic event edits/merges. The general duplicate rules
