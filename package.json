@@ -121,6 +121,7 @@
     "qa:venue-coordinates": "node scripts/qa-venue-coordinates.mjs",
     "qa:reviewed-venue-map": "node scripts/qa-reviewed-venue-map-correction.mjs",
     "qa:app-toolbar": "node scripts/qa-app-toolbar.mjs",
+    "qa:install-prompt": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-install-prompt.mjs",
     "qa:seo": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-seo.mjs",
     "qa:brand": "node scripts/qa-event-zeka-brand.mjs",
     "qa:discover-feed": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-discover-feed.mjs",

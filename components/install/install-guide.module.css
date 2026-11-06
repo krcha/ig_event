@@ -1,0 +1,105 @@
+.guide {
+  width: min(calc(100% - 40px), 900px);
+  margin-inline: auto;
+  padding-block: 16px calc(7rem + env(safe-area-inset-bottom));
+  color: var(--foreground);
+}
+
+.guide :is(h1, h2, h3) { text-wrap: balance; }
+.guide :is(h1, h2) { letter-spacing: -.03em; }
+.guide :is(p, h1, h2, h3, strong, span) { overflow-wrap: anywhere; }
+.guide :is(a, button, summary, [role="tabpanel"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+.backLink { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; text-decoration: none; }
+.backLink svg { width: 18px; height: 18px; flex: none; }
+.backLink:hover { color: var(--primary); }
+.hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 22px 0 30px; border-bottom: 1px solid var(--border); }
+.heroIcon { width: 80px; height: 80px; border-radius: 16px; margin-bottom: 22px; }
+.hero h1 { max-width: 100%; margin: 0; font-size: 43px; line-height: 1.08; font-weight: 700; letter-spacing: -.035em; }
+.hero h1 span { color: var(--primary); }
+.hero > p { max-width: 65ch; margin: 16px 0 0; font-size: 15px; line-height: 1.6; color: var(--muted-foreground); }
+.installation { padding-top: 28px; }
+.installation > h2 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 700; }
+.platformTabs { display: flex; margin-top: 18px; border-bottom: 1px solid var(--border); }
+.platformTabs button { min-width: 0; flex: 1; border: 0; border-bottom: 3px solid transparent; min-height: 50px; padding: 10px; background: transparent; font: inherit; font-size: 14px; white-space: normal; overflow-wrap: anywhere; color: var(--muted-foreground); cursor: pointer; }
+.platformTabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.platformTabs button:hover { background: var(--card); }
+.platformNote { margin: 22px 0 24px; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: install-step; }
+.steps > li { counter-increment: install-step; position: relative; padding: 0 0 30px 39px; min-width: 0; }
+.steps > li::before { content: counter(install-step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid var(--border); border-radius: 50%; font-size: 12px; font-weight: 600; color: var(--primary); font-variant-numeric: tabular-nums; }
+.stepCopy { min-width: 0; }
+.stepCopy h3 { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.45; letter-spacing: -.02em; }
+.stepCopy p { max-width: 65ch; margin: 7px 0 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.6; }
+.stepCopy strong { color: var(--foreground); font-weight: 500; }
+.inlineIcon { display: inline-block; vertical-align: middle; width: 17px; height: 20px; margin-inline: 3px; color: var(--foreground); }
+.diagram { min-width: 0; margin-top: 15px; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.4; }
+.diagram svg { width: 19px; height: 19px; flex: none; stroke-width: 1.8; }
+.browserAddress { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 20px; min-height: 38px; margin-bottom: 12px; padding: 8px; border-radius: 10px; background: var(--background); color: var(--muted-foreground); font-size: 13px; }
+.browserAddress svg { width: 16px; height: 16px; }
+.menuLine { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 10px 8px; border-radius: 10px; font-size: 12px; }
+.menuLine strong { min-width: 0; font-size: 12px; font-weight: 500; }
+.highlight { outline: 1px solid var(--primary); outline-offset: -1px; background: var(--background); color: var(--foreground); }
+.highlight > svg { color: var(--primary); }
+.tapCaption { margin-left: auto; font-size: 12px; color: var(--primary); }
+.mutedLine { color: var(--muted-foreground); }
+.appIcon { display: block; border-radius: 10px; flex: none; }
+.sharePreview { display: flex; align-items: center; gap: 10px; padding: 3px 8px 13px; margin-bottom: 7px; border-bottom: 1px solid var(--border); }
+.sharePreview > div, .appIdentity > div { min-width: 0; }
+.sharePreview strong, .appIdentity strong { display: block; font-size: 14px; font-weight: 600; }
+.sharePreview span, .appIdentity span { display: block; color: var(--muted-foreground); font-size: 12px; margin-top: 3px; }
+.confirmTop { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px; min-height: 36px; font-size: 12px; color: var(--muted-foreground); }
+.confirmTop > strong { min-width: 0; font-size: 12px; font-weight: 500; color: var(--foreground); }
+.nativeAction { display: inline-block; border: 1px solid var(--primary); border-radius: 10px; padding: 5px 7px; color: var(--primary); }
+.appIdentity { display: flex; align-items: center; gap: 12px; padding: 18px 6px; }
+.switchRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 6px; border-top: 1px solid var(--border); font-size: 13px; }
+.nativeSwitch { flex: none; position: relative; display: block; width: 34px; height: 21px; border-radius: 9999px; background: var(--primary); }
+.nativeSwitch::after { content: ""; position: absolute; right: 2px; top: 2px; width: 17px; height: 17px; border-radius: 50%; background: var(--background); }
+.browserFootnote { margin: 0 0 0 39px; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.chromeAddress { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding-left: 12px; }
+.chromeAddress > span:first-child { min-width: 0; }
+.kebab { display: grid; place-items: center; flex: none; border-radius: 10px; padding: 8px; }
+.androidActions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 24px; padding: 4px 6px 6px; color: var(--muted-foreground); }
+.guideDone { display: flex; flex-direction: column; margin-top: 25px; }
+.guideDone > a { width: 100%; min-height: 46px; text-align: center; }
+.guideDone > p { margin: 12px 0 0; text-align: center; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
+.help { margin-top: 38px; padding-top: 28px; border-top: 1px solid var(--border); }
+.help h2 { margin: 0 0 12px; font-size: 22px; line-height: 1.25; font-weight: 700; }
+.helpDetail { border-bottom: 1px solid var(--border); }
+.helpDetail summary { cursor: pointer; padding: 18px 4px; font-size: 14px; line-height: 1.5; }
+.helpDetail p { margin: 0; padding: 0 4px 18px; color: var(--muted-foreground); font-size: 14px; line-height: 1.65; }
+.sourceLinks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.sourceLinks a { color: var(--foreground); text-underline-offset: 4px; }
+.sourceLinks a:hover { color: var(--primary); }
+
+@media (max-width: 350px) {
+  .hero h1 { font-size: 37px; }
+  .installation > h2 { font-size: 23px; }
+  .steps > li { padding-left: 34px; }
+  .diagram { padding: 8px; }
+  .tapCaption { display: none; }
+  .browserFootnote { margin-left: 34px; }
+}
+
+@media (min-width: 768px) {
+  .guide { width: min(calc(100% - 64px), 900px); padding-block: 24px 48px; }
+  .hero { padding: 28px 0 38px; }
+  .heroIcon { width: 88px; height: 88px; }
+  .hero h1 { font-size: 58px; }
+  .hero > p { font-size: 16px; margin-top: 18px; }
+  .installation { padding-top: 36px; }
+  .installation > h2 { font-size: 28px; }
+  .platformTabs { max-width: 490px; margin-top: 23px; }
+  .platformTabs button { min-height: 54px; padding: 12px 20px; font-size: 15px; }
+  .platformNote { margin-top: 30px; font-size: 14px; }
+  .steps > li { padding-left: 46px; padding-bottom: 38px; }
+  .steps > li::before { width: 30px; height: 30px; font-size: 14px; }
+  .browserFootnote { margin-left: 46px; }
+  .guideDone { max-width: 380px; margin: 28px 0 0 46px; }
+  .help { margin: 52px 0 0 46px; padding-top: 30px; }
+  .help h2 { font-size: 24px; margin-bottom: 20px; }
+}
+
+@media (min-width: 1000px) {
+  .steps > li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 310px); align-items: start; gap: 24px; }
+  .diagram { margin-top: 0; }
+}

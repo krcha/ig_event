@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>EventZeka App — predlog instalacije</title>
+  <link rel="icon" href="assets/event-zeka-icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="demo.js" defer></script>
+</head>
+<body data-page="events">
+  <div class="review-bar"><span>Lokalni dizajn demo</span><div><a href="install.html">Uputstvo</a><button type="button" id="replay">Ponovi 10 s</button></div></div>
+  <header class="site-header wrap">
+    <a class="brand" href="index.html" aria-label="Event Zeka početna"><svg viewBox="0 0 48 48" aria-hidden="true"><ellipse cx="17.5" cy="13" rx="5" ry="11" transform="rotate(-16 17.5 13)"/><ellipse cx="30.5" cy="13" rx="5" ry="11" transform="rotate(16 30.5 13)"/><circle cx="24" cy="29" r="13"/><circle cx="19.25" cy="27" r="1.35" fill="var(--lime)"/><circle cx="28.75" cy="27" r="1.35" fill="var(--lime)"/><path d="M22 32.2c1.1 1.35 2.9 1.35 4 0" stroke="var(--lime)" fill="none" stroke-width="1.8" stroke-linecap="round"/></svg>Event Zeka</a>
+    <span class="desktop-tagline">Događaji u Beogradu</span>
+    <div class="header-links"><a class="text-link" href="install.html">EventZeka App</a><a class="profile-link" href="install.html" aria-label="Uputstvo za instalaciju EventZeka App"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="9" r="3"/><path d="M6.5 19c.5-5.5 10.5-5.5 11 0"/></svg></a></div>
+  </header>
+  <main class="wrap events-main">
+    <section class="events-hero" aria-labelledby="events-title"><div><h1 id="events-title">Gde danas?</h1><p>Događaji u Beogradu</p></div><img class="skyline" src="assets/belgrade-skyline.png" alt="" width="2170" height="725"></section>
+    <div class="date-strip" aria-label="Primer izbora datuma"><button class="day active" type="button"><span>Danas</span><strong>5</strong></button><button class="day" type="button"><span>Sutra</span><strong>6</strong></button><button class="day" type="button"><span>Sub</span><strong>7</strong></button><button class="day" type="button"><span>Ned</span><strong>8</strong></button><button class="day" type="button"><span>Pon</span><strong>9</strong></button><button class="day" type="button"><span>Uto</span><strong>10</strong></button><button class="day" type="button"><span>Sre</span><strong>11</strong></button></div>
+    <label class="search-field"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/></svg><input id="event-search" type="search" placeholder="Događaj, mesto ili žanr" aria-label="Pretraži ilustrativne događaje"></label>
+    <div class="categories" aria-label="Kategorije primera"><button type="button" class="selected" data-category="all">Sve</button><button type="button" data-category="party"><i class="dot party"></i>Žurke</button><button type="button" data-category="live"><i class="dot live"></i>Live/Svirke</button><button type="button" data-category="culture"><i class="dot culture"></i>Kultura</button><button type="button" data-category="other"><i class="dot other"></i>Ostalo</button></div>
+    <p class="demo-data-note">Primer prikaza · ilustrativni događaji</p>
+    <div class="section-title"><h2>Večeras u gradu</h2><span>Po vremenu</span></div>
+    <div class="event-list">
+      <article class="event-row" data-kind="culture"><div class="event-time"><strong>18:00</strong><span>21:00</span></div><div class="event-content"><h3>Izložba u gradu</h3><p>Galerija · Beograd</p><span class="event-type"><i class="dot culture"></i>Kultura</span></div><button class="save" type="button" aria-label="Sačuvaj primer Izložba u gradu" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg></button></article>
+      <article class="event-row" data-kind="live"><div class="event-time"><strong>20:00</strong><span>23:00</span></div><div class="event-content"><h3>Veče uživo</h3><p>Muzički bar · Vračar</p><span class="event-type"><i class="dot live"></i>Live/Svirke</span></div><button class="save" type="button" aria-label="Sačuvaj primer Veče uživo" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg></button></article>
+      <article class="event-row" data-kind="party"><div class="event-time"><strong>22:00</strong><span>04:00</span></div><div class="event-content"><h3>DJ veče</h3><p>Klub · Dorćol</p><span class="event-type"><i class="dot party"></i>Žurke</span></div><button class="save" type="button" aria-label="Sačuvaj primer DJ veče" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg></button></article>
+      <article class="event-row" data-kind="other"><div class="event-time"><strong>19:00</strong><span>22:00</span></div><div class="event-content"><h3>Kviz sa ekipom</h3><p>Kafe · Stari grad</p><span class="event-type"><i class="dot other"></i>Ostalo</span></div><button class="save" type="button" aria-label="Sačuvaj primer Kviz sa ekipom" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg></button></article>
+    </div>
+    <p class="empty-message" hidden>Nema primera za ovu pretragu. Probaj drugu reč.</p>
+    <footer class="events-footer"><a href="install.html">Kako da instaliram EventZeka App?</a><p>Ovaj demo prikazuje ideju. Ne instalira aplikaciju.</p></footer>
+  </main>
+  <aside class="install-prompt" id="install-prompt" aria-labelledby="prompt-title" hidden>
+    <button class="close-prompt" id="dismiss-x" type="button" aria-label="Zatvori predlog za instalaciju"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    <div class="prompt-intro"><img src="assets/event-zeka-icon-192.png" width="64" height="64" alt=""><div><h2 id="prompt-title">EventZeka <span>App</span></h2><p>App za događaje u Beogradu</p></div></div>
+    <a class="primary-button" id="prompt-cta" href="install.html">Instaliraj EventZeka App<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg></a>
+    <button class="later-button" id="dismiss-later" type="button">Ne sada</button>
+  </aside>
+  <nav class="bottom-nav" aria-label="Navigacija demo prikaza"><a href="index.html" class="current" aria-current="page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4m8-4v4M8 14h2m4 0h2m-8 3h2"/></svg>Events</a><button type="button" data-demo-nav="discover"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6z"/></svg>Discover</button><button type="button" data-demo-nav="map"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0z"/><circle cx="12" cy="10" r="2"/></svg>Map</button><button type="button" data-demo-nav="saved"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4z"/></svg>Saved</button></nav>
+  <p class="sr-only" id="announcement" role="status" aria-live="polite"></p>
+  <div class="demo-toast" id="demo-toast" role="status" hidden></div>
+</body>
+</html>

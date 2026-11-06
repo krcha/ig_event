@@ -8,6 +8,7 @@ import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
 import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
 import { EventsUiProvider } from "@/components/calendar/events-ui-provider";
+import { InstallPrompt } from "@/components/install/install-prompt";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -96,7 +97,12 @@ function AppDocument({
       <Suspense fallback={null}>
         <AppToolbar />
       </Suspense>
-      <EventsUiProvider>{children}</EventsUiProvider>
+      <EventsUiProvider>
+        {children}
+        <Suspense fallback={null}>
+          <InstallPrompt />
+        </Suspense>
+      </EventsUiProvider>
     </div>
   );
 

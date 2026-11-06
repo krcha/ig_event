@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Download } from "lucide-react";
 import { YouProfilePanel } from "@/components/auth/you-profile-panel";
 
 export const metadata: Metadata = {
@@ -7,6 +9,13 @@ export const metadata: Metadata = {
 };
 
 export default function YouPage() {
+  const installLink = (
+    <Link className="button-secondary mx-auto gap-2" href="/install" lang="sr-Latn">
+      <Download aria-hidden="true" className="h-4 w-4" />
+      Instaliraj EventZeka App
+    </Link>
+  );
+
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
     return (
       <main className="app-page gap-3 sm:gap-4">
@@ -19,6 +28,7 @@ export default function YouPage() {
             Sign-in is temporarily offline, so saved events and followed places cannot load.
           </p>
         </section>
+        {installLink}
       </main>
     );
   }
@@ -26,6 +36,7 @@ export default function YouPage() {
   return (
     <main className="app-page gap-3 pb-[calc(7.5rem+env(safe-area-inset-bottom))] sm:gap-4 md:pb-9">
       <YouProfilePanel />
+      {installLink}
     </main>
   );
 }

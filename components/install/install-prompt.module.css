@@ -1,0 +1,81 @@
+.prompt {
+  --install-prompt-bottom: calc(6.5rem + env(safe-area-inset-bottom));
+  position: fixed;
+  z-index: 45;
+  bottom: var(--install-prompt-bottom);
+  left: 12px;
+  right: 12px;
+  max-height: calc(100dvh - var(--install-prompt-bottom) - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 28px 18px 6px;
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--foreground);
+  box-shadow: 0 12px 48px rgb(0 0 0 / .42);
+}
+
+.close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.intro { display: flex; align-items: center; gap: 13px; margin-bottom: 20px; padding-right: 8px; }
+.icon { width: 64px; height: 64px; flex-shrink: 0; border-radius: 14px; }
+.copy { flex: 1; min-width: 0; }
+.title { margin: 0; font-size: 29px; font-weight: 700; line-height: 1.12; letter-spacing: -.03em; overflow-wrap: anywhere; }
+.title span { color: var(--primary); }
+.description { margin: 8px 0 0; color: var(--muted-foreground); font-size: 14px; line-height: 1.45; text-wrap: pretty; }
+
+.install {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 50px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.install svg { flex-shrink: 0; }
+.install:hover { background: #C9EB58; }
+.later { display: block; width: 100%; min-height: 44px; color: var(--muted-foreground); font-size: 14px; cursor: pointer; }
+.later:hover, .close:hover { color: var(--primary); }
+
+@media (min-width: 768px) {
+  .prompt { --install-prompt-bottom: 24px; left: auto; right: 24px; width: 424px; max-width: calc(100% - 48px); padding: 28px 20px 6px; }
+  .intro { gap: 14px; margin-bottom: 22px; }
+  .title { font-size: 30px; }
+  .description { font-size: 15px; }
+}
+
+@media (max-width: 350px) {
+  .prompt { padding-inline: 16px; }
+  .intro { gap: 11px; padding-right: 0; }
+  .icon { width: 54px; height: 54px; }
+  .title { font-size: 25px; }
+  .description { font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .prompt { animation: appear 460ms cubic-bezier(.16,1,.3,1); }
+}
+
+@keyframes appear {
+  from { transform: translateY(calc(100% + var(--install-prompt-bottom))); opacity: .45; }
+  to { transform: translateY(0); opacity: 1; }
+}

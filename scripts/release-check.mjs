@@ -105,6 +105,7 @@ const checks = [
   { script: "qa:venue-coordinates", timeoutMs: 60_000 },
   { script: "qa:reviewed-venue-map", timeoutMs: 60_000 },
   { script: "qa:app-toolbar", timeoutMs: 60_000 },
+  { script: "qa:install-prompt", timeoutMs: 60_000 },
   { script: "qa:seo", timeoutMs: 60_000 },
   { script: "qa:brand", timeoutMs: 60_000 },
   { script: "qa:discover-feed", timeoutMs: 60_000 },

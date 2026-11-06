@@ -16,7 +16,7 @@ Event Zeka is a Belgrade events aggregator. Its public calendar connects events 
 
 ## Operating Context
 
-Public routes include Events and calendar browsing, Discover, Map, Saved, the guest/account profile, venue directory, venue details, and event details. Events offers date, text, category, Open now, and sorting controls. Discover retains its poster gallery and mobile swipe workflow. Map retains venue pins, date filtering, pan, zoom, and location controls.
+Public routes include Events and calendar browsing, Discover, Map, Saved, the guest/account profile, venue directory, venue details, event details, and the public installation guide at /install. Events offers date, text, category, Open now, and sorting controls. Discover retains its poster gallery and mobile swipe workflow. Map retains venue pins, date filtering, pan, zoom, and location controls. The /you page links to the installation guide for guests and signed-in visitors, including when authentication is unconfigured.
 
 Guests save locally. The existing sign-in and library flow synchronizes guest choices with the user's account. Authentication and account behavior remain part of the existing application rather than the earlier standalone HTML proposal.
 
@@ -28,6 +28,7 @@ Guests save locally. The existing sign-in and library flow synchronizes guest ch
 - Preserve original Instagram image/caption/source context and the existing expandable post and Save behavior.
 - Open now describes venue operating hours; it does not establish that an event has started. Preserve uncertainty and inferred-time labels.
 - Events sorting covers time, later first, title, and venue name. Sort the complete matching set stably before virtualization, using Serbian Latin comparison.
+- EventZeka App uses a nonmodal installation-guide prompt after ten visible seconds on eligible public browsing routes and a browsing interaction, at most once per Europe/Belgrade calendar day. Record the day when shown, keep dismissal local, and require a fresh document on the next day. The CTA opens /install with manual iPhone, Android, and computer instructions; it does not trigger native installation or add offline/push capabilities. The app storage namespace is separate from the earlier standalone proposal.
 - Release handoff requires `npm run qa:release` and `git diff --check`; build failures are release blockers. Never commit secrets or revert unrelated work.
 
 ## Brand Commitments
