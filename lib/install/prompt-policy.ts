@@ -2,6 +2,7 @@ import { getCalendarDateKeyInTimeZone } from "../events/nightlife-date";
 
 export const INSTALL_PROMPT_STORAGE_KEY = "eventzeka.install.lastShownDay.v1";
 export const INSTALL_PROMPT_DELAY_MS = 10_000;
+export const INSTALL_PROMPT_VISIBLE_MS = 10_000;
 
 const INSTALL_PROMPT_ROUTES = new Set(["/", "/events", "/calendar", "/discover"]);
 

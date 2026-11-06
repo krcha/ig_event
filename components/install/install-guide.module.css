@@ -8,7 +8,7 @@
 .guide :is(h1, h2, h3) { text-wrap: balance; }
 .guide :is(h1, h2) { letter-spacing: -.03em; }
 .guide :is(p, h1, h2, h3, strong, span) { overflow-wrap: anywhere; }
-.guide :is(a, button, summary, [role="tabpanel"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+.guide :is(a, button, summary, [role="tabpanel"], h2[tabindex="-1"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
 .backLink { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; text-decoration: none; }
 .backLink svg { width: 18px; height: 18px; flex: none; }
 .backLink:hover { color: var(--primary); }
@@ -18,7 +18,7 @@
 .hero h1 span { color: var(--primary); }
 .hero > p { max-width: 65ch; margin: 16px 0 0; font-size: 15px; line-height: 1.6; color: var(--muted-foreground); }
 .installation { padding-top: 28px; }
-.installation > h2 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 700; }
+.installation > h2 { margin: 0; scroll-margin-top: 72px; font-size: 25px; line-height: 1.2; font-weight: 700; }
 .platformTabs { display: flex; margin-top: 18px; border-bottom: 1px solid var(--border); }
 .platformTabs button { min-width: 0; flex: 1; border: 0; border-bottom: 3px solid transparent; min-height: 50px; padding: 10px; background: transparent; font: inherit; font-size: 14px; white-space: normal; overflow-wrap: anywhere; color: var(--muted-foreground); cursor: pointer; }
 .platformTabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }

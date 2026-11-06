@@ -32,6 +32,20 @@ Documentation uses ASCII. Visible Serbian text in components uses Latin
 diacritics. `EventZeka App` names this installation experience. The manifest and
 the illustrated native confirmation retain their existing name, `Event Zeka`.
 
+Both installation links open a fresh `/install#install-guide-title` document.
+After device detection has committed, the guide itself focuses
+`Uputstvo za instalaciju` without scrolling, then positions it immediately with
+72 px of clearance for the toolbar. This also handles plain `/install` links
+from previously opened clients; arrival no longer depends only on Next.js hash
+scrolling or a retained source-page position. Explicit links to other guide
+anchors retain their own destination.
+
+The initial position can settle during the first 1,500 ms as fonts load or
+layout changes. Corrections are coalesced through animation frames and stop on
+visitor input, history navigation, persisted page restoration, expiry, or
+unmount. Changing the platform tab manually does not restart landing. The
+guide's introduction remains available by scrolling upward.
+
 The CTA always opens the manual guide. This implementation does not capture
 `beforeinstallprompt`, call a native install API, add a service worker, or promise
 offline browsing or push notifications. The visitor confirms installation in
@@ -66,6 +80,14 @@ new visits on the same browser origin, profile, and device stay suppressed for
 that day. X, Escape, and `Ne sada` only close the prompt; they do not extend the
 daily limit. A fresh document on the following Belgrade day becomes eligible
 again after its timer, interaction, and suppression checks.
+
+Once revealed, the panel stays open for 10,000 ms, then closes automatically.
+A thin lime bar along its bottom edge shrinks over that interval. Closing by
+timer follows the same focus-return and announcement cleanup as an explicit
+dismissal. Navigating away or closing early clears the pending timeout; neither
+action resets the daily marker. Reduced motion uses ten discrete progress
+steps instead of continuous shrinking. The screen-reader announcement mentions
+the time limit and the permanent profile-page link to the guide.
 
 An old document never resets its entry day at midnight. It cannot reveal a new
 prompt after that boundary or overwrite a newer day's marker. A client-side
@@ -152,6 +174,7 @@ implementation does not restore the previous page's filters or scroll position.
 | File | Responsibility |
 | --- | --- |
 | `lib/install/prompt-policy.ts` | Exact routes, civil-day helper, storage key, and pure eligibility decision. |
+| `lib/install/guide-landing.ts` | Initial heading focus/position, bounded layout and scroll-restoration correction, and visitor-input cleanup. |
 | `components/install/install-prompt.tsx` | Timing, local persistence, suppression, cross-tab coordination, and navigation measurement. |
 | `components/install/install-prompt.module.css` | Responsive panel, reflow, scrolling, and reduced-motion reveal. |
 | `components/install/install-guide.tsx` | Manual platform instructions, accessible tabs, and browser-menu diagrams. |

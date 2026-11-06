@@ -1,14 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Download, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { useEventsUi } from "@/components/calendar/events-ui-provider";
 import {
   getInstallDayKey,
   INSTALL_PROMPT_STORAGE_KEY,
+  INSTALL_PROMPT_VISIBLE_MS,
   isInstallPromptRoute,
   shouldShowInstallPrompt,
 } from "@/lib/install/prompt-policy";
@@ -43,6 +43,19 @@ export function InstallPrompt() {
   const context = useRef({ pathname, filtersOpen });
   const prompt = useRef<HTMLElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+
+  const dismiss = useCallback(() => {
+    const hadFocus = prompt.current?.contains(document.activeElement);
+    setIsOpen(false);
+    setAnnouncement("");
+    if (hadFocus && previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timeout = window.setTimeout(dismiss, INSTALL_PROMPT_VISIBLE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [isOpen, dismiss]);
 
   useLayoutEffect(() => {
     context.current = { pathname, filtersOpen };
@@ -92,7 +105,7 @@ export function InstallPrompt() {
       catch { /* The current document still remembers the display. */ }
       previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setIsOpen(true);
-      setAnnouncement("Instaliraj EventZeka App. Uputstvo za instalaciju je dostupno ispod sadržaja.");
+      setAnnouncement("Instaliraj EventZeka App. Predlog se zatvara za 10 sekundi. Uputstvo je uvek dostupno na stranici profila.");
       stopTimer();
     }
 
@@ -171,11 +184,7 @@ export function InstallPrompt() {
       }
     }
     function escape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        const hadFocus = prompt.current?.contains(document.activeElement);
-        setIsOpen(false);
-        if (hadFocus && previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
-      }
+      if (event.key === "Escape") dismiss();
     }
     const observer = new MutationObserver(hideWhenProtected);
     observer.observe(document.body, {
@@ -194,7 +203,7 @@ export function InstallPrompt() {
       document.removeEventListener("visibilitychange", hideWhenProtected);
       document.removeEventListener("keydown", escape);
     };
-  }, [isOpen]);
+  }, [isOpen, dismiss]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -210,15 +219,11 @@ export function InstallPrompt() {
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
   }, [isOpen]);
 
-  function dismiss() {
-    const hadFocus = prompt.current?.contains(document.activeElement);
-    setIsOpen(false);
-    setAnnouncement("");
-    if (hadFocus && previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
-  }
-
   const showPanel = isOpen && isInstallPromptRoute(pathname) && !filtersOpen;
-  const position = bottomOffset === null ? undefined : { "--install-prompt-bottom": `${bottomOffset}px` } as CSSProperties;
+  const position = {
+    "--install-prompt-duration": `${INSTALL_PROMPT_VISIBLE_MS}ms`,
+    ...(bottomOffset === null ? {} : { "--install-prompt-bottom": `${bottomOffset}px` }),
+  } as CSSProperties;
 
   return (
     <>
@@ -235,10 +240,11 @@ export function InstallPrompt() {
               <p className={styles.description}>App za događaje u Beogradu</p>
             </div>
           </div>
-          <Link className={styles.install} href="/install" data-analytics="install-prompt-guide" onClick={() => setIsOpen(false)}>
+          <a className={styles.install} href="/install#install-guide-title" data-analytics="install-prompt-guide" onClick={dismiss}>
             Instaliraj EventZeka App <Download aria-hidden="true" size={19} />
-          </Link>
+          </a>
           <button className={styles.later} type="button" onClick={dismiss} data-analytics="install-prompt-later">Ne sada</button>
+          <div aria-hidden="true" className={styles.countdown} data-install-countdown><span /></div>
         </aside>
       ) : null}
     </>

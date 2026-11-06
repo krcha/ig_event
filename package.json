@@ -69,6 +69,8 @@
     "qa:instagram-occurrences": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instagram-occurrence-regressions.mjs",
     "qa:occurrence-merge-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-occurrence-merge-safety.mjs",
     "qa:reviewed-fold-safety": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fold-safety.mjs",
+    "qa:reviewed-november-repairs": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-november-2026-repairs.mjs",
+    "qa:reviewed-november-operator": "node scripts/qa-reviewed-november-operator.mjs",
     "qa:reviewed-fabrika-dj-night-enrichment": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fabrika-dj-night-enrichment.mjs",
     "qa:reviewed-fabrika-program-enrichment": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-fabrika-program-enrichment.mjs",
     "qa:reviewed-pending-performer-correction": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-reviewed-pending-performer-correction.mjs",

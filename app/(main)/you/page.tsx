@@ -10,10 +10,10 @@ export const metadata: Metadata = {
 
 export default function YouPage() {
   const installLink = (
-    <Link className="button-secondary mx-auto gap-2" href="/install" lang="sr-Latn">
+    <a className="button-secondary mx-auto gap-2" href="/install#install-guide-title" lang="sr-Latn">
       <Download aria-hidden="true" className="h-4 w-4" />
       Instaliraj EventZeka App
-    </Link>
+    </a>
   );
 
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {

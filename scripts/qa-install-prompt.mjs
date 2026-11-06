@@ -4,6 +4,7 @@ import {
   isInstallPromptRoute,
   shouldShowInstallPrompt,
 } from "../lib/install/prompt-policy.ts";
+import { startInstallGuideLanding } from "../lib/install/guide-landing.ts";
 
 // The daily cap follows Belgrade midnight, regardless of the visitor's timezone.
 const originalTimeZone = process.env.TZ;
@@ -86,4 +87,156 @@ for (const changes of [
 assert.equal(decide({ isBlocked: true, activeMs: 30_000 }), false, "A dialog or focused input delays display even after the timer completes.");
 assert.equal(decide({ isBlocked: false, activeMs: 30_000 }), true, "Display can resume when the interaction blocker clears.");
 
-console.log("Install prompt QA passed: Belgrade calendar-day and DST boundaries, daily visits, ten-second gating, midnight safety, public route scope, and interaction suppression.");
+function createLandingHarness({ hash = "", fonts = true, resizeObserver = true } = {}) {
+  const calls = [];
+  const listeners = new Map();
+  const frames = new Map();
+  const timers = new Map();
+  const observers = [];
+  let sequence = 0;
+  let resolveFonts;
+  const fontsReady = new Promise(resolve => { resolveFonts = resolve; });
+  const view = {
+    location: { hash },
+    scrollY: 4000,
+    addEventListener(type, callback) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(callback);
+    },
+    removeEventListener(type, callback) { listeners.get(type)?.delete(callback); },
+    requestAnimationFrame(callback) { const id = ++sequence; frames.set(id, callback); return id; },
+    cancelAnimationFrame(id) { frames.delete(id); },
+    setTimeout(callback, delay) { const id = ++sequence; timers.set(id, { callback, delay }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  if (resizeObserver) {
+    view.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; this.connected = false; observers.push(this); }
+      observe(element) { this.element = element; this.connected = true; }
+      disconnect() { this.connected = false; }
+    };
+  }
+  const document = { defaultView: view, ...(fonts ? { fonts: { ready: fontsReady } } : {}) };
+  const heading = {
+    ownerDocument: document,
+    isConnected: true,
+    focus(options) { calls.push({ action: "focus", options }); },
+    scrollIntoView(options) { calls.push({ action: "scroll", options }); view.scrollY = 354; },
+  };
+  const surface = { ownerDocument: document, isConnected: true };
+  return {
+    calls, frames, timers, observers, heading, surface, view,
+    listenerCount: () => [...listeners.values()].reduce((sum, entries) => sum + entries.size, 0),
+    emit(type, details = {}) {
+      for (const callback of [...listeners.get(type) ?? []]) callback({ type, ...details });
+    },
+    resize() { for (const observer of observers) if (observer.connected) observer.callback([]); },
+    flushFrames() {
+      const queued = [...frames.values()];
+      frames.clear();
+      for (const callback of queued) callback(0);
+    },
+    expire() {
+      for (const { callback } of [...timers.values()]) callback();
+    },
+    async fontsReady() { resolveFonts(); await Promise.resolve(); },
+  };
+}
+
+const expectedPosition = [
+  { action: "focus", options: { preventScroll: true } },
+  { action: "scroll", options: { block: "start", behavior: "instant" } },
+];
+
+for (const hash of ["", "#install-guide-title"]) {
+  const harness = createLandingHarness({ hash });
+  const stop = startInstallGuideLanding(harness.heading, harness.surface);
+  assert.deepEqual(harness.calls, [], "Guide positioning must wait until after parent layout effects.");
+  harness.emit("load");
+  harness.emit("pageshow", { persisted: false });
+  harness.resize();
+  assert.equal(harness.frames.size, 1, "Initial settling events coalesce into one animation frame.");
+  harness.flushFrames();
+  assert.deepEqual(harness.calls, expectedPosition, "Both old plain links and heading links focus without scrolling, then position instantly.");
+  assert.equal(harness.observers[0].element, harness.surface, "Observe the guide whose content changes during initialization.");
+  await harness.fontsReady();
+  harness.resize();
+  assert.equal(harness.frames.size, 1, "Font and content changes must share one positioning frame.");
+  harness.flushFrames();
+  assert.deepEqual(harness.calls, [...expectedPosition, ...expectedPosition], "Late initial fonts/content can correct the landing before user interaction.");
+  assert.equal([...harness.timers.values()][0].delay, 1500, "Initial correction must have a bounded lifetime.");
+  stop();
+  assert.equal(harness.listenerCount(), 0);
+  assert.equal(harness.frames.size, 0);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.observers[0].connected, false);
+}
+
+const otherAnchor = createLandingHarness({ hash: "#install-help-title" });
+startInstallGuideLanding(otherAnchor.heading, otherAnchor.surface)();
+assert.equal(otherAnchor.listenerCount(), 0, "An explicit link to another guide section must retain its target.");
+assert.equal(otherAnchor.frames.size, 0);
+assert.equal(otherAnchor.observers.length, 0);
+
+const restored = createLandingHarness();
+const stopRestored = startInstallGuideLanding(restored.heading, restored.surface);
+restored.flushFrames();
+restored.emit("scroll");
+assert.equal(restored.frames.size, 0, "The controller's own scroll event must not schedule a feedback loop.");
+restored.view.scrollY = 1200;
+restored.emit("scroll");
+assert.equal(restored.frames.size, 1, "Late browser restoration is corrected even without a resize or load event.");
+restored.flushFrames();
+assert.deepEqual(restored.calls, [...expectedPosition, ...expectedPosition]);
+assert.equal(restored.view.scrollY, 354);
+restored.emit("scroll");
+assert.equal(restored.frames.size, 0, "The correction's own event remains ignored.");
+restored.view.scrollY += 0.25;
+restored.emit("scroll");
+assert.equal(restored.frames.size, 0, "Fractional pixel rounding must not keep the initial landing alive.");
+stopRestored();
+
+for (const event of ["wheel", "touchstart", "pointerdown", "keydown", "popstate", "pageshow"]) {
+  const harness = createLandingHarness();
+  const stop = startInstallGuideLanding(harness.heading, harness.surface);
+  harness.flushFrames();
+  harness.resize();
+  harness.emit(event, { persisted: true });
+  await harness.fontsReady();
+  harness.emit("load");
+  harness.view.scrollY = 1200;
+  harness.emit("scroll");
+  harness.resize();
+  harness.flushFrames();
+  assert.deepEqual(harness.calls, expectedPosition, `${event} must stop pending and late corrections instead of taking over the visitor's position.`);
+  assert.equal(harness.listenerCount(), 0);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.observers[0].connected, false);
+  stop();
+}
+
+for (const exit of ["cleanup", "deadline", "disconnected"]) {
+  const harness = createLandingHarness();
+  const stop = startInstallGuideLanding(harness.heading, harness.surface);
+  if (exit === "cleanup") stop();
+  if (exit === "deadline") harness.expire();
+  if (exit === "disconnected") { harness.heading.isConnected = false; harness.flushFrames(); }
+  await harness.fontsReady();
+  harness.resize();
+  harness.emit("load");
+  harness.view.scrollY = 1200;
+  harness.emit("scroll");
+  harness.flushFrames();
+  assert.deepEqual(harness.calls, [], `${exit} must prevent late positioning and focus changes.`);
+  assert.equal(harness.listenerCount(), 0);
+  assert.equal(harness.timers.size, 0);
+}
+
+const optionalApis = createLandingHarness({ fonts: false, resizeObserver: false });
+const stopOptional = startInstallGuideLanding(optionalApis.heading, optionalApis.surface);
+optionalApis.flushFrames();
+assert.deepEqual(optionalApis.calls, expectedPosition, "The initial landing works without font or resize observation APIs.");
+stopOptional();
+assert.doesNotThrow(() => startInstallGuideLanding({ ownerDocument: { defaultView: null } }, {} )());
+
+console.log("Install prompt QA passed: daily/DST policy, route and interaction suppression; destination-owned guide landing, settling, user control, cleanup, and expiry.");
