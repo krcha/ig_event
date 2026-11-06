@@ -41,6 +41,8 @@ const discoverImageSourceSource = read("lib/discover/discover-image-source.ts");
 const apifyPostAlignmentSource = read("lib/discover/apify-post-alignment.ts");
 const apifyPostsSource = read("lib/discover/apify-posts.ts");
 const discoverImageRouteSource = read("app/api/discover/images/[eventId]/route.ts");
+const discoverImageDeliverySource = read("lib/images/public-event-image-delivery.ts");
+const publicRasterSource = read("lib/images/public-event-raster.ts");
 const readMoreTextSource = read("components/ui/read-more-text.tsx");
 const scrapedPostsSource = read("convex/scrapedPosts.ts");
 const nextConfigSource = read("next.config.mjs");
@@ -483,17 +485,17 @@ assertIncludes(
   "Discover image route should resolve media through the event source identity query.",
 );
 assertIncludes(
-  discoverImageRouteSource,
+  discoverImageDeliverySource,
   'source.kind === "stored"',
   "Discover image route should prefer durable stored media.",
 );
 assertIncludes(
-  discoverImageRouteSource,
+  publicRasterSource,
   "assertImageResponseHeaders",
   "Discover image route should enforce shared image content-type and content-length guardrails.",
 );
 assertIncludes(
-  discoverImageRouteSource,
+  publicRasterSource,
   "readImageResponseBodyWithLimit",
   "Discover image route should enforce a streamed byte cap before proxying.",
 );
@@ -503,7 +505,7 @@ assertIncludes(
   "Discover image route should disable content sniffing.",
 );
 assertIncludes(
-  discoverImageRouteSource,
+  discoverImageDeliverySource,
   "public, max-age=3600, stale-while-revalidate=86400",
   "Discover image route should cache durable first-party image responses.",
 );

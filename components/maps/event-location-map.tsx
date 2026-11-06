@@ -12,6 +12,7 @@ import "leaflet/dist/leaflet.css";
 import "./event-map.css";
 
 const BELGRADE_CENTER: [number, number] = [44.8125, 20.4612];
+const BELGRADE_ZOOM = 14;
 
 type EventLocationMapProps = {
   className?: string;
@@ -35,7 +36,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
   const mapRef = useRef<LeafletMap | null>(null);
   const markersRef = useRef(new Map<string, Marker>());
   const popupButtonsRef = useRef(new Map<string, HTMLButtonElement>());
-  const fitMapRef = useRef<(() => void) | null>(null);
+  const resetMapRef = useRef<(() => void) | null>(null);
   const locateUserRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
@@ -62,7 +63,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       const desktopViewport = window.matchMedia("(min-width: 1024px)");
       const map = L.map(containerRef.current, {
         center: BELGRADE_CENTER,
-        zoom: desktopViewport.matches ? 13 : 14,
+        zoom: BELGRADE_ZOOM,
         scrollWheelZoom: false,
         zoomControl: false,
         zoomAnimation: !reducedMotion,
@@ -338,26 +339,17 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
         group.forEach((entry) => markers.set(entry.location.id, marker));
       });
 
-      function fitMap() {
-        if (mapLocations.length === 0) {
-          map.setView(BELGRADE_CENTER, desktopViewport.matches ? 13 : 14);
-        } else {
-          map.fitBounds(L.latLngBounds(mapLocations.map((location) => [location.latitude, location.longitude])), {
-            paddingTopLeft: [64, 112],
-            paddingBottomRight: [64, 88],
-            maxZoom: 15,
-            animate: false,
-          });
-        }
+      function resetMap() {
+        // A venue outside Belgrade must not shrink the city's pins. Keep every
+        // marker available for deliberate selection or panning.
+        map.setView(BELGRADE_CENTER, BELGRADE_ZOOM, { animate: false });
       }
-      fitMapRef.current = fitMap;
-      if (desktopViewport.matches) fitMap();
-      else map.setView(BELGRADE_CENTER, 14, { animate: false });
+      resetMapRef.current = resetMap;
+      resetMap();
       const updateViewport = () => {
         map.closePopup();
         map.invalidateSize({ pan: false });
-        if (desktopViewport.matches) fitMap();
-        else map.setView(BELGRADE_CENTER, 14, { animate: false });
+        resetMap();
       };
       desktopViewport.addEventListener("change", updateViewport);
       removeViewportListener = () => {
@@ -381,7 +373,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       viewportMarkerCleanup.forEach((cleanup) => cleanup());
       markers.clear();
       popupButtons.clear();
-      fitMapRef.current = null;
+      resetMapRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -426,9 +418,9 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
                 {locationStatus === "locating" ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <LocateFixed aria-hidden="true" className={cn("size-3.5", locationStatus === "ready" && "text-blue-400")} />}
                 {locationStatus === "locating" ? "Locating..." : "My location"}
               </button>
-              <button className="button-secondary h-8 min-h-8 shrink-0 gap-1.5 whitespace-nowrap bg-card/95 px-2 py-0 text-[11px] leading-none shadow-lg sm:px-2.5" onClick={() => { mapRef.current?.closePopup(); fitMapRef.current?.(); }} type="button">
+              <button aria-label="Reset map to Belgrade" className="button-secondary h-8 min-h-8 shrink-0 gap-1.5 whitespace-nowrap bg-card/95 px-2 py-0 text-[11px] leading-none shadow-lg sm:px-2.5" onClick={() => { mapRef.current?.closePopup(); resetMapRef.current?.(); }} type="button">
                 <Expand aria-hidden="true" className="size-3.5" />
-                Show all
+                Belgrade
               </button>
             </>
           ) : null}

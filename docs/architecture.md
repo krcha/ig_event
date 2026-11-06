@@ -48,6 +48,37 @@ The source of truth is `convex/schema.ts`.
   redirects in the opposite direction; new navigation links use clean `/map` URLs.
 - `/api/health` container health check.
 
+Public posters use the source-checked `/api/discover/images/[eventId]` proxy.
+The default URL preserves the exact stored/upstream raster. Display requests
+accept only widths 192, 384, 768, 1080 and 1600, negotiate WebP or JPEG, and use
+native `srcset`/`sizes` in calendar previews, Discover, event and venue pages.
+Source/storage identity and transform version key the bounded derivative cache;
+client version hints refresh browser URLs without creating arbitrary disk keys.
+Every origin request rechecks public eligibility before reading a derivative.
+Derivatives retain the original image fetch MIME/8 MB/remote URL guards, validate
+JPEG/PNG/WebP magic before native decoding, and cap decoding at 20 million
+pixels with two concurrent transforms. Animated/other supported original raster
+formats pass through unchanged. Cached stored derivatives expire after one hour;
+upstream derivatives expire after five minutes. Ingestion originals, checksums
+and source/slide attachments are unchanged.
+
+Calendar overview and Discover page JSON negotiate Brotli/gzip above 1 KB,
+with identity fallback and `Vary: Accept-Encoding`. Their existing `no-store`
+policy and response schemas are preserved. Clerk uses the pinned SDK's
+headless browser variant with the existing custom forms and providers.
+
+`/api/events/[eventId]/export` creates a 1080 x 1920 public JPEG for the event
+detail Share dialog. Both public event and media eligibility are checked before
+each cache access. The cache key includes visible facts, event revision and
+source checksum. A two-request gate bounds source buffering and rendering;
+excess work returns 429 with Retry-After. Disk cache is capped at 96 entries,
+32 MB and 24 hours. Responses are `no-store`; no account, external publication
+or paid service is required. Unknown/inferred event starts remain unannounced.
+
+The public map opens and resets to Belgrade at zoom 14 on all viewports.
+Outlier venues remain selectable without changing the default city framing.
+Venue-ID calendar filters resolve their label with one public venue lookup.
+
 ## Admin Surfaces
 
 - `/admin` moderation dashboard.

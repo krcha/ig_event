@@ -83,5 +83,7 @@ for(const time of ["TBD","21:00","21:00-23:30"]){
 }
 assert.equal(projected.timeLabel,"10:00–18:00, 20:00–02:00");
 assert.deepEqual(Object.keys(projected).sort(),["_id","date","primaryCategory","tags","ticketPrice","timeLabel","title","venue"].sort(),"Mobile hydration carries only display values and identity, never descriptions, artists, captions or hours JSON.");
+assert.equal(projectMobileDiscoverEvent({...fullEvent,imageStorageId:"poster-v2",updatedAt:100}).imageVersion,"poster-v2","A replaced original refreshes mobile browser image URLs without hydrating source URLs or captions.");
+assert.equal(projectMobileDiscoverEvent({...fullEvent,updatedAt:100}).imageVersion,100);
 assert.ok(JSON.stringify(projected).length<JSON.stringify(fullEvent).length/10,"Long source material must not dominate the mobile deck payload.");
 console.log("QA passed: immediate Discover saves, isolated auth replay/retry, photo tap/swipe gestures, and lean mobile projection preserving category/tags/venue hours.");

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache, type ReactNode } from "react";
@@ -26,6 +25,8 @@ import {
 } from "@/lib/events/event-time";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { SaveEventButton } from "@/components/events/save-event-button";
+import { EventShareButton } from "@/components/events/event-share-button";
+import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { cn } from "@/lib/utils";
@@ -88,6 +89,7 @@ type EventRecord = {
   imageStorageId?: string;
   instagramPostId?: string;
   instagramPostUrl?: string;
+  updatedAt?: number;
   ticketPrice?: string;
   attendance?: number | string;
   attendanceCount?: number | string;
@@ -347,22 +349,24 @@ function EventImage({
   priority = false,
   sizes,
   src,
+  version,
 }: {
   alt: string;
   className?: string;
   priority?: boolean;
   sizes: string;
   src: string;
+  version?: string | number;
 }) {
   return (
-    <Image
+    <ResponsiveEventImage
       alt={alt}
       className={className}
       fill
       priority={priority}
       sizes={sizes}
       src={src}
-      unoptimized
+      version={version}
     />
   );
 }
@@ -413,6 +417,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
           <ArrowLeft className="h-4 w-4" />
           Back
         </EventCalendarBackLink>
+        <EventShareButton eventId={event._id} title={event.title} url={absoluteUrl(`/events/${event._id}`)} />
         {event?.status && event.status !== "approved" ? (
           <span className="app-chip bg-card/95">{event.status}</span>
         ) : null}
@@ -560,6 +565,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                       priority
                       sizes="(max-width: 1024px) 100vw, 352px"
                       src={eventImageUrl}
+                      version={event.imageStorageId || event.updatedAt}
                       />
                     </div>
                   </div>

@@ -166,7 +166,10 @@
     "qa:instaloader": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-instaloader.mjs",
     "qa:guest-saves-and-virtualization": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-guest-saves-and-virtualization.mjs",
     "qa:social-runtime": "node scripts/qa-social-runtime.mjs",
-    "qa:discover-layout-and-map-date": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-discover-layout-and-map-date.mjs"
+    "qa:discover-layout-and-map-date": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-discover-layout-and-map-date.mjs",
+    "qa:json-compression": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-json-compression.mjs",
+    "qa:responsive-images": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-responsive-images.mjs",
+    "qa:event-export": "node --import ./scripts/register-ts-paths.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/qa-event-export.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "6.39.5",

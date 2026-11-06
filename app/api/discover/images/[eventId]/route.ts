@@ -1,10 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
-import {
-  assertImageResponseHeaders,
-  readImageResponseBodyWithLimit,
-} from "@/lib/images/image-response-guardrails";
-import { fetchAllowedRemoteRasterImage } from "@/lib/images/remote-image-fetch";
+import { createPublicEventImageHandler } from "@/lib/images/public-event-image-delivery";
+import type { PublicEventImageSource } from "@/lib/images/public-event-raster";
 
 export const runtime = "nodejs";
 
@@ -13,12 +10,6 @@ type RouteContext = {
     eventId: string;
   }>;
 };
-
-type PublicImageSource =
-  | { eventExists: false; kind: "none" }
-  | { eventExists: true; kind: "none" }
-  | { eventExists: true; kind: "stored"; storageId: string; url: string }
-  | { eventExists: true; kind: "upstream"; url: string };
 
 const getPublicEventImageSourceQuery =
   "mediaAssets:getPublicEventImageSource" as unknown as FunctionReference<"query">;
@@ -57,88 +48,16 @@ function placeholderImageResponse(options: {
   });
 }
 
-async function fetchStoredRasterImage(url: string): Promise<{
-  bytes: Buffer;
-  contentType: string;
-}> {
-  const controller = new AbortController();
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(() => {
-      controller.abort();
-      reject(new Error("Stored image fetch timed out."));
-    }, 12_000);
-  });
-  try {
-    const response = await Promise.race([
-      fetch(url, {
-        cache: "no-store",
-        headers: { accept: "image/*,*/*;q=0.8" },
-        signal: controller.signal,
-      }),
-      timeoutPromise,
-    ]);
-    if (!response.ok) {
-      throw new Error(`Stored image fetch failed with status ${response.status}.`);
-    }
-    const contentType = assertImageResponseHeaders(response);
-    const bytes = await Promise.race([
-      readImageResponseBodyWithLimit(response),
-      timeoutPromise,
-    ]);
-    return { bytes, contentType };
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
+const publicEventImage = createPublicEventImageHandler({
+  async loadSource(eventId) {
+    const convex = getConvexClient();
+    if (!convex) throw new Error("Public media backend is unavailable.");
+    return await convex.query(getPublicEventImageSourceQuery, { eventId }) as PublicEventImageSource;
+  },
+  placeholderResponse: placeholderImageResponse,
+});
 
-function rasterImageResponse(
-  bytes: Buffer,
-  contentType: string,
-  source: "stored" | "upstream",
-): Response {
-  return new Response(new Uint8Array(bytes), {
-    headers: {
-      "cache-control":
-        source === "stored"
-          ? "public, max-age=3600, stale-while-revalidate=86400"
-          : "public, max-age=300, stale-while-revalidate=3600",
-      "content-type": contentType,
-      "content-length": String(bytes.byteLength),
-      "x-content-type-options": "nosniff",
-      "x-event-image-source": source,
-    },
-  });
-}
-
-export async function GET(_request: Request, context: RouteContext) {
-  const convex = getConvexClient();
-  if (!convex) {
-    return placeholderImageResponse();
-  }
-
+export async function GET(request: Request, context: RouteContext) {
   const { eventId } = await context.params;
-  let source: PublicImageSource;
-  try {
-    source = (await convex.query(getPublicEventImageSourceQuery, {
-      eventId,
-    })) as PublicImageSource;
-  } catch {
-    return placeholderImageResponse();
-  }
-
-  if (source.kind === "none") {
-    return placeholderImageResponse({ authoritativeNoImage: source.eventExists });
-  }
-
-  try {
-    if (source.kind === "stored") {
-      const image = await fetchStoredRasterImage(source.url);
-      return rasterImageResponse(image.bytes, image.contentType, "stored");
-    }
-    const image = await fetchAllowedRemoteRasterImage(source.url, { timeoutMs: 12_000 });
-    return rasterImageResponse(image.bytes, image.contentType, "upstream");
-  } catch {
-    return placeholderImageResponse();
-  }
+  return publicEventImage(request, eventId);
 }

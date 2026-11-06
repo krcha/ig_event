@@ -261,6 +261,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     resolveCalendarVenueSelection(requestedVenue, { fromDate: monthStartKey, beforeDate: formatDateKey(nextMonthStart), q: selectedSearchQuery }),
   ]);
   const error = loaded.error ?? venueSelection.error;
+  const selectedVenueLabel = venueSelection.value ? (venueSelection.value.startsWith("id:") ? venueSelection.label : undefined)
+    ?? loaded.events.find(event => matchesPublicEventVenueFilter(event, venueSelection.value))?.venue
+    ?? venueSelection.label
+    ?? "Mesto nije dostupno" : undefined;
   // Keep cached event data independent of the clock; reevaluate openings per request.
   const openNowStates = new Map<string, OpenNowEventState>();
   const events = openNowActive ? loaded.events.filter((event) => {
@@ -393,7 +397,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       </section>
       <MobileWeekCalendar days={mobileWeekDays} monthDays={mobileMonthDays.map(({ dayKey, eventCount }) => ({ dayKey, eventCount }))} selectedDayKey={selectedDayKey} todayKey={todayKey} />
       <EventsToolbar query={selectedSearchQuery} sortMode={selectedSortMode} openNowActive={openNowActive} openNowHref={openNowHref} now={now} />
-      {venueSelection.value ? <p className="mb-2 text-xs text-muted-foreground">Izabrano mesto: {venueSelection.label ?? venueSelection.value} · <Link href={`/${buildQueryString({ ...baseFilters, month: monthParam, day: selectedDayKey, venue: undefined })}`} prefetch={false} scroll={false} data-calendar-client-navigation="true" className="text-primary underline underline-offset-4">Poništi</Link></p> : null}
+      {venueSelection.value ? <p className="mb-2 text-xs text-muted-foreground">Izabrano mesto: {selectedVenueLabel} · <Link href={`/${buildQueryString({ ...baseFilters, month: monthParam, day: selectedDayKey, venue: undefined })}`} prefetch={false} scroll={false} data-calendar-client-navigation="true" className="text-primary underline underline-offset-4">Poništi</Link></p> : null}
       {error ? <p className="py-4 text-sm text-destructive" role="alert">{error}</p> : <CalendarAgenda
         key={JSON.stringify([selectedDayKey, venueSelection.value, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}
         events={projectCalendarAgendaEvents(sortedDayAgendaEvents, new Map(sortedDayAgendaEvents.map((event, index) => [event._id, index])), openNowStates)}

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
@@ -16,6 +15,8 @@ import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 import { MobileDiscover } from "./mobile-discover";
 import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 import { EventZekaMark } from "@/components/brand/event-zeka-brand";
+import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
+import { getDiscoverImageVersion } from "@/lib/discover/discover-image-source";
 import styles from "./desktop-discover.module.css";
 
 export type DiscoverFeedEvent = {
@@ -39,6 +40,7 @@ export type DiscoverFeedEvent = {
   venue: string;
   venueId?: string;
   venueHours?: VenueHoursCacheFields;
+  updatedAt?: number;
 };
 
 export type DiscoverDateTab = {
@@ -155,7 +157,7 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   return (
     <article className={styles.post} data-discover-post="true" aria-label={event.title}>
       <Link aria-label={`Open details for ${event.title}`} className={styles.posterLink} href={`/events/${event._id}`} prefetch={false}>
-        {imageUrl && !imageFailed ? <Image alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} unoptimized /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span>{imageFailed ? "Poster unavailable." : "Image pending for this post."}</span></span>}
+        {imageUrl && !imageFailed ? <ResponsiveEventImage alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} version={getDiscoverImageVersion(event)} /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span>{imageFailed ? "Poster unavailable." : "Image pending for this post."}</span></span>}
         <div className={styles.overlay} data-discover-hover-details="true">
           <div className={styles.eventInfo}>
             <span className={styles.eventTime}>{formatEventDate(event.date)} · {time.label}</span>

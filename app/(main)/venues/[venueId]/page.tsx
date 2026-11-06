@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { cache } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -14,6 +13,7 @@ import {
 import { FavoriteVenueButton } from "@/components/venues/favorite-venue-button";
 import { VenueWeeklyHours } from "@/components/venues/venue-weekly-hours";
 import { JsonLd } from "@/components/seo/json-ld";
+import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
 import {
   loadPublicVenuePage,
   type PublicVenue,
@@ -155,22 +155,24 @@ function PublicImage({
   priority = false,
   sizes,
   src,
+  version,
 }: {
   alt: string;
   className?: string;
   priority?: boolean;
   sizes: string;
   src: string;
+  version?: string;
 }) {
   return (
-    <Image
+    <ResponsiveEventImage
       alt={alt}
       className={className}
       fill
       priority={priority}
       sizes={sizes}
       src={src}
-      unoptimized
+      version={version}
     />
   );
 }
@@ -310,6 +312,7 @@ function EventPostTile({
           priority={priority}
           sizes="(max-width: 640px) 33vw, (max-width: 1024px) 30vw, 256px"
           src={imageSrc}
+          version={event.imageStorageId}
         />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-white/[0.025] px-2 text-center text-primary">

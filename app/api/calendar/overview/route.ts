@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
 import { getMobileWeekOverviewWindows } from "@/lib/events/mobile-week";
 import { parseDateKeyToUtcNoon } from "@/lib/events/nightlife-date";
+import { compressedPublicJson } from "@/lib/http/compressed-json";
 
 export const dynamic = "force-dynamic";
 
@@ -27,5 +28,5 @@ export async function GET(request: NextRequest) {
   if ([overview, ...extra].some(result => result.error)) {
     return NextResponse.json({ error: "Calendar counts are unavailable." }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
-  return NextResponse.json({ groups: [overview, ...extra].flatMap(result => result.groups), venues: overview.venues, generatedAt: Date.now() }, { headers: { "Cache-Control": "no-store" } });
+  return compressedPublicJson({ groups: [overview, ...extra].flatMap(result => result.groups), venues: overview.venues, generatedAt: Date.now() }, request.headers, { headers: { "Cache-Control": "no-store" } });
 }

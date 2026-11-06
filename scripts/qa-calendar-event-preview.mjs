@@ -111,6 +111,7 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
         if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
         if (name === "lucide-react") return Object.fromEntries(["ChevronDown", "ExternalLink", "ImageOff", "Instagram", "LoaderCircle", "X"].map((key) => [key, key]));
         if (name === "next/image") return { default: "next-image" };
+        if (name === "@/components/events/responsive-event-image") return { ResponsiveEventImage: "next-image" };
         if (name === "next/link") return { default: "next-link" };
         if (name === "@/components/ui/read-more-text") return { ReadMoreText: "read-more-text" };
         if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };

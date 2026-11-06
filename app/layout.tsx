@@ -132,7 +132,7 @@ export default function RootLayout({
   }
 
   return (
-    <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
+    <ClerkProvider appearance={clerkAppearance} clerkJSVariant="headless" publishableKey={clerkPublishableKey}>
       <AppDocument authEnabled>{children}</AppDocument>
     </ClerkProvider>
   );

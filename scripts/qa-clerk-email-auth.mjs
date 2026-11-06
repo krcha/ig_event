@@ -31,6 +31,10 @@ const signInPath = "app/(auth)/sign-in/[[...sign-in]]/page.tsx";
 const signUpPath = "app/(auth)/sign-up/[[...sign-up]]/page.tsx";
 const callbackPath = "app/(auth)/sso-callback/[[...sso-callback]]/page.tsx";
 const youProfilePath = "components/auth/you-profile-panel.tsx";
+const layoutPath = "app/layout.tsx";
+const layout = requireFile(layoutPath);
+requireIncludes(layoutPath, layout, 'clerkJSVariant="headless"', "headless Clerk core for the custom auth UI");
+requireIncludes(layoutPath, layout, "<AppDocument authEnabled>", "global authenticated provider context");
 
 const authCard = requireFile(authCardPath);
 requireIncludes(authCardPath, authCard, 'title: "Prijavi se"', "public sign-in heading");

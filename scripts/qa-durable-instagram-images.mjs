@@ -337,6 +337,8 @@ const eventsConvexSource = read("convex/events.ts");
 const eventUpdatesSource = read("convex/eventDomain/eventUpdates.ts");
 const schemaSource = read("convex/schema.ts");
 const routeSource = read("app/api/discover/images/[eventId]/route.ts");
+const deliverySource = read("lib/images/public-event-image-delivery.ts");
+const publicRasterSource = read("lib/images/public-event-raster.ts");
 const eventPageSource = read("app/(main)/events/[eventId]/page.tsx");
 const venuePageSource = read("app/(main)/venues/[venueId]/page.tsx");
 const discoverPageLoaderSource = read("lib/discover/feed-page.ts");
@@ -399,8 +401,9 @@ for (const source of [eventPageSource, venuePageSource, discoverPageLoaderSource
 assert.match(eventPageSource, /className="object-contain"/);
 assert.match(discoverFeedSource, /startsWith\("\/api\/discover\/images\/"\)/);
 assert.match(routeSource, /"x-event-image-source": "placeholder"/);
-assert.match(routeSource, /rasterImageResponse\(image\.bytes, image\.contentType, "stored"\)/);
-assert.match(routeSource, /rasterImageResponse\(image\.bytes, image\.contentType, "upstream"\)/);
+assert.match(deliverySource, /rasterImageResponse\(image\.bytes, image\.contentType, source\.kind\)/);
+assert.match(publicRasterSource, /source\.kind === "upstream"[\s\S]*fetchAllowedRemoteRasterImage/);
+assert.match(publicRasterSource, /assertImageResponseHeaders[\s\S]*readImageResponseBodyWithLimit/);
 assert.match(routeSource, /\? "public, max-age=60, stale-while-revalidate=60"\s*: "no-store"/);
 
 console.log("Durable Instagram image QA passed.");

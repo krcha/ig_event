@@ -23,6 +23,7 @@ import * as publicSort from "../lib/events/public-event-sort.ts";
 import * as venueNormalization from "../lib/pipeline/venue-normalization.ts";
 import * as calendarWindows from "../lib/events/public-calendar-windows.ts";
 import * as readCache from "../lib/events/public-event-read-cache.ts";
+import * as compressedJson from "../lib/http/compressed-json.ts";
 
 import * as agendaSort from "../lib/events/agenda-sort.ts";
 import * as agendaOptions from "../lib/events/agenda-sort-options.ts";
@@ -34,7 +35,7 @@ function compile(file, mocks) {
   const output = ts.transpileModule(readFileSync(file, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText;
-  const module = { exports: {} };
+  const compiled = { exports: {} };
   new Function("require", "exports", "module", output)(name => {
     if (name in mocks) return mocks[name];
     if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
@@ -42,13 +43,14 @@ function compile(file, mocks) {
     if (name === "next/image") return { __esModule: true, default: "image" };
     if (name.endsWith(".png")) return { __esModule: true, default: {src:"/skyline.png",width:2170,height:725} };
     if (name === "@/lib/events/agenda-sort-options") return agendaOptions;
+    if (name === "@/lib/http/compressed-json") return compressedJson;
     if (name === "@/lib/events/agenda-sort") return agendaSort;
     if (name === "next/link") return { __esModule: true, default: "link" };
     if (name.endsWith(".module.css")) return { __esModule: true, default: new Proxy({}, { get: (_target, name) => String(name) }) };
     if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
     throw new Error(`Unexpected QA import: ${name}`);
-  }, module.exports, module);
-  return module.exports;
+  }, compiled.exports, compiled);
+  return compiled.exports;
 }
 const projection = compile("lib/events/calendar-agenda-projection.ts", {
   "server-only": {}, "../taxonomy/event-categories": categories, "./event-time-presentation": presentation,
@@ -140,15 +142,34 @@ assert.equal(events[0].description, "For ages 5-8. Art workshop.", "Compact proj
 }
 
 let selectionReads = 0;
+const venueLabelReads = [];
+let publicVenueRecords = [{ _id: "venue-a", name: "Current name" }];
 const legacyOptions = [{ value: "id:venue-a", label: "Current name", names: ["Current name", "Old alias"] }];
 const selection = compile("lib/events/calendar-venue-selection.ts", {
   "server-only": {}, "./public-event-venue-filter": venueFilter,
+  "./calendar-convex-url": { getCalendarConvexUrl: () => "http://127.0.0.1:3210" },
+  "convex/browser": { ConvexHttpClient: class {
+    async query(name, args) {
+      assert.equal(name, "venues:listPublicVenueFieldsByIds");
+      venueLabelReads.push(args);
+      if (publicVenueRecords instanceof Error) throw publicVenueRecords;
+      return publicVenueRecords;
+    }
+  } },
   "./public-calendar-overview": { loadPublicCalendarOverviewWindow: async () => { selectionReads++; return { venues: legacyOptions }; } },
 });
 for (const value of [undefined, "id:venue-a", "name:unknown venue"]) {
   assert.equal((await selection.resolveCalendarVenueSelection(value, { fromDate: "2026-10-01", beforeDate: "2026-11-01" })).value, value);
 }
 assert.equal(selectionReads, 0, "Ordinary day/ID filters must not wait for monthly identity reads.");
+assert.deepEqual(venueLabelReads, [{ ids: ["venue-a"] }], "An ID label reads exactly one public venue, even without an event on the selected day.");
+assert.equal((await selection.resolveCalendarVenueSelection("id:venue-a", {})).label, "Current name");
+assert.equal((await selection.resolveCalendarVenueSelection("name:unknown venue", {})).label, "unknown venue");
+publicVenueRecords = [];
+assert.equal((await selection.resolveCalendarVenueSelection("id:private-or-deleted", {})).label, undefined, "A nonpublic venue must not acquire a name from an unbounded/private lookup.");
+publicVenueRecords = new Error("Invalid venue ID");
+assert.equal((await selection.resolveCalendarVenueSelection("id:invalid", {})).label, undefined, "Malformed IDs must not break public browsing.");
+assert.equal(selectionReads, 0, "Canonical ID/name labels must never fetch monthly counters.");
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "id:venue-a");
 legacyOptions.push({ value: "id:venue-b", label: "Other venue", names: ["Old alias"] });
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "Old alias", "Ambiguous legacy aliases must retain the existing name-matching behavior.");
@@ -169,8 +190,9 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
 }
 
 let dayReads = 0;
+let pageEvents = events;
 const page = compile("app/(main)/events-browse-page.tsx", {
-  "@/lib/events/public-events": { loadPublicCalendarEventsWindow: async () => { dayReads++; return { events }; }, parseNormalizedEventDate: nightlife.parseDateKeyToUtcNoon },
+  "@/lib/events/public-events": { loadPublicCalendarEventsWindow: async () => { dayReads++; return { events: pageEvents }; }, parseNormalizedEventDate: nightlife.parseDateKeyToUtcNoon },
   "@/components/events/event-meta": { getEventCategoryKind: categories.getEventPrimaryCategory },
   "@/lib/events/calendar-agenda-projection": projection,
   "@/lib/events/calendar-venue-selection": { resolveCalendarVenueSelection: async requested => ({ value: requested }) },
@@ -192,6 +214,13 @@ assert.equal(agendas[0].props.events.length, 8);
 assert.ok(!JSON.stringify(agendas[0].props.events).includes("private-sized-hours-data"));
 for (const link of nodes(tree, node => node.type === "link" && node.props.href?.startsWith("/?"))) {
   assert.equal(link.props["data-calendar-client-navigation"], "true", "Calendar date/filter links must opt out of the global document-reload handler.");
+}
+for (const [venue, expected] of [["id:venue-busy", "Busy venue"], ["name:busy venue", "Busy venue"], ["id:missing", "Mesto nije dostupno"]]) {
+  pageEvents = venue.startsWith("name:") ? events.map(event => ({ ...event, venueId: undefined })) : events;
+  const filteredTree = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31", venue }) });
+  const label = nodes(filteredTree, node => node.type === "p" && node.props.children?.[0] === "Izabrano mesto: ")[0];
+  assert.equal(label?.props.children[1], expected, "The actual browse page must show a human label even when the lookup is unavailable.");
+  assert.ok(!JSON.stringify(label).includes(venue), "Internal filter values must not leak into the displayed selection or clear link.");
 }
 
 const data = { generatedAt: 1, venues: [], groups: [

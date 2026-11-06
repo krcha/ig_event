@@ -8,6 +8,7 @@ function read(path) {
 const guardrailsSource = read("lib/images/image-response-guardrails.ts");
 const imagePrepSource = read("lib/ai/prepare-image-for-openai.ts");
 const discoverImageRouteSource = read("app/api/discover/images/[eventId]/route.ts");
+const publicRasterSource = read("lib/images/public-event-raster.ts");
 const packageJson = JSON.parse(read("package.json"));
 const releaseCheckSource = read("scripts/release-check.mjs");
 
@@ -47,12 +48,12 @@ assert.match(
   "OpenAI image prep should clear abort timers in finally.",
 );
 assert.match(
-  discoverImageRouteSource,
+  publicRasterSource,
   /assertImageResponseHeaders/,
   "Discover image proxy should validate image response headers.",
 );
 assert.match(
-  discoverImageRouteSource,
+  publicRasterSource,
   /readImageResponseBodyWithLimit/,
   "Discover image proxy should enforce the streamed byte limit.",
 );

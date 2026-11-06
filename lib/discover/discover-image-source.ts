@@ -6,6 +6,7 @@ export type DiscoverImageEventSource = {
   imageStorageId?: string | null;
   instagramPostId?: string | null;
   instagramPostUrl?: string | null;
+  updatedAt?: number;
 };
 
 export type DiscoverImagePostSource = {
@@ -16,6 +17,10 @@ export type DiscoverImagePostSource = {
 
 export function buildDiscoverImageUrl(event: DiscoverImageEventSource): string {
   return `/api/discover/images/${encodeURIComponent(event._id)}`;
+}
+
+export function getDiscoverImageVersion(event: Pick<DiscoverImageEventSource, "imageStorageId" | "updatedAt">): string | number | undefined {
+  return event.imageStorageId || event.updatedAt;
 }
 
 export function getDiscoverImageCandidate(

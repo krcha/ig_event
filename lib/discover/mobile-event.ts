@@ -11,6 +11,7 @@ export type MobileDiscoverEvent = {
   primaryCategory: EventPrimaryCategory;
   tags: string[];
   timeLabel: string;
+  imageVersion?: string | number;
 };
 
 export function projectMobileDiscoverEvent(event: PublicEvent): MobileDiscoverEvent {
@@ -24,5 +25,6 @@ export function projectMobileDiscoverEvent(event: PublicEvent): MobileDiscoverEv
     primaryCategory:getEventPrimaryCategory(event),
     tags,
     timeLabel:resolveEventTimePresentation({date:event.date,time:event.time,venueHours:event.venueHours}).label,
+    ...(event.imageStorageId || event.updatedAt ? {imageVersion:event.imageStorageId || event.updatedAt} : {}),
   };
 }

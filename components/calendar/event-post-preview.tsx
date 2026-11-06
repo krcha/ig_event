@@ -1,10 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ExternalLink, ImageOff, Instagram, LoaderCircle, X } from "lucide-react";
 import { ReadMoreText } from "@/components/ui/read-more-text";
+import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
 import { useCalendarEventPreview } from "@/components/calendar/calendar-event-preview";
 import type { PublicEventPostPreview } from "@/lib/events/public-event-post";
 import { cn } from "@/lib/utils";
@@ -87,7 +87,7 @@ export default function EventPostPreview({ eventId, onClose, title }: {
             {imageUrl && !imageFailed ? (
               <>
                 {!imageReady ? <div className="absolute inset-0 flex items-center justify-center text-muted-foreground" role="status"><LoaderCircle aria-hidden="true" className="h-5 w-5 motion-safe:animate-spin" /><span className="sr-only">Loading post image</span></div> : null}
-                <Image
+                <ResponsiveEventImage
                   alt={`Original post image for ${title}`}
                   className={cn("object-contain transition-opacity motion-reduce:transition-none", imageReady ? "opacity-100" : "opacity-0")}
                   decoding="async"
@@ -97,7 +97,6 @@ export default function EventPostPreview({ eventId, onClose, title }: {
                   onLoad={() => setImageReady(true)}
                   sizes="(min-width: 640px) 50vw, 100vw"
                   src={imageUrl}
-                  unoptimized
                 />
               </>
             ) : (

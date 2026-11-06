@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+await import("./qa-event-map-viewport.mjs");
 
 import {
   MAP_MAX_DATE,
