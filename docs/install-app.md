@@ -32,11 +32,19 @@ Documentation uses ASCII. Visible Serbian text in components uses Latin
 diacritics. `EventZeka App` names this installation experience. The manifest and
 the illustrated native confirmation retain their existing name, `Event Zeka`.
 
-Both installation links target `/install#install-guide-title`, placing
-`Uputstvo za instalaciju` at the top of the reading area with 72 px of clearance
-for the shared toolbar. This explicit anchor avoids retaining a deep browsing
-position through Next.js route navigation. Opening `/install` directly still
-shows the guide's introduction first.
+Both installation links open a fresh `/install#install-guide-title` document.
+After device detection has committed, the guide itself focuses
+`Uputstvo za instalaciju` without scrolling, then positions it immediately with
+72 px of clearance for the toolbar. This also handles plain `/install` links
+from previously opened clients; arrival no longer depends only on Next.js hash
+scrolling or a retained source-page position. Explicit links to other guide
+anchors retain their own destination.
+
+The initial position can settle during the first 1,500 ms as fonts load or
+layout changes. Corrections are coalesced through animation frames and stop on
+visitor input, history navigation, persisted page restoration, expiry, or
+unmount. Changing the platform tab manually does not restart landing. The
+guide's introduction remains available by scrolling upward.
 
 The CTA always opens the manual guide. This implementation does not capture
 `beforeinstallprompt`, call a native install API, add a service worker, or promise
@@ -166,6 +174,7 @@ implementation does not restore the previous page's filters or scroll position.
 | File | Responsibility |
 | --- | --- |
 | `lib/install/prompt-policy.ts` | Exact routes, civil-day helper, storage key, and pure eligibility decision. |
+| `lib/install/guide-landing.ts` | Initial heading focus/position, bounded layout and scroll-restoration correction, and visitor-input cleanup. |
 | `components/install/install-prompt.tsx` | Timing, local persistence, suppression, cross-tab coordination, and navigation measurement. |
 | `components/install/install-prompt.module.css` | Responsive panel, reflow, scrolling, and reduced-motion reveal. |
 | `components/install/install-guide.tsx` | Manual platform instructions, accessible tabs, and browser-menu diagrams. |

@@ -16,6 +16,8 @@ THESIS: Present EventZeka App and one explicit installation action after ten
 visible browsing seconds, once per Belgrade calendar day.
 Keep it visible for ten seconds, showing the remaining time in a thin lime bar
 along its bottom edge, then close it. The CTA lands on the installation heading.
+The guide owns initial positioning after device detection, including plain
+links from older clients, and yields immediately when the visitor interacts.
 
 OWN-WORLD: Preserve Space Grotesk, the existing rabbit icon, dark canvas and
 raised panel, lime primary action, and lavender focus. No new global tokens.

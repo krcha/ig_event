@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Download, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
@@ -241,9 +240,9 @@ export function InstallPrompt() {
               <p className={styles.description}>App za događaje u Beogradu</p>
             </div>
           </div>
-          <Link className={styles.install} href="/install#install-guide-title" data-analytics="install-prompt-guide" onClick={dismiss}>
+          <a className={styles.install} href="/install#install-guide-title" data-analytics="install-prompt-guide" onClick={dismiss}>
             Instaliraj EventZeka App <Download aria-hidden="true" size={19} />
-          </Link>
+          </a>
           <button className={styles.later} type="button" onClick={dismiss} data-analytics="install-prompt-later">Ne sada</button>
           <div aria-hidden="true" className={styles.countdown} data-install-countdown><span /></div>
         </aside>

@@ -8,7 +8,7 @@
 .guide :is(h1, h2, h3) { text-wrap: balance; }
 .guide :is(h1, h2) { letter-spacing: -.03em; }
 .guide :is(p, h1, h2, h3, strong, span) { overflow-wrap: anywhere; }
-.guide :is(a, button, summary, [role="tabpanel"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+.guide :is(a, button, summary, [role="tabpanel"], h2[tabindex="-1"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
 .backLink { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; text-decoration: none; }
 .backLink svg { width: 18px; height: 18px; flex: none; }
 .backLink:hover { color: var(--primary); }

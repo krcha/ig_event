@@ -14,7 +14,8 @@ import {
   Search,
   Share,
 } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { startInstallGuideLanding } from "@/lib/install/guide-landing";
 import styles from "./install-guide.module.css";
 
 type Platform = "ios" | "android" | "desktop";
@@ -171,13 +172,22 @@ function DesktopSteps() {
 
 export function InstallGuide() {
   const [platform, setPlatform] = useState<Platform>("ios");
+  const [platformReady, setPlatformReady] = useState(false);
+  const guideRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     const agent = navigator.userAgent;
     const isIPad = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
     setPlatform(/Android/i.test(agent) ? "android" : /iPhone|iPad|iPod/i.test(agent) || isIPad ? "ios" : "desktop");
+    setPlatformReady(true);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!platformReady || !guideRef.current || !headingRef.current) return;
+    return startInstallGuideLanding(headingRef.current, guideRef.current);
+  }, [platformReady]);
 
   function handleTabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let next: number | undefined;
@@ -192,7 +202,7 @@ export function InstallGuide() {
   }
 
   return (
-    <main className={styles.guide} lang="sr-Latn">
+    <main className={styles.guide} lang="sr-Latn" ref={guideRef}>
       <Link className={styles.backLink} href="/"><ArrowLeft aria-hidden="true" />Nazad na događaje</Link>
       <section className={styles.hero}>
         <Image alt="EventZeka App ikonica" className={styles.heroIcon} height={88} priority src="/event-zeka-icon-192.png" width={88} />
@@ -200,7 +210,7 @@ export function InstallGuide() {
         <p>Izaberi uređaj i prati korake.</p>
       </section>
       <section className={styles.installation} aria-labelledby="install-guide-title">
-        <h2 id="install-guide-title">Uputstvo za instalaciju</h2>
+        <h2 id="install-guide-title" ref={headingRef} tabIndex={-1}>Uputstvo za instalaciju</h2>
         <div aria-label="Izaberi uređaj" className={styles.platformTabs} role="tablist">
           {PLATFORMS.map((item, index) => (
             <button
