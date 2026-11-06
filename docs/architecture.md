@@ -75,6 +75,11 @@ excess work returns 429 with Retry-After. Disk cache is capped at 96 entries,
 32 MB and 24 hours. Responses are `no-store`; no account, external publication
 or paid service is required. Unknown/inferred event starts remain unannounced.
 
+Event-time display joins proven midnight-clipped venue hours into one overnight
+range, such as 23:00-06:00. It omits a preceding night's early carryover only
+when that connection and a later opening are confirmed. Stored civil-day hours,
+canonical event times, sorting and Open now retain their existing semantics.
+
 The public map opens and resets to Belgrade at zoom 14 on all viewports.
 Outlier venues remain selectable without changing the default city framing.
 Venue-ID calendar filters resolve their label with one public venue lookup.
