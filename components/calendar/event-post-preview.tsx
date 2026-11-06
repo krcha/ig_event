@@ -95,7 +95,7 @@ export default function EventPostPreview({ eventId, onClose, title }: {
                   loading="eager"
                   onError={() => setImageFailed(true)}
                   onLoad={() => setImageReady(true)}
-                  sizes="(min-width: 640px) 50vw, 100vw"
+                  sizes="(min-width: 768px) 50vw, 100vw"
                   src={imageUrl}
                 />
               </>
