@@ -56,6 +56,18 @@
 .later { display: block; width: 100%; min-height: 44px; color: var(--muted-foreground); font-size: 14px; cursor: pointer; }
 .later:hover, .close:hover { color: var(--primary); }
 
+.countdown { position: absolute; inset: auto 0 0; height: 3px; overflow: hidden; background: var(--border); }
+.countdown > span { display: block; height: 100%; background: var(--primary); transform-origin: left; animation: countdown var(--install-prompt-duration) linear forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown > span { animation-timing-function: steps(10, end); }
+}
+
+@keyframes countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
 @media (min-width: 768px) {
   .prompt { --install-prompt-bottom: 24px; left: auto; right: 24px; width: 424px; max-width: calc(100% - 48px); padding: 28px 20px 6px; }
   .intro { gap: 14px; margin-bottom: 22px; }

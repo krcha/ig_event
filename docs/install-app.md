@@ -32,6 +32,12 @@ Documentation uses ASCII. Visible Serbian text in components uses Latin
 diacritics. `EventZeka App` names this installation experience. The manifest and
 the illustrated native confirmation retain their existing name, `Event Zeka`.
 
+Both installation links target `/install#install-guide-title`, placing
+`Uputstvo za instalaciju` at the top of the reading area with 72 px of clearance
+for the shared toolbar. This explicit anchor avoids retaining a deep browsing
+position through Next.js route navigation. Opening `/install` directly still
+shows the guide's introduction first.
+
 The CTA always opens the manual guide. This implementation does not capture
 `beforeinstallprompt`, call a native install API, add a service worker, or promise
 offline browsing or push notifications. The visitor confirms installation in
@@ -66,6 +72,14 @@ new visits on the same browser origin, profile, and device stay suppressed for
 that day. X, Escape, and `Ne sada` only close the prompt; they do not extend the
 daily limit. A fresh document on the following Belgrade day becomes eligible
 again after its timer, interaction, and suppression checks.
+
+Once revealed, the panel stays open for 10,000 ms, then closes automatically.
+A thin lime bar along its bottom edge shrinks over that interval. Closing by
+timer follows the same focus-return and announcement cleanup as an explicit
+dismissal. Navigating away or closing early clears the pending timeout; neither
+action resets the daily marker. Reduced motion uses ten discrete progress
+steps instead of continuous shrinking. The screen-reader announcement mentions
+the time limit and the permanent profile-page link to the guide.
 
 An old document never resets its entry day at midnight. It cannot reveal a new
 prompt after that boundary or overwrite a newer day's marker. A client-side

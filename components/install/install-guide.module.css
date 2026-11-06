@@ -18,7 +18,7 @@
 .hero h1 span { color: var(--primary); }
 .hero > p { max-width: 65ch; margin: 16px 0 0; font-size: 15px; line-height: 1.6; color: var(--muted-foreground); }
 .installation { padding-top: 28px; }
-.installation > h2 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 700; }
+.installation > h2 { margin: 0; scroll-margin-top: 72px; font-size: 25px; line-height: 1.2; font-weight: 700; }
 .platformTabs { display: flex; margin-top: 18px; border-bottom: 1px solid var(--border); }
 .platformTabs button { min-width: 0; flex: 1; border: 0; border-bottom: 3px solid transparent; min-height: 50px; padding: 10px; background: transparent; font: inherit; font-size: 14px; white-space: normal; overflow-wrap: anywhere; color: var(--muted-foreground); cursor: pointer; }
 .platformTabs button[aria-selected="true"] { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
