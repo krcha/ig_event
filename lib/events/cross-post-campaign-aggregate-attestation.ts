@@ -6,6 +6,8 @@ export const REVIEWED_PROMOTION_VARIANT_FOLD_FIELD =
   "reviewedPromotionVariantFold";
 export const REVIEWED_SAME_SOURCE_CONTINUATION_FOLD_FIELD =
   "reviewedSameSourceContinuationFold";
+export const REVIEWED_NOVEMBER_2026_REPAIR_FIELD =
+  "reviewedNovember2026Repair";
 
 export type CrossPostCampaignAggregateBinding = {
   title: string;
@@ -239,6 +241,7 @@ export function isCrossPostCampaignLineageEvent(event: {
         [
           REVIEWED_PROMOTION_VARIANT_FOLD_FIELD,
           REVIEWED_SAME_SOURCE_CONTINUATION_FOLD_FIELD,
+          REVIEWED_NOVEMBER_2026_REPAIR_FIELD,
         ].some((field) => Object.hasOwn(parsed as Record<string, unknown>, field)),
     );
   } catch {
@@ -250,7 +253,8 @@ export function isCrossPostCampaignLineageEvent(event: {
     event.moderationNote?.startsWith("[cross_post_campaign_variant:") === true ||
     event.moderationNote?.startsWith("[cross_post_campaign_primary:") === true ||
     event.moderationNote?.startsWith("[reviewed_promotion_variant:") === true ||
-    event.moderationNote?.startsWith("[reviewed_same_source_continuation:") === true
+    event.moderationNote?.startsWith("[reviewed_same_source_continuation:") === true ||
+    event.moderationNote?.startsWith("[reviewed_november_component:") === true
   );
 }
 

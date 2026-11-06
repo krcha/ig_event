@@ -107,6 +107,70 @@ assert.deepEqual(events(independent).map((event) => [event.title, event.date, ev
 ]);
 assert.deepEqual(events(independent).map((event) => event.eventType), ["nightlife", "learning"]);
 
+// Reviewed programme boundaries from the November 6/7 reports. These labelled
+// responses exercise the actual ingestion planner, not model vision accuracy.
+const hospitalityProgram = prepare([row({
+  title: "PAD KRA PAO", date: "2026-11-07", dateText: "07.11.2026", time: "17:00", venue: "Bife Bar",
+  artists: ["AUX OF PAIN"], description: "Food special from 17:00; DJ AUX OF PAIN from 20:00.",
+  sourceText: "07.11.2026 Bife Bar PAD KRA PAO 17:00",
+  posterEvidence: [
+    { slide_index: 0, text: "07.11.2026 Bife Bar PAD KRA PAO 17:00" },
+    { slide_index: 0, text: "MY THAI WEEKEND Saturday program: DJ AUX OF PAIN 20:00" },
+  ],
+})]);
+assertApproved(hospitalityProgram, 1);
+assert.equal(events(hospitalityProgram)[0].title, "PAD KRA PAO");
+assert.equal(events(hospitalityProgram)[0].time, "17:00", "The DJ component must not replace the food programme's earlier start.");
+assert.deepEqual(events(hospitalityProgram)[0].artists, ["AUX OF PAIN"]);
+assert.match(events(hospitalityProgram)[0].description, /20:00/u);
+assert.equal(events(hospitalityProgram)[0].ticketPrice ?? "", "", "A food special does not establish event admission.");
+
+const sharedClubNight = prepare([row({
+  title: "Suicide Disco", venue: "Vrtoglavica", date: "2026-11-06", dateText: "06.11.2026", time: "23:00-05:00",
+  artists: ["DJ Gavra", "DJ RedRev"],
+  description: "Donji Klub: Suicide Disco; Gornji Klub: Divorced Dad Rock; Vertigo Pub: Chillout Zone.",
+  sourceText: "06.11.2026 Vrtoglavica Donji Klub Suicide Disco 23:00-05:00",
+  posterEvidence: [
+    { slide_index: 0, text: "06.11.2026 Vrtoglavica Donji Klub Suicide Disco 23:00-05:00" },
+    { slide_index: 0, text: "DJ Gavra & DJ RedRev" },
+    { slide_index: 0, text: "Gornji Klub: Divorced Dad Rock!" },
+    { slide_index: 0, text: "Sredina a.k.a. Vertigo Pub: Chillout Zone" },
+  ],
+})]);
+assertApproved(sharedClubNight, 1);
+assert.equal(events(sharedClubNight)[0].venue, "Vrtoglavica");
+assert.equal(events(sharedClubNight)[0].time, "23:00-05:00");
+assert.deepEqual(events(sharedClubNight)[0].artists, ["DJ Gavra", "DJ RedRev"]);
+assert.match(events(sharedClubNight)[0].description, /Gornji Klub: Divorced Dad Rock.*Vertigo Pub: Chillout Zone/u);
+
+const kolaracWorks = prepare([
+  row({ title: "STABLO MASLINE", venue: "Kolarac", date: "2026-11-06", dateText: "06.11.2026",
+    time: "18:30", category: "arts & culture", sourceText: "06.11.2026 Kolarac STABLO MASLINE 18:30" }),
+  row({ title: "PUKOTINA U LEDU", venue: "Kolarac", date: "2026-11-06", dateText: "06.11.2026",
+    time: "20:30", category: "arts & culture", sourceText: "06.11.2026 Kolarac PUKOTINA U LEDU 20:30" }),
+]);
+assertApproved(kolaracWorks, 2);
+assert.deepEqual(events(kolaracWorks).map((event) => [event.title, event.time, event.venue]), [
+  ["STABLO MASLINE", "18:30", "Kolarac"], ["PUKOTINA U LEDU", "20:30", "Kolarac"],
+], "Independent same-date works remain separate despite the common source and physical venue.");
+assert.equal(new Set(events(kolaracWorks).map((event) => event.sourceOccurrenceKey)).size, 2);
+
+const twoVenuePoster = prepare([
+  row({ title: "HALI GALI PROMO PARTY", venue: "Sprat", artists: ["ZEFIR"], date: "2026-11-06",
+    dateText: "06.11.2026", time: "20:00", category: "live music",
+    sourceText: "06.11.2026 20:00 HALI GALI PROMO PARTY: ZEFIR LIVE",
+    posterEvidence: [{ slide_index: 0, text: "SPRAT 06.11.2026 20:00 HALI GALI PROMO PARTY: ZEFIR LIVE" }] }),
+  row({ title: "FILIP GRUJIC", venue: "Zaokret", artists: ["FILIP GRUJIC"], date: "2026-11-06",
+    dateText: "06.11.2026", time: "20:00", category: "nightlife",
+    sourceText: "06.11.2026 20:00 FILIP GRUJIC",
+    posterEvidence: [{ slide_index: 0, text: "ZAOKRET 06.11.2026 20:00 FILIP GRUJIC" }] }),
+]);
+assertApproved(twoVenuePoster, 2);
+assert.deepEqual(events(twoVenuePoster).map((event) => [event.title, event.venue, event.artists]), [
+  ["HALI GALI PROMO PARTY", "Sprat", ["ZEFIR"]], ["FILIP GRUJIC", "Zaokret", ["FILIP GRUJIC"]],
+], "Same-image venue headings must scope both the physical venue and its own lineup.");
+assert.equal(new Set(events(twoVenuePoster).map((event) => event.sourceOccurrenceKey)).size, 2);
+
 const sessions = prepare(["13:00", "17:00", "18:00"].map((time, slide) => row({
   title: "Museum Programme", artists: ["Guide"], date: "2026-10-11", dateText: "11.10.2026", time,
   category: "arts & culture", slide,
@@ -237,6 +301,13 @@ try {
     calls += 1; assert.equal(url, "https://api.openai.com/v1/responses");
     const request = JSON.parse(options.body);
     assert.equal(request.model, "gpt-6-luna");
+    const systemPrompt = request.input[0].content[0].text;
+    assert.match(systemPrompt, /themed hospitality program.*Pad Kra Pao.*Aux of Pain/u);
+    assert.match(systemPrompt, /expressly shared club night\/common admission.*Vrtoglavica.*ONE occurrence/u);
+    assert.match(systemPrompt, /independently attendable room programs stay separate/u);
+    assert.match(systemPrompt, /Stablo Masline.*18:30.*Pukotina u ledu.*20:30/u);
+    assert.match(systemPrompt, /Sprat.*Zaokret.*not one joint event/u);
+    assert.match(systemPrompt, /sharing a date, venue or account alone never proves it/u);
     const content = request.input[1].content;
     assert.equal(content.filter((part) => part.type === "input_image").length, 2,
       "Identical visual bytes at separate source indexes must both be labelled and submitted.");

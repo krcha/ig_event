@@ -63,6 +63,7 @@ import type * as internal_eventRepairs_reviewedContinuationFold from "../interna
 import type * as internal_eventRepairs_reviewedFabrikaDjNightEnrichment from "../internal/eventRepairs/reviewedFabrikaDjNightEnrichment.js";
 import type * as internal_eventRepairs_reviewedFabrikaProgramEnrichment from "../internal/eventRepairs/reviewedFabrikaProgramEnrichment.js";
 import type * as internal_eventRepairs_reviewedNonPerformerEvidence from "../internal/eventRepairs/reviewedNonPerformerEvidence.js";
+import type * as internal_eventRepairs_reviewedNovember2026Repairs from "../internal/eventRepairs/reviewedNovember2026Repairs.js";
 import type * as internal_eventRepairs_reviewedPendingPerformerCorrection from "../internal/eventRepairs/reviewedPendingPerformerCorrection.js";
 import type * as internal_eventRepairs_reviewedPromoterScheduleFold from "../internal/eventRepairs/reviewedPromoterScheduleFold.js";
 import type * as internal_eventRepairs_reviewedPromotionFold from "../internal/eventRepairs/reviewedPromotionFold.js";
@@ -133,6 +134,7 @@ import type * as repositories_reconciliationSourceContext from "../repositories/
 import type * as repositories_savedEvents from "../repositories/savedEvents.js";
 import type * as repositories_sourceOccurrenceProvenance from "../repositories/sourceOccurrenceProvenance.js";
 import type * as revertFalseCinemaAutomaticApproval from "../revertFalseCinemaAutomaticApproval.js";
+import type * as reviewedNovember2026Repairs from "../reviewedNovember2026Repairs.js";
 import type * as reviewedPromoterScheduleFold from "../reviewedPromoterScheduleFold.js";
 import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as sourceConflictReviews from "../sourceConflictReviews.js";
@@ -205,6 +207,7 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/reviewedFabrikaDjNightEnrichment": typeof internal_eventRepairs_reviewedFabrikaDjNightEnrichment;
   "internal/eventRepairs/reviewedFabrikaProgramEnrichment": typeof internal_eventRepairs_reviewedFabrikaProgramEnrichment;
   "internal/eventRepairs/reviewedNonPerformerEvidence": typeof internal_eventRepairs_reviewedNonPerformerEvidence;
+  "internal/eventRepairs/reviewedNovember2026Repairs": typeof internal_eventRepairs_reviewedNovember2026Repairs;
   "internal/eventRepairs/reviewedPendingPerformerCorrection": typeof internal_eventRepairs_reviewedPendingPerformerCorrection;
   "internal/eventRepairs/reviewedPromoterScheduleFold": typeof internal_eventRepairs_reviewedPromoterScheduleFold;
   "internal/eventRepairs/reviewedPromotionFold": typeof internal_eventRepairs_reviewedPromotionFold;
@@ -275,6 +278,7 @@ declare const fullApi: ApiFromModules<{
   "repositories/savedEvents": typeof repositories_savedEvents;
   "repositories/sourceOccurrenceProvenance": typeof repositories_sourceOccurrenceProvenance;
   revertFalseCinemaAutomaticApproval: typeof revertFalseCinemaAutomaticApproval;
+  reviewedNovember2026Repairs: typeof reviewedNovember2026Repairs;
   reviewedPromoterScheduleFold: typeof reviewedPromoterScheduleFold;
   scrapedPosts: typeof scrapedPosts;
   sourceConflictReviews: typeof sourceConflictReviews;
