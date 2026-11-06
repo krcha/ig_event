@@ -80,6 +80,65 @@ assert.match(projected[0].sessionLabel, /5\u20138/);
 assert.equal(projected[7].band, "time-not-announced");
 assert.equal(events[0].description, "For ages 5-8. Art workshop.", "Compact projection must not mutate the server/SEO snapshot.");
 
+// The actual compact agenda must display its server-computed hours fallback,
+// including split and overnight openings, without claiming an event start.
+{
+  const hours = windows => ({ hoursJson: JSON.stringify({
+    version: 1, source: "manual", timezone: "Europe/Belgrade", generatedAt: "2026-10-31T12:00:00.000Z",
+    weekly: [{ day: 6, closed: false, windows }],
+  }) });
+  const fallbackEvents = [
+    { _id: "hours", venueHours: hours([{ day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "split", venueHours: hours([{ day: 6, start: "10:00", end: "18:00" }, { day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "all-day", venueHours: hours([{ day: 6, start: "00:00", end: "00:00", spansNextDay: true }]) },
+    { _id: "missing-hours" },
+    { _id: "different-weekday", date: "2026-11-01", venueHours: hours([{ day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "announced", time: "21:00-23:00", timeStatus: "confirmed", venueHours: hours([{ day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "start-only", time: "21:00", timeStatus: "confirmed", venueHours: hours([{ day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "outside-opening", time: "19:00", timeStatus: "confirmed", venueHours: hours([{ day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+    { _id: "first-session", time: "17:00", timeStatus: "confirmed", venueHours: hours([{ day: 6, start: "10:00", end: "18:00" }, { day: 6, start: "20:00", end: "02:00", spansNextDay: true }]) },
+  ].map(event => ({ title: event._id, venue: "Place", date: "2026-10-31", timeStatus: "unknown", ...event }));
+  const compact = projection.projectCalendarAgendaEvents(fallbackEvents, new Map(), new Map());
+  const VirtualAgendaList = Object.assign(({ items, children }) => items.map(children), { qaRender: true });
+  const { CalendarAgenda } = compile("components/calendar/calendar-agenda.tsx", {
+    react: { useMemo: cb => cb(), useState: value => [value, () => {}], useEffect: () => {} },
+    "./virtual-agenda-list": { VirtualAgendaList }, "@/lib/events/calendar-time-band-definitions": bands,
+  });
+  const tree = CalendarAgenda({ events: compact, hiddenDayCategories: [], openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+  const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
+  function timeBlock(id) {
+    return nodes(rows.find(row => row.props["data-calendar-event-id"] === id), node => node.props?.["data-time-source"])[0];
+  }
+  function text(tree) {
+    if (Array.isArray(tree)) return tree.map(text).join("");
+    if (tree && typeof tree === "object") return text(tree.props?.children);
+    return typeof tree === "string" ? tree : "";
+  }
+  assert.equal(timeBlock("hours").props["data-time-source"], "venue_hours");
+  assert.equal(timeBlock("hours").props["aria-label"], "Radno vreme mesta: 20:00–02:00");
+  assert.equal(text(timeBlock("hours")), "20:0002:00");
+  assert.equal(text(timeBlock("split")), "10:0018:0020:0002:00");
+  assert.equal(text(timeBlock("all-day")), "24 h");
+  for (const id of ["missing-hours", "different-weekday"]) {
+    assert.equal(timeBlock(id).props["data-time-source"], "unknown");
+    assert.equal(text(timeBlock(id)), "—");
+  }
+  assert.equal(timeBlock("announced").props["data-time-source"], "event");
+  assert.equal(text(timeBlock("announced")), "21:0023:00");
+  assert.equal(text(timeBlock("start-only")), "21:0002:00");
+  assert.match(timeBlock("start-only").props["aria-label"], /Pretpostavljeni završetak.*02:00/);
+  assert.equal(nodes(timeBlock("start-only"), node => node.props?.["data-inferred-end"] === "true").length, 1);
+  assert.equal(compact.find(event => event._id === "start-only").time, "21:00", "The inferred closing must remain display context, not replace the source's start-only time.");
+  assert.equal(text(timeBlock("outside-opening")), "19:00");
+  assert.equal(text(timeBlock("first-session")), "17:0018:00", "Use the matching opening's close rather than the last close of the day.");
+  for (const event of compact.filter(event => event.timeStatus === "unknown")) {
+    assert.equal(event.band, "time-not-announced");
+    assert.equal(event.timeParts.startLabel, undefined);
+    assert.equal(event.time, undefined);
+  }
+  assert.ok(!JSON.stringify(compact).includes("hoursJson"));
+}
+
 let selectionReads = 0;
 const legacyOptions = [{ value: "id:venue-a", label: "Current name", names: ["Current name", "Old alias"] }];
 const selection = compile("lib/events/calendar-venue-selection.ts", {

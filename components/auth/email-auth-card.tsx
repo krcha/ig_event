@@ -18,32 +18,26 @@ type EmailAuthCardProps = {
 const copyByMode: Record<
   AuthMode,
   {
-    eyebrow: string;
     title: string;
     description: string;
     alternateHref: string;
     alternateLabel: string;
     alternateCta: string;
-    fallbackSummary: string;
   }
 > = {
   "sign-in": {
-    eyebrow: "Admin access",
-    title: "Sign in with email",
-    description: "Use the email and password attached to your Clerk account.",
+    title: "Prijavi se",
+    description: "Sinhronizuj sačuvane događaje i omiljena mesta na svojim uređajima.",
     alternateHref: "/sign-up",
-    alternateLabel: "Need access?",
-    alternateCta: "Sign up",
-    fallbackSummary: "Email sign-in",
+    alternateLabel: "Nemaš nalog?",
+    alternateCta: "Napravi nalog",
   },
   "sign-up": {
-    eyebrow: "Create access",
-    title: "Sign up with email",
-    description: "Create a Clerk account with email verification and password sign-in.",
+    title: "Napravi nalog",
+    description: "Čuvaj događaje i omiljena mesta i pristupaj im sa drugih uređaja.",
     alternateHref: "/sign-in",
-    alternateLabel: "Already have access?",
-    alternateCta: "Sign in",
-    fallbackSummary: "Email sign-up",
+    alternateLabel: "Već imaš nalog?",
+    alternateCta: "Prijavi se",
   },
 };
 
@@ -84,6 +78,17 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
   const [authCompleteRedirectPath, setAuthCompleteRedirectPath] = useState(AUTH_COMPLETE_REDIRECT_PATH);
 
   const copy = copyByMode[mode];
+  const viewCopy = mode === "sign-up"
+    ? isManualSignUpVerifying
+      ? { title: "Potvrdi email", description: `Unesi kod koji smo poslali na ${manualSignUpEmail}.` }
+      : copy
+    : {
+        password: copy,
+        "verification-code": { title: "Potvrdi prijavu", description: "Još jedan korak da potvrdimo da si to ti." },
+        "reset-email": { title: "Zaboravljena lozinka?", description: "Unesi email svog naloga. Poslaćemo ti jednokratni kod za promenu lozinke." },
+        "reset-code": { title: "Unesi kod", description: "Unesi kod koji smo poslali na email tvog naloga." },
+        "reset-password": { title: "Nova lozinka", description: "Izaberi novu lozinku. Nakon promene bićeš odjavljen sa ostalih uređaja." },
+      }[signInView];
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -102,7 +107,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
   async function finishOrVerifySignIn(result: SignInResource) {
     const step = getEmailSignInStep(result);
     if (step.kind === "complete") {
-      if (!setSignInActive) throw new Error("Sign in is still loading. Please try again.");
+      if (!setSignInActive) throw new Error("Prijava se još učitava. Pokušaj ponovo.");
       await setSignInActive({ session: step.sessionId });
       window.location.assign(authCompleteRedirectPath);
       return;
@@ -141,7 +146,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
 
       await finishOrVerifySignIn(result);
     } catch (caughtError) {
-      setSignInError(getEmailSignInError(caughtError, "Could not sign in with those credentials."));
+      setSignInError(getEmailSignInError(caughtError, "Prijava nije uspela. Proveri email i lozinku i pokušaj ponovo."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -155,11 +160,11 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
     try {
       const result = await signIn.attemptSecondFactor({ strategy: "email_code", code: signInCode.trim() });
       if (result.status !== "complete" || !result.createdSessionId) {
-        throw new Error("Verification is not complete. Check the code and try again.");
+        throw new Error("Prijava nije potvrđena. Proveri kod i pokušaj ponovo.");
       }
       await finishOrVerifySignIn(result);
     } catch (caughtError) {
-      setSignInError(getEmailSignInError(caughtError, "Could not verify that code. Request a new code and try again."));
+      setSignInError(getEmailSignInError(caughtError, "Kod nije potvrđen. Zatraži novi kod i pokušaj ponovo."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -175,7 +180,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
       setSignInCodeSent(true);
       setResendCountdown(30);
     } catch (caughtError) {
-      setSignInError(getEmailSignInError(caughtError, "Could not send a new verification code. Please try again."));
+      setSignInError(getEmailSignInError(caughtError, "Novi kod nije poslat. Pokušaj ponovo."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -202,12 +207,12 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         return;
       }
 
-      setSignInError("Could not start password recovery. Please try again.");
+      setSignInError("Promena lozinke nije pokrenuta. Pokušaj ponovo.");
     } catch (caughtError) {
       setSignInError(
         caughtError instanceof Error
           ? caughtError.message
-          : "Could not send the password recovery code.",
+          : "Kod za promenu lozinke nije poslat. Pokušaj ponovo.",
       );
     } finally {
       setIsSignInSubmitting(false);
@@ -235,10 +240,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         return;
       }
 
-      setSignInError("Could not verify that recovery code. Please try again.");
+      setSignInError("Kod za promenu lozinke nije potvrđen. Proveri kod i pokušaj ponovo.");
     } catch (caughtError) {
       setSignInError(
-        caughtError instanceof Error ? caughtError.message : "Could not verify that recovery code.",
+        caughtError instanceof Error ? caughtError.message : "Kod za promenu lozinke nije potvrđen. Proveri kod i pokušaj ponovo.",
       );
     } finally {
       setIsSignInSubmitting(false);
@@ -253,7 +258,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
     }
 
     if (passwordResetPassword !== passwordResetPasswordConfirmation) {
-      setSignInError("The new passwords do not match.");
+      setSignInError("Nove lozinke se ne podudaraju. Unesi istu lozinku u oba polja.");
       return;
     }
 
@@ -268,7 +273,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
 
       await finishOrVerifySignIn(result);
     } catch (caughtError) {
-      setSignInError(getEmailSignInError(caughtError, "Could not set the new password."));
+      setSignInError(getEmailSignInError(caughtError, "Lozinka nije promenjena. Pokušaj ponovo."));
     } finally {
       setIsSignInSubmitting(false);
     }
@@ -301,7 +306,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
       setIsManualSignUpVerifying(true);
     } catch (caughtError) {
       setManualSignUpError(
-        caughtError instanceof Error ? caughtError.message : "Could not create that account.",
+        caughtError instanceof Error ? caughtError.message : "Nalog nije napravljen. Proveri podatke i pokušaj ponovo.",
       );
     } finally {
       setIsManualSignUpSubmitting(false);
@@ -329,10 +334,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         return;
       }
 
-      setManualSignUpError("Could not verify that code. Please try again.");
+      setManualSignUpError("Kod nije potvrđen. Proveri kod i pokušaj ponovo.");
     } catch (caughtError) {
       setManualSignUpError(
-        caughtError instanceof Error ? caughtError.message : "Could not verify that code.",
+        caughtError instanceof Error ? caughtError.message : "Kod nije potvrđen. Proveri kod i pokušaj ponovo.",
       );
     } finally {
       setIsManualSignUpSubmitting(false);
@@ -340,15 +345,12 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
   }
 
   return (
-    <div className="flex w-full max-w-md flex-col gap-5">
+    <div className="flex w-full max-w-md flex-col gap-5" lang="sr-Latn">
       <section className="glass-panel border border-primary/20 bg-card/95 p-6 shadow-[0_24px_80px_-48px_rgba(14,116,144,0.55)]">
         <div className="flex flex-col gap-4 text-center">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.32em] text-primary">
-              {copy.eyebrow}
-            </p>
-            <h1 className="mt-3 text-2xl font-semibold text-foreground">{mode === "sign-in" && signInView === "verification-code" ? "Verify your sign-in" : copy.title}</h1>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{mode === "sign-in" && signInView === "verification-code" ? "One more step to confirm it is you." : copy.description}</p>
+            <h1 className="text-2xl font-semibold text-foreground">{viewCopy.title}</h1>
+            <p className="mt-2 break-words text-sm leading-6 text-muted-foreground">{viewCopy.description}</p>
           </div>
 
           {mode === "sign-in" ? (
@@ -369,7 +371,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     />
                   </label>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                    Password
+                    Lozinka
                     <input
                       autoComplete="current-password"
                       className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -386,10 +388,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     type="submit"
                   >
-                    {isSignInSubmitting ? "Signing in…" : "Sign in"}
+                    {isSignInSubmitting ? "Prijavljivanje…" : "Prijavi se"}
                   </button>
                   <button
-                    className="text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     onClick={() => {
                       setSignInError(null);
@@ -397,18 +399,18 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     }}
                     type="button"
                   >
-                    Forgot password?
+                    Zaboravljena lozinka?
                   </button>
                 </form>
               ) : signInView === "verification-code" ? (
                 <form className="flex flex-col gap-3" onSubmit={verifySignInCode}>
-                  <p className="text-sm leading-6 text-muted-foreground" role="status">
+                  <p className="break-words text-sm leading-6 text-muted-foreground" role="status">
                     {signInCodeSent
-                      ? `Enter the verification code sent to ${signInEmailFactor?.destination || "your account email"}.`
-                      : "Email verification is required to finish signing in. Request a code below if it has not arrived."}
+                      ? `Unesi kod koji smo poslali na ${signInEmailFactor?.destination || "email tvog naloga"}.`
+                      : "Za završetak prijave potreban je kod iz emaila. Ako nije stigao, zatraži ga ispod."}
                   </p>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                    Verification code
+                    Kod za potvrdu
                     <input
                       autoComplete="one-time-code"
                       className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -426,7 +428,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     type="submit"
                   >
-                    {isSignInSubmitting ? "Verifying…" : "Verify and sign in"}
+                    {isSignInSubmitting ? "Proveravanje…" : "Potvrdi i prijavi se"}
                   </button>
                   <button
                     className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
@@ -434,7 +436,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     onClick={resendSignInCode}
                     type="button"
                   >
-                    {resendCountdown > 0 ? `Send a new code in ${resendCountdown}s` : signInCodeSent ? "Send a new code" : "Send verification code"}
+                    {resendCountdown > 0 ? `Novi kod za ${resendCountdown} s` : signInCodeSent ? "Pošalji novi kod" : "Pošalji kod za potvrdu"}
                   </button>
                   <button
                     className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
@@ -449,14 +451,11 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     }}
                     type="button"
                   >
-                    Back to sign in
+                    Nazad na prijavu
                   </button>
                 </form>
               ) : signInView === "reset-email" ? (
                 <form className="flex flex-col gap-3" onSubmit={startPasswordReset}>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    Enter the account email. Clerk will send a one-time recovery code.
-                  </p>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
                     Email
                     <input
@@ -475,10 +474,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     type="submit"
                   >
-                    {isSignInSubmitting ? "Sending…" : "Send recovery code"}
+                    {isSignInSubmitting ? "Slanje…" : "Pošalji kod"}
                   </button>
                   <button
-                    className="text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="min-h-11 text-sm font-semibold text-primary hover:text-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={isSignInSubmitting}
                     onClick={() => {
                       setSignInError(null);
@@ -486,16 +485,13 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     }}
                     type="button"
                   >
-                    Back to sign in
+                    Nazad na prijavu
                   </button>
                 </form>
               ) : signInView === "reset-code" ? (
                 <form className="flex flex-col gap-3" onSubmit={verifyPasswordResetCode}>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    Enter the recovery code sent to the account email.
-                  </p>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                    Recovery code
+                    Kod iz emaila
                     <input
                       autoComplete="one-time-code"
                       className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -513,16 +509,13 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     type="submit"
                   >
-                    {isSignInSubmitting ? "Verifying…" : "Verify recovery code"}
+                    {isSignInSubmitting ? "Proveravanje…" : "Potvrdi kod"}
                   </button>
                 </form>
               ) : (
                 <form className="flex flex-col gap-3" onSubmit={completePasswordReset}>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    Choose a new, unique password. Other active sessions will be signed out.
-                  </p>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                    New password
+                    Nova lozinka
                     <input
                       autoComplete="new-password"
                       className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -535,7 +528,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     />
                   </label>
                   <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-                    Confirm new password
+                    Potvrdi novu lozinku
                     <input
                       autoComplete="new-password"
                       className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -554,7 +547,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
                     disabled={!isSignInLoaded || isSignInSubmitting}
                     type="submit"
                   >
-                    {isSignInSubmitting ? "Updating…" : "Set new password"}
+                    {isSignInSubmitting ? "Čuvanje…" : "Sačuvaj novu lozinku"}
                   </button>
                 </form>
               )}
@@ -567,7 +560,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
         ) : isManualSignUpVerifying ? (
           <form className="mt-4 flex flex-col gap-3" onSubmit={verifyManualSignUp}>
             <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-              Email code
+              Kod iz emaila
               <input
                 autoComplete="one-time-code"
                 className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -585,10 +578,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
               disabled={!isSignUpLoaded || isManualSignUpSubmitting}
               type="submit"
             >
-              {isManualSignUpSubmitting ? "Verifying…" : "Verify email"}
+              {isManualSignUpSubmitting ? "Proveravanje…" : "Potvrdi email"}
             </button>
             {manualSignUpError ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <p role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {manualSignUpError}
               </p>
             ) : null}
@@ -609,7 +602,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-              Username
+              Korisničko ime
               <input
                 autoComplete="username"
                 className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -622,7 +615,7 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-left text-sm font-medium text-foreground">
-              Password
+              Lozinka
               <input
                 autoComplete="new-password"
                 className="rounded-2xl border border-border bg-background px-3 py-2 text-foreground outline-none transition focus:border-primary"
@@ -639,10 +632,10 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
               disabled={!isSignUpLoaded || isManualSignUpSubmitting}
               type="submit"
             >
-              {isManualSignUpSubmitting ? "Creating account…" : "Sign up"}
+              {isManualSignUpSubmitting ? "Pravljenje naloga…" : "Napravi nalog"}
             </button>
             {manualSignUpError ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <p role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {manualSignUpError}
               </p>
             ) : null}
@@ -660,6 +653,12 @@ export function EmailAuthCard({ mode }: EmailAuthCardProps) {
           </p>
         </div>
       </section>
+      <Link
+        className="inline-flex min-h-11 items-center justify-center text-sm font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+        href="/"
+      >
+        Nazad na događaje
+      </Link>
     </div>
   );
 }

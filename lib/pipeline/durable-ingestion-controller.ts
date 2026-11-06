@@ -13,7 +13,7 @@ export const DURABLE_INGESTION_CANARY_SOURCE_RESULTS_LIMIT = 4;
 export const DURABLE_INGESTION_SOURCE_RESULTS_LIMIT = 6;
 export const DURABLE_INGESTION_COST_PER_PROFILE_MICROS = 10_000;
 export const DURABLE_INGESTION_CANARY_SIZE = 16;
-export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 7_000_000;
+export const DURABLE_INGESTION_FULL_PROFILE_BUDGET_MICROS = 10_000_000;
 
 export type DurableIngestionMode = "canary" | "catch_up" | "daily";
 export type DurablePinnedPostPolicy = "exclude_all" | "include_recent";

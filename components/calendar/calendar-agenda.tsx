@@ -13,7 +13,7 @@ import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/l
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
 import styles from "./mobile-events-home.module.css";
 
-const labels = { club: "Žurke", live: "Uživo", culture: "Kultura", event: "Ostalo" };
+const labels = { club: "Žurke", live: "Live/Svirke", culture: "Kultura", event: "Ostalo" };
 const bandLabels = { daytime: "Tokom dana", evening: "Veče", night: "Noć", "time-not-announced": "Vreme nije najavljeno", "after-midnight": "Posle ponoći" };
 
 type Props = {
@@ -32,14 +32,31 @@ type Props = {
 
 function renderEventRow({ event, openNowActive }: { event: CalendarAgendaEvent; openNowActive: boolean }) {
   const known = Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown";
+  const venueHours = !known && event.presentation.kind === "venue_hours";
+  const timeDescription = venueHours
+    ? `Radno vreme mesta: ${event.presentation.label}`
+    : event.presentation.inferredEnd
+      ? `Najavljeni početak: ${event.timeParts.startLabel}. Pretpostavljeni završetak prema zatvaranju mesta: ${event.timeParts.endLabel}.`
+      : event.presentation.label;
   return <article className={styles.eventRow}
     data-calendar-event-id={event._id} data-calendar-event-kind={event.category}
     data-calendar-mobile-event-row="true" data-event-title={event.title} data-event-venue={event.venue}
     data-event-time={event.displayTimeLabel ?? event.time} data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}>
     <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}>
-      <span className={styles.eventTime} title={event.presentation.label}>
-        <span>{known ? event.timeParts.startLabel || "—" : "—"}</span>
-        {known && event.timeParts.endLabel && !event.presentation.inferredEnd ? <small>{event.timeParts.endLabel}</small> : null}
+      <span className={styles.eventTime} title={timeDescription} aria-label={timeDescription}
+        data-time-source={venueHours ? "venue_hours" : known ? "event" : "unknown"}>
+        {venueHours ? <>
+          {event.presentation.label.split(", ").map(window => {
+            const [start, end] = window.split("–");
+            return <span className={styles.venueHoursWindow} key={window}>
+              <span>{window === "Open 24 hours" ? "24 h" : start}</span>
+              {end ? <small>{end}</small> : null}
+            </span>;
+          })}
+        </> : <>
+          <span>{known ? event.timeParts.startLabel || "—" : "—"}</span>
+          {known && event.timeParts.endLabel ? <small data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}>{event.timeParts.endLabel}</small> : null}
+        </>}
       </span>
       <div className={styles.eventInfo}>
         <h3 className={styles.eventTitle}>{event.title}</h3>
@@ -87,7 +104,7 @@ export function CalendarAgenda({ events, hiddenDayCategories, openNowActive, sor
       </section>)}
       {!visible.length ? <div className={styles.empty} data-calendar-empty-state="true"><h2>Nema događaja za ovaj izbor.</h2><p>Probaj drugu pretragu, kategoriju ili datum.</p>{hasActiveFilters ? <Link className="button-secondary" href={clearFiltersHref} prefetch={false} scroll={false}>Poništi filtere</Link> : null}</div> : null}
       </div>
-      <aside className={styles.side} aria-label="Pregled dana"><h2>{alphabetical ? "Abecedni pregled" : "Po satima"}</h2><nav>{groups.map(group => <a key={group.key} href={`#agenda-${group.key}`}><span>{group.label}</span><span>{group.events.length}</span></a>)}</nav><p><strong>Vreme i izvor.</strong><br />Ako početak nije najavljen, događaj je posebno označen. Radno vreme mesta nije trajanje programa.</p></aside>
+      <aside className={styles.side} aria-label="Pregled dana"><h2>{alphabetical ? "Abecedni pregled" : "Po satima"}</h2><nav>{groups.map(group => <a key={group.key} href={`#agenda-${group.key}`}><span>{group.label}</span><span>{group.events.length}</span></a>)}</nav><p><strong>Vreme i izvor.</strong><br />Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa.</p></aside>
     </div>
   </section></CalendarEventPreviews>;
 }

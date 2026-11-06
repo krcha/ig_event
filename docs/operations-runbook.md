@@ -618,6 +618,12 @@ again, and then runs the persisted daily snapshot; a restart repeats the same
 run IDs instead of creating another paid run. The global active-run guard,
 receipt leases, provider lease, and daily provider budgets remain authoritative.
 
+New daily and catch-up durable runs admit up to 1000 unique profiles. Their
+frozen provider budget is 10,000,000 micros ($10), reserving 10,000 micros per
+profile. A larger snapshot is rejected before creating a run; it is never
+silently truncated. Canary runs retain their separate 16-profile budget.
+Already-admitted runs keep their original frozen controls when resumed.
+
 The cron endpoint resolves resumable `cron_active_venues` work before any global
 source enumeration. `CRON_INGESTION_RESUMABLE_LOOKBACK_HOURS=168` keeps interrupted
 daily jobs recoverable across the 23-hour provider cooldown without extending the

@@ -28,6 +28,7 @@ import {
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { buildIngestionVenueResolver } from "../lib/domain/venues/index.ts";
 import { extractSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
+import { getEventDateFilterContext } from "../lib/pipeline/ingestion/parsing-date.ts";
 import { buildStructuredFactVariants } from "../lib/pipeline/ingestion/structured-fact-variants.ts";
 
 function confirmation(evidence, source = "caption") {
@@ -196,19 +197,21 @@ const SERBIAN_GENITIVE_MONTHS = [
   "decembra",
 ];
 
-function makeFutureCrossMonthRange() {
+function makeFutureCrossMonthRange(now = semanticQaNow) {
   const dayMs = 24 * 60 * 60 * 1000;
-  let monthOffset = 2;
+  let monthOffset = 1;
   let boundary = new Date(Date.UTC(
-    semanticQaNow.getUTCFullYear(),
-    semanticQaNow.getUTCMonth() + monthOffset,
+    now.getUTCFullYear(),
+    now.getUTCMonth() + monthOffset,
     1,
   ));
-  while (boundary.getUTCMonth() === 0) {
+  // Pick the nearest future same-year boundary. Skipping January must not
+  // push November fixtures beyond the production 90-day admission window.
+  while (boundary.getUTCMonth() === 0 || boundary.getTime() - 6 * dayMs <= now.getTime()) {
     monthOffset += 1;
     boundary = new Date(Date.UTC(
-      semanticQaNow.getUTCFullYear(),
-      semanticQaNow.getUTCMonth() + monthOffset,
+      now.getUTCFullYear(),
+      now.getUTCMonth() + monthOffset,
       1,
     ));
   }
@@ -630,6 +633,23 @@ function runSemanticNormalizationQa() {
     assert.equal(prepared.event.status, "approved");
     assert.equal(prepared.event.dateEvidenceIsRelative, false);
     assert.equal(prepared.normalizedFields.dateEvidenceVerified, true);
+  });
+
+  runCase("cross-month fixtures remain inside the future admission window year-round", () => {
+    for (const year of [2026, 2027]) {
+      for (let month = 0; month < 12; month += 1) {
+        for (const day of [1, 24, 28]) {
+          const now = new Date(Date.UTC(year, month, day, 12));
+          const range = makeFutureCrossMonthRange(now);
+          const filter = getEventDateFilterContext(now);
+          assert.ok(range.startDate > filter.todayIsoDate, `range must be future for ${now.toISOString()}`);
+          assert.ok(
+            addIsoDays(range.endDate, 1) <= filter.maxFutureIsoDate,
+            `range and outside-occurrence fixture must fit the admission window for ${now.toISOString()}`,
+          );
+        }
+      }
+    }
   });
 
   runCase("cross-month range gets occurrence-specific normalized evidence", () => {

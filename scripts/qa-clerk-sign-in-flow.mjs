@@ -124,9 +124,9 @@ try {
   assert.deepEqual(calls.prepare, [{ strategy: "email_code", emailAddressId: "email_qa" }]);
   assert.equal(calls.active.length, 0, "a valid password cannot bypass the required email code");
   assert.equal(navigation.length, 0);
-  assert.match(text(render()), /Verify your sign-in/);
+  assert.match(text(render()), /Potvrdi prijavu/);
   assert.match(text(render()), /o\*\*\*@example.invalid/);
-  assert.equal(button("Send a new code in 30s").props.disabled, true);
+  assert.equal(button("Novi kod za 30 s").props.disabled, true);
 
   settings.verification = "invalid";
   input("sign-in-code", "000000");
@@ -149,15 +149,15 @@ try {
 
   reset({ failSend: true });
   await passwordSignIn();
-  assert.match(text(render()), /Verify your sign-in/);
+  assert.match(text(render()), /Potvrdi prijavu/);
   assert.match(text(render()), /code could not be sent/);
   settings.failSend = false;
-  await button("Send verification code").props.onClick();
+  await button("Pošalji kod za potvrdu").props.onClick();
   assert.equal(calls.prepare.length, 2);
   assert.equal(calls.create.length, 1);
   assert.equal(calls.active.length, 0);
-  assert.equal(button("Send a new code in 30s").props.disabled, true);
-  button("Back to sign in").props.onClick();
+  assert.equal(button("Novi kod za 30 s").props.disabled, true);
+  button("Nazad na prijavu").props.onClick();
   assert.ok(find(render(), (node) => node.type === "input" && node.props.name === "password"));
 
   reset({ initialStatus: "complete" });
@@ -166,7 +166,7 @@ try {
   assert.deepEqual(calls.active, [{ session: "session_qa" }]);
 
   reset({ initialStatus: "needs_first_factor" });
-  button("Forgot password?").props.onClick();
+  button("Zaboravljena lozinka?").props.onClick();
   input("email", "owner@example.invalid");
   await submit();
   assert.equal(calls.create[0].strategy, "reset_password_email_code");
@@ -177,7 +177,7 @@ try {
   await submit();
   assert.deepEqual(calls.reset, [{ password: "qa-new-password-not-real", signOutOfOtherSessions: true }]);
   assert.equal(calls.active.length, 0, "password recovery must still respect required second-factor verification");
-  assert.match(text(render()), /Verify your sign-in/);
+  assert.match(text(render()), /Potvrdi prijavu/);
 
   // Optional local visual fixture: this inert markup never contacts Clerk.
   if (process.env.AUTH_QA_MARKUP_PATH) writeFileSync(process.env.AUTH_QA_MARKUP_PATH, renderToStaticMarkup(render()));

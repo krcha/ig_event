@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { durableControlsFor } from "../lib/pipeline/durable-ingestion-controller.ts";
 
 // This deliberately calls the registered Convex mutation handlers through a
 // tiny in-memory DB.  Static source checks are useful, but they cannot prove
@@ -313,7 +314,7 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
 // second run nor permits an executor to make a provider call early.
 {
   const db = new MemoryDb();
-  const fullHandles = Array.from({ length: 633 }, (_, index) => `full_${String(index).padStart(3, "0")}`);
+  const fullHandles = Array.from({ length: 1000 }, (_, index) => `full_${String(index).padStart(3, "0")}`);
   const runId = await createBuildingRun(db, "catch_up", fullHandles);
   assert.equal((await db.get(runId)).status, "building");
   assert.equal(await claim(db, runId, "must-not-fetch"), null, "building run must not expose provider work");
@@ -327,9 +328,23 @@ const handles = Array.from({ length: 632 }, (_, index) => `venue_${String(index)
   while (!built.complete) {
     built = await buildQueueBatch._handler(ctx(db), { runId, serviceSecret: process.env.CRON_SECRET });
   }
-  assert.equal(built.builtCount, 633);
-  assert.equal(db.rows("ingestionRunHandleReceipts").length, 633, "exact snapshot receipt coverage is required before execution");
+  assert.equal(built.builtCount, 1000);
+  assert.equal(db.rows("ingestionRunHandleReceipts").length, 1000, "exact snapshot receipt coverage is required before execution");
   assert.equal((await db.get(runId)).status, "queued");
+}
+
+for (const mode of ["daily", "catch_up"]) {
+  const db = new MemoryDb();
+  const handles = Array.from({ length: 1000 }, (_, index) => `budget_${index}`);
+  const runId = await createBuildingRun(db, mode, handles);
+  assert.deepEqual((await db.get(runId)).controls, durableControlsFor(mode));
+  assert.equal((await db.get(runId)).controls.budgetMicros, 10_000_000);
+  const rejectedDb = new MemoryDb();
+  await assert.rejects(
+    () => createBuildingRun(rejectedDb, mode, [...handles, "budget_overflow"]),
+    /frozen budget/,
+  );
+  assert.equal(rejectedDb.rows("ingestionRuns").length, 0);
 }
 
 // The canary contract is exact: sixteen frozen rows and no room for a broad

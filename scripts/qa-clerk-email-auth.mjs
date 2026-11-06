@@ -33,8 +33,11 @@ const callbackPath = "app/(auth)/sso-callback/[[...sso-callback]]/page.tsx";
 const youProfilePath = "components/auth/you-profile-panel.tsx";
 
 const authCard = requireFile(authCardPath);
-requireIncludes(authCardPath, authCard, "Sign in with email", "email sign-in heading");
-requireIncludes(authCardPath, authCard, "Sign up with email", "email sign-up heading");
+requireIncludes(authCardPath, authCard, 'title: "Prijavi se"', "public sign-in heading");
+requireIncludes(authCardPath, authCard, 'title: "Napravi nalog"', "public sign-up heading");
+requireExcludes(authCardPath, authCard, "Admin access", "admin-only public sign-in wording");
+requireExcludes(authCardPath, authCard, "Clerk account", "auth provider jargon");
+requireIncludes(authCardPath, authCard, "Nazad na događaje", "return to public browsing");
 requireIncludes(authCardPath, authCard, 'AUTH_COMPLETE_REDIRECT_PATH = "/"', "root fallback redirect");
 requireIncludes(authCardPath, authCard, "window.location.assign(authCompleteRedirectPath)", "post-auth redirect");
 requireIncludes(authCardPath, authCard, "getSafeRedirectPath", "same-origin post-auth redirect guard");
@@ -55,7 +58,7 @@ requireIncludes(
   "signOutOfOtherSessions: true",
   "password reset session revocation",
 );
-requireIncludes(authCardPath, authCard, "Forgot password?", "password recovery entry point");
+requireIncludes(authCardPath, authCard, "Zaboravljena lozinka?", "password recovery entry point");
 requireIncludes(authCardPath, authCard, 'name="email"', "manual email input");
 requireIncludes(authCardPath, authCard, 'type="email"', "email input type");
 requireIncludes(authCardPath, authCard, 'type="password"', "manual password input");

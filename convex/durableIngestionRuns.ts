@@ -284,7 +284,7 @@ function controlsFor(mode: RunMode) {
       pinnedPostPolicy: "exclude_all" as const,
       concurrency: MAX_CONCURRENCY,
       costPerProfileMicros: COST_PER_PROFILE_MICROS,
-      budgetMicros: 700 * COST_PER_PROFILE_MICROS,
+      budgetMicros: 1_000 * COST_PER_PROFILE_MICROS,
       ignoreCheckpoint: true,
       ignoreCooldown: true,
     };
@@ -296,7 +296,7 @@ function controlsFor(mode: RunMode) {
     pinnedPostPolicy: "include_recent" as const,
     concurrency: MAX_CONCURRENCY,
     costPerProfileMicros: COST_PER_PROFILE_MICROS,
-    budgetMicros: 700 * COST_PER_PROFILE_MICROS,
+    budgetMicros: 1_000 * COST_PER_PROFILE_MICROS,
     ignoreCheckpoint: false,
     ignoreCooldown: false,
   };
@@ -330,7 +330,7 @@ const receiptStatuses = [
 
 async function terminalCountsForRun(ctx: { db: any }, runId: string, selectedHandleCount: number) {
   // A run is admitted only when every selected handle fits inside its frozen
-  // budget, which bounds current production runs to 700 receipts. Query each
+  // budget, which bounds newly admitted full runs to 1000 receipts. Query each
   // indexed terminal state rather than maintaining a hot master counter.
   const perState = await Promise.all(
     terminalStatuses.map((status) =>

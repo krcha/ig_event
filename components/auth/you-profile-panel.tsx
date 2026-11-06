@@ -1,7 +1,7 @@
 "use client";
 
 import { useClerk, useUser } from "@clerk/nextjs";
-import { LogOut, Mail, Plus, Sparkles, UserRound } from "lucide-react";
+import { LogOut, Mail, Plus, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useAuthUser } from "@/components/providers/auth-user-provider";
@@ -66,21 +66,15 @@ function ProfileLoadingCard() {
 
 function SignInPromptCard() {
   return (
-    <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7">
+    <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7" lang="sr-Latn">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.42fr)] lg:items-center">
         <div className="space-y-3">
-          <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
-            <Sparkles className="h-3.5 w-3.5" />
-            Your nights
-          </span>
           <div className="space-y-2">
-            <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:whitespace-normal sm:text-4xl">
-              <span className="sm:hidden">Sign in to save</span>
-              <span className="hidden sm:inline">Sign in when you want to save.</span>
+            <h1 className="text-2xl font-semibold tracking-[-0.025em] sm:text-4xl">
+              Sačuvaj svoj izbor
             </h1>
-            <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
-              Browsing stays open to everyone. Use your account for saved events, follows, and
-              personal planning features.
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+              Prijavi se da sačuvane događaje i omiljena mesta vidiš na svim svojim uređajima.
             </p>
           </div>
         </div>
@@ -91,19 +85,19 @@ function SignInPromptCard() {
               <UserRound className="h-5 w-5" />
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">Create your event profile</p>
+              <p className="text-sm font-semibold text-foreground">Tvoj Event Zeka nalog</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Save events, follow places, and keep your nights in one tab.
+                Događaje možeš da pregledaš i bez naloga.
               </p>
             </div>
           </div>
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
             <Link className="button-primary min-h-12 w-full px-4 py-0" href="/sign-in?redirect_url=%2Fyou">
-              Sign in
+              Prijavi se
             </Link>
             <Link className="button-secondary min-h-12 w-full px-4 py-0" href="/sign-up?redirect_url=%2Fyou">
-              Sign up
+              Napravi nalog
             </Link>
           </div>
         </div>
@@ -114,17 +108,16 @@ function SignInPromptCard() {
 
 function ProfileAuthUnavailableCard() {
   return (
-    <section className="hero-panel px-4 py-5 text-center sm:px-6 sm:py-7">
-      <span className="app-chip mx-auto border-primary/25 bg-primary/[0.1] text-primary">
-        <UserRound className="h-3.5 w-3.5" />
-        Profile
-      </span>
-      <h1 className="mt-4 text-2xl font-semibold tracking-[-0.045em] sm:text-4xl">
-        Sign-in is still connecting.
+    <section className="hero-panel px-4 py-5 text-center sm:px-6 sm:py-7" lang="sr-Latn">
+      <h1 className="text-2xl font-semibold tracking-[-0.025em] sm:text-4xl">
+        Prijava se nije učitala
       </h1>
       <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
-        Clerk did not finish loading. Check the Clerk frontend DNS and refresh this page.
+        Osveži stranicu i pokušaj ponovo. Događaje možeš da pregledaš i bez prijave.
       </p>
+      <Link className="button-secondary mt-4 min-h-11 px-4" href="/">
+        Nazad na događaje
+      </Link>
     </section>
   );
 }

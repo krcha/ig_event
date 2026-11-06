@@ -1,7 +1,7 @@
 # EventZeka App installation guide and daily prompt
 
-Implemented in application source on 2026-11-06. Deployment is outside this
-handoff. This feature extends the existing public interface and does not change
+Implemented in application source on 2026-11-06. Production publication follows
+the dedicated VPS release procedure. This feature extends the public interface and does not change
 event ingestion, moderation, authentication, Convex APIs, or the event data model.
 
 The earlier HTML in `docs/design-proposals/install-app/` remains a historical
@@ -182,7 +182,8 @@ unrelated drift repair was performed.
 
 ## Verification handoff
 
-Final verification on 2026-11-06:
+Initial isolated-feature verification on 2026-11-06, before production-source
+reconciliation:
 
 - `npm run qa:release`: 137 checks passed; one existing check failed.
 - Lint, TypeScript, the production build (32 seconds), and the new
@@ -196,21 +197,39 @@ Final verification on 2026-11-06:
   resolved. The available default reviewer role substituted for the unavailable
   specialized finish reviewer.
 
-The remaining release failure is `qa:event-extraction-contract`, with the same
+The isolated checkout initially failed `qa:event-extraction-contract`, with
 two cases already failing before this feature was implemented:
 
 - `cross-month range gets occurrence-specific normalized evidence`
 - `range evidence cannot attest an outside occurrence`
 
-Both expected `ok` but received `skip`. Extraction code and these cases were
-not modified for this feature. The complete release gate is therefore not green;
-this handoff is implemented application source and local verification, not a
-deployment or approval to bypass the release gate.
+Both expected `ok` but received `skip`: a fixed two-month fixture jump could
+place its range outside the production 90-day horizon. The existing production
+source already contains a corrected future-range fixture and year-round
+regression coverage. That version is preserved in the reconciled release;
+production extraction semantics and the assertions were not weakened.
+
+## Production baseline preservation
+
+The live November 5 image contains 21 tracked source changes not yet recorded
+on main. Their bytes were verified against the running web container, its
+immutable build snapshot, and the production source directory. The release
+records these existing auth, calendar, durable-budget, documentation and QA
+changes separately so publishing the install prompt does not revert live
+behavior. The `/you` merge retains its deployed Serbian fallback/back link
+and the new installation link. Convex functions and schema are not redeployed.
+
+The production source working directory is left untouched. Build from a clean
+release worktree, using the current runtime image as the base, existing public
+build values and GeoIP data. Preserve the previous `.next/static` assets for
+open browser sessions. Promote one immutable image to both web and social only
+after the complete release gate, image build and candidate checks pass.
 
 Run `npm run qa:install-prompt` for policy coverage. It is also included in
 `npm run qa:release`. Future changes must rerun the complete release gate,
-including build, and `git diff --check`; the failure above remains a release
-blocker. No release pass or deployment is claimed here.
+including build, and `git diff --check`. The historical failure above is not
+permission to bypass any release gate. Actual release results are recorded
+with the deployment receipt and handoff.
 
 Browser verification passed in the actual local Next.js application for:
 

@@ -126,6 +126,38 @@ const originalDateNow = Date.now;
 let currentNowMs = Date.parse("2026-08-11T07:00:00.000Z");
 Date.now = () => currentNowMs;
 try {
+  // The production snapshot may grow past the former 700-profile budget.
+  // Admission must cover all 1000 profiles, while retaining a strict ceiling.
+  {
+    const db = new MemoryDb();
+    const handles = Array.from({ length: 1000 }, (_, index) => `daily_${index}`);
+    const admission = await queueDaily(db, handles, "snapshot:1000-profiles");
+    const run = await db.get(admission.runId);
+    assert.equal(admission.selectedHandleCount, 1000);
+    assert.equal(run.controls.budgetMicros, 10_000_000);
+    assert.equal(run.controls.concurrency, 6);
+    assert.equal(db.rows("ingestionDailySnapshots")[0].selectedHandleCount, 1000);
+  }
+  {
+    const db = new MemoryDb();
+    const handles = Array.from({ length: 600 }, (_, index) => `legacy_daily_${index}`);
+    const admission = await queueDaily(db, handles, "snapshot:legacy-budget");
+    const run = await db.get(admission.runId);
+    // Retrying a previously admitted run must preserve its frozen budget.
+    await db.patch(run._id, { controls: { ...run.controls, budgetMicros: 7_000_000 } });
+    const resumed = await queueDaily(db, ["changed_after_admission"], "snapshot:changed");
+    assert.equal(resumed.runId, run._id);
+    assert.equal((await db.get(run._id)).controls.budgetMicros, 7_000_000);
+    assert.equal((await db.get(run._id)).selectedHandleCount, 600);
+  }
+  {
+    const db = new MemoryDb();
+    const handles = Array.from({ length: 1001 }, (_, index) => `over_budget_${index}`);
+    await assert.rejects(() => queueDaily(db, handles, "snapshot:1001-profiles"), /frozen budget/);
+    assert.equal(db.rows("ingestionDailySnapshots").length, 0);
+    assert.equal(db.rows("ingestionRuns").length, 0);
+  }
+
   // The generic/admin admission path shares the same day fence. Even after a
   // run is terminal, a changed snapshot cannot create a second daily run.
   {

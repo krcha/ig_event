@@ -78,6 +78,14 @@ above Traefik's 90-second upstream idle-connection pool so the proxy cannot
 reuse a five-second Next socket while it is closing and turn an internal POST
 into a synthetic 502.
 
+The production web process sets
+`NODE_OPTIONS=--network-family-autoselection-attempt-timeout=1500`. Node 22's
+250 ms default can abandon connections to distant Instagram CDN hosts before
+they connect. The 1500 ms setting was verified against the same cached image
+URLs that timed out at the default. Keep the existing request deadlines,
+remote-image checks, and paid-fetch guards in place. Drain active ingestion
+requests before recreating the web container, then resume the same run.
+
 The durable runner classifies transient curl/network failures and HTTP
 408/425/429/5xx responses per worker. It retries the same durable run and fixed
 slot with exponential backoff capped at 60 seconds; the receipt's atomic

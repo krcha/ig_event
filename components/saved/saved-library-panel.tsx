@@ -341,8 +341,7 @@ export function SignInPromptCard({ authEnabled = true, returnPath = "/saved" }: 
               <span className="hidden sm:inline">Sign in to keep your plans.</span>
             </h1>
             <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
-              Browsing stays open. Saved events and favourite places appear here once you use a
-              real Clerk account.
+              Sign in to sync saved events and favourite places across your devices.
             </p>
           </div>
         </div>
