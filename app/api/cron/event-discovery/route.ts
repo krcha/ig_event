@@ -46,6 +46,7 @@ type CandidatePage<T> = { events: T[]; cursor: string | null };
 type UpcomingScan<T> = { pending: T[]; cursor: string | null };
 const upcomingClassification: UpcomingScan<ClassificationCandidate> = { pending: [], cursor: null };
 const upcomingResearch: UpcomingScan<ResearchCandidate> = { pending: [], cursor: null };
+const historicalResearch: UpcomingScan<ResearchCandidate> = { pending: [], cursor: null };
 
 async function refillUpcomingScan<T>(scan: UpcomingScan<T>, readPage: (cursor: string | null) => Promise<CandidatePage<T>>) {
   if (scan.pending.length) return;
@@ -84,9 +85,18 @@ async function researchNextBatch(
     })
     : { events: [], cursor: null };
   // Keep one ordinary slot when freshly classified events are ready as well.
-  const ordered = distinctByLatestRevision([
+  let ordered = distinctByLatestRevision([
     ...upcomingResearch.pending.slice(0, 1), ...focused.events, ...upcomingResearch.pending.slice(1),
   ]);
+  if (!ordered.length && !upcomingResearch.cursor) {
+    await refillUpcomingScan(historicalResearch, async (cursor) => {
+      const page: CandidatePage<ResearchCandidate> = await convex.query(listGenreResearchInputs, {
+        serviceSecret, cursor, retryBefore,
+      });
+      return { ...page, events: page.events.filter(({ date }) => date < upcomingFrom) };
+    });
+    ordered = historicalResearch.pending;
+  }
   const candidates: ResearchCandidate[] = [];
   let count = 0;
   for (const candidate of ordered) {
@@ -98,6 +108,7 @@ async function researchNextBatch(
   const attempted = new Set(candidates.map(({ key }) => key));
   // Failed attempts remain eligible when the scan wraps. They cannot block this page.
   upcomingResearch.pending = upcomingResearch.pending.filter(({ key }) => !attempted.has(key));
+  historicalResearch.pending = historicalResearch.pending.filter(({ key }) => !attempted.has(key));
   recentClassificationIds = focused.events.filter(({ key }) => !attempted.has(key)).map(({ key }) => key);
   if (!candidates.length) return;
 
