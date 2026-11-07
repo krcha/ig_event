@@ -110,3 +110,8 @@
   .stickyFilters nav { height: 100%; }
   .startFilter { grid-column: 1 / -1; }
 }
+
+@media (max-width: 350px) {
+  .stickyFilters nav { gap: 4px; }
+  .stickyFilters nav > button { gap: 3px; padding-inline: 1px; }
+}

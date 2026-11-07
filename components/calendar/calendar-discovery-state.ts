@@ -27,13 +27,15 @@ export function useCalendarDiscoveryFilters() {
   const format = params.get("format");
   const hide = params.get("hide");
   return useMemo(() => {
+    const hiddenCategories = normalizeHiddenEventCategories(hide?.split(",") ?? []);
     const categoryValues = new Set(category?.split(","));
     return {
-      categories: DISCOVERY_CATEGORIES.filter(({ key }) => categoryValues.has(key)).map(({ key }) => key),
+      // Older links can carry both keys. Their exclusions are authoritative.
+      categories: hiddenCategories.length ? [] : DISCOVERY_CATEGORIES.filter(({ key }) => categoryValues.has(key)).map(({ key }) => key),
       genre: genre === "unknown" ? "unknown" as const : MUSIC_GENRES.find(({ key }) => key === genre)?.key,
       time: CALENDAR_TIME_BANDS.find(({ key }) => key === time)?.key,
       format: format === "stand-up" ? "stand-up" as const : undefined,
-      hiddenCategories: normalizeHiddenEventCategories(hide?.split(",") ?? []),
+      hiddenCategories,
     };
   }, [category, genre, time, format, hide]);
 }

@@ -51,6 +51,7 @@ assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T06:00:00Z")), "2026
 
 const source = readFileSync("app/(main)/events-browse-page.tsx", "utf8");
 const agendaSource = readFileSync("components/calendar/calendar-agenda.tsx", "utf8");
+const discoveryFilters = readFileSync("components/calendar/calendar-discovery-filters.tsx", "utf8");
 const overviewApiSource = readFileSync("app/api/calendar/overview/route.ts", "utf8");
 const weekSource = readFileSync("components/calendar/mobile-week-calendar.tsx", "utf8");
 const dialogSource = readFileSync("components/calendar/mobile-calendar-dialog.tsx", "utf8");
@@ -62,7 +63,9 @@ assert.match(source, /<MobileWeekCalendar days=\{mobileWeekDays\}/);
 assert.match(source, /sortMode=\{selectedSortMode\}/);
 assert.equal((source.match(/<CalendarAgenda\b/g) ?? []).length, 1);
 assert.doesNotMatch(agendaSource,/left\.mobileOrder - right\.mobileOrder/,"Mobile must retain the chosen server sort.");
-assert.match(agendaSource,/appearance="tabs" singleSelection/);
+assert.match(agendaSource, /<CalendarDiscoveryFilters\b/);
+assert.match(discoveryFilters, /data-calendar-mobile-sticky-filters="true"/);
+assert.match(discoveryFilters, /data-calendar-category-selection="multiple"/);
 const toolbar=readFileSync("components/calendar/events-toolbar.tsx","utf8");
 assert.match(toolbar,/placeholder="Događaj, mesto ili žanr"/);
 assert.match(toolbar,/aria-label="Filteri"/);

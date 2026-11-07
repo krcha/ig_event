@@ -36,6 +36,8 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     : taxonomy.primaryCategory === "live" ? "Live/Svirke"
       : categoryLabels.get(taxonomy.primaryCategory);
   const formatLabel = taxonomy.formats[0] ? formatLabels.get(taxonomy.formats[0]) : undefined;
+  const normalizedFormat = formatLabel?.toLowerCase();
+  const secondaryTags = normalizedFormat ? event.tags.filter(tag => tag.trim().toLowerCase() !== normalizedFormat) : event.tags;
   const known = Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown";
   const venueHours = !known && event.presentation.kind === "venue_hours";
   const timeDescription = venueHours
@@ -72,7 +74,7 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
           <span className={styles.categoryLabel} data-category-tone={event.category}><span aria-hidden="true" /><PublicText text={categoryLabel} />
             {formatLabel ? <> · <PublicText text={formatLabel} /></> : null}
           </span>
-          <EventMetaRow event={event} presentation={event} />
+          <EventMetaRow event={event} presentation={{ category: event.category, tags: secondaryTags }} />
         </div>
         <OpenNowStatus eventId={event._id} state={event.openNowState} />
       </div>

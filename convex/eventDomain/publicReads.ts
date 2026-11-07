@@ -448,11 +448,9 @@ export async function getPublicApprovedEventHandler(
     : projectLegacyCompatiblePublicEventPage(ctx, [event]));
   if (!projected) return null;
   const structuredDataFacts = getConfirmedEventSchemaFacts(event, projected.venueId);
-  const eventTaxonomy = await loadPublicEventDiscoveryTaxonomy(ctx, event);
   return {
     ...projected,
     ...(structuredDataFacts ? { structuredDataFacts } : {}),
-    ...(eventTaxonomy ? { eventTaxonomy } : {}),
   };
 }
 
