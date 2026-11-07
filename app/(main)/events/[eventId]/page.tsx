@@ -1,5 +1,13 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { localizedMetadata, SITE_COPY, formatSeoDate } from "@/lib/i18n/seo";
+import { getEventContentLocales, getLocalizedEventDescription } from "@/lib/i18n/event-content";
+import { localizeHref, LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
+import { publicText } from "@/lib/i18n/public-messages";
+import { formatPublicDate } from "@/lib/i18n/display";
+
+import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 import type { Metadata } from "next";
-import Link from "next/link";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { notFound } from "next/navigation";
 import { cache, type ReactNode } from "react";
 import {
@@ -227,20 +235,6 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   return sanitizeVenueLinkedPublicEventFields(publicEvent, Boolean(venue));
 });
 
-function formatEventDate(value: string): string {
-  const parsed = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(parsed);
-}
-
 function buildCalendarHref(event: EventRecord): string {
   const month = event.date.slice(0, 7);
   const query = new URLSearchParams({ month, day: event.date });
@@ -256,66 +250,18 @@ function buildStableEventImageUrl(event: EventRecord): string | null {
 }
 
 export async function generateMetadata({ params }: EventDetailPageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const { eventId } = await params;
   const event = await loadEvent(eventId);
-  if (!event) {
-    notFound();
-  }
-
-  const canonicalPath = `/events/${event._id}`;
-  const eventDate = formatEventDate(event.date);
-  const baseDescription = `${event.title} at ${event.venue} in Belgrade on ${eventDate}.`;
-  const moderatedSummary = clipText(event.description?.trim(), 72);
-  const description = clipText(
-    `${baseDescription}${moderatedSummary ? ` ${moderatedSummary}` : " See announced time, artists, venue details, and the original event announcement."}`,
-    160,
-  );
-  const socialTitle = clipText(`${event.title} at ${event.venue}, Belgrade`, 90);
-  const imageUrl = buildStableEventImageUrl(event);
-
-  return {
-    title: clipText(`${event.title} at ${event.venue}, Belgrade`, 62),
-    description,
-    alternates: {
-      canonical: canonicalPath,
-    },
-    openGraph: {
-      title: socialTitle,
-      description,
-      type: "article",
-      locale: "en_RS",
-
-      siteName: "Event Zeka",
-      url: absoluteUrl(canonicalPath),
-      ...(imageUrl
-        ? {
-            images: [
-              {
-                url: imageUrl,
-                alt: `${event.title} at ${event.venue}`,
-              },
-            ],
-          }
-        : {}),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: socialTitle,
-      description,
-      ...(imageUrl ? { images: [imageUrl] } : {}),
-    },
-    robots: {
-      index: true,
-      follow: true,
-      googleBot: {
-        index: true,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  if (!event) notFound();
+  const date = formatSeoDate(event.date, locale);
+  const title = `${event.title} — ${event.venue}, ${SITE_COPY[locale].belgrade}`;
+  const description = {
+    sr: `${event.title} — ${event.venue}, ${date}. Najavljeno vreme, izvođači i originalna objava događaja.`,
+    en: `${event.title} at ${event.venue} on ${date}. Announced time, artists and the original event announcement.`,
+    ru: `${event.title} — ${event.venue}, ${date}. Объявленное время, участники и исходный анонс события.`,
+  }[locale];
+  return localizedMetadata({ locale, path: `/events/${event._id}`, title: clipText(title, 90), description: clipText(description, 180), type: "article", image: buildStableEventImageUrl(event), readyLocales: getEventContentLocales(event) });
 }
 
 function InfoTile({
@@ -333,7 +279,7 @@ function InfoTile({
 }) {
   return (
     <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-      <p className="section-kicker">{label}</p>
+      <p className="section-kicker"><PublicText text={label} /></p>
       <p className={cn("mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground", valueClassName)}>
         <Icon className="mt-0.5 h-4 w-4 flex-none text-primary" />
         <span className="min-w-0 break-words">{value}</span>
@@ -372,13 +318,16 @@ function EventImage({
 }
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
+  const locale = await getMetadataLocale();
   const { eventId } = await params;
   const event = await loadEvent(eventId);
   if (!event) {
     notFound();
   }
   const eventTime = resolveEventTimePresentation(event);
-  const whatToKnowText = event.sourceCaption?.trim() || event.description?.trim() || "";
+  const preferredText = event.sourceCaption?.trim() || event.description?.trim() || "";
+  const localizedDescription = getLocalizedEventDescription({ ...event, description: preferredText }, locale);
+  const whatToKnowText = localizedDescription.text;
   const reviewedSourceUpdate = getPublicReviewedSourceUpdate(event);
   const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const venueHref = event.venueId ? `/venues/${event.venueId}` : null;
@@ -395,14 +344,14 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     ...event,
     description: event.description,
     imageUrl: buildStableEventImageUrl(event) ?? undefined,
-  });
+  }, locale);
 
   return (
     <main className="app-page gap-3 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-9">
       {eventSchema ? <JsonLd data={eventSchema} /> : null}
-      <JsonLd data={buildBreadcrumbStructuredData(breadcrumbItems)} />
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-        <Link className="hover:text-primary" href="/">Belgrade events</Link>
+      <JsonLd data={buildBreadcrumbStructuredData(breadcrumbItems, locale)} />
+      <LocalizedElement as="nav" aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <Link className="hover:text-primary" href="/"><PublicText text={"Belgrade events"} /></Link>
         <span aria-hidden="true">/</span>
         {venueHref ? (
           <>
@@ -411,13 +360,11 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
           </>
         ) : null}
         <span aria-current="page" className="min-w-0 truncate text-foreground">{event.title}</span>
-      </nav>
+      </LocalizedElement>
       <div className="flex items-center justify-between gap-3">
         <EventCalendarBackLink className="button-secondary min-h-10 gap-2 px-4 py-0" href={calendarHref}>
-          <ArrowLeft className="h-4 w-4" />
-          Back
-        </EventCalendarBackLink>
-        <EventShareButton eventId={event._id} title={event.title} url={absoluteUrl(`/events/${event._id}`)} />
+          <ArrowLeft className="h-4 w-4" /><PublicText text={"Back"} /></EventCalendarBackLink>
+        <EventShareButton eventId={event._id} title={event.title} url={absoluteUrl(localizeHref(`/events/${event._id}`, locale))} />
         {event?.status && event.status !== "approved" ? (
           <span className="app-chip bg-card/95">{event.status}</span>
         ) : null}
@@ -433,7 +380,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 </div>
 
                 <div className="space-y-2">
-                  <p className="section-kicker">Event details</p>
+                  <p className="section-kicker"><PublicText text={"Event details"} /></p>
                   <h1 className="text-2xl font-semibold leading-tight tracking-[-0.045em] sm:text-4xl lg:text-5xl">
                     {event.title}
                   </h1>
@@ -441,11 +388,11 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <InfoTile icon={CalendarDays} label="Date" value={formatEventDate(event.date)} />
+                  <InfoTile icon={CalendarDays} label={publicText(locale, "Date")} value={formatPublicDate(locale, event.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" })} />
                   <InfoTile
                     icon={Clock3}
-                    label={eventTime.heading}
-                    value={eventTime.label}
+                    label={publicText(locale, eventTime.heading)}
+                    value={publicText(locale, eventTime.label)}
                     valueClassName={eventTime.kind === "venue_hours" ? "font-normal" : undefined}
                   />
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
@@ -456,10 +403,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                         href={venueHref}
                         prefetch={false}
                       >
-                        <span className="sr-only">Open {event.venue}</span>
+                        <span className="sr-only"><PublicText text={"Open "} />{event.venue}</span>
                       </Link>
                     ) : null}
-                    <p className="pointer-events-none relative z-10 section-kicker">Venue</p>
+                    <p className="pointer-events-none relative z-10 section-kicker"><PublicText text={"Venue"} /></p>
                     <p className="pointer-events-none relative z-10 mt-1.5 flex items-start gap-2 text-sm font-semibold leading-5 text-foreground">
                       <MapPin className="mt-0.5 h-4 w-4 flex-none text-primary" />
                       <span className="min-w-0 flex-1 break-words">{event.venue}</span>
@@ -485,32 +432,33 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
                 {whatToKnowText || reviewedSourceUpdate ? (
                   <section className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-                    <p className="text-sm font-semibold text-foreground">What to know</p>
+                    <p className="text-sm font-semibold text-foreground"><PublicText text={"What to know"} /></p>
                     {reviewedSourceUpdate ? (
                       <p className="mt-2 text-sm leading-6 text-muted-foreground" data-reviewed-source-update="true">
-                        <span className="font-semibold text-foreground">Update:</span>{" "}
+                        <span className="font-semibold text-foreground"><PublicText text={"Update:"} /></span>{" "}
                         {reviewedSourceUpdate.text}{" "}
-                        <a
+                        <LocalizedElement as="a"
                           className="font-semibold text-primary hover:text-primary/85"
                           href={reviewedSourceUpdate.sourceUrl}
                           rel="noopener noreferrer"
                           target="_blank"
-                        >
-                          View post
-                        </a>
+                        ><PublicText text={"View post"} /></LocalizedElement>
                       </p>
                     ) : null}
                     {whatToKnowText ? (
+                      <>
+                      {localizedDescription.original ? <p className="mt-2 text-xs text-muted-foreground"><PublicText text={event.sourceCaption?.trim() ? "Original caption" : "Original description"} /></p> : null}
                       <ReadMoreText
                         buttonClassName="text-sm leading-6 text-primary hover:text-primary/85"
                         className="mt-2"
                         collapsedButtonClassName="bg-[#10141F]"
-                        lessLabel="show less"
-                        moreLabel="read more"
-                        paragraphProps={{ "data-event-description": "true" }}
+                        lessLabel={publicText(locale, "show less")}
+                        moreLabel={publicText(locale, "read more")}
+                        paragraphProps={{ "data-event-description": "true", lang: localizedDescription.original ? "und" : LOCALE_LANGUAGE_TAGS[locale] }}
                         text={whatToKnowText}
                         textClassName="text-sm leading-6 text-muted-foreground"
                       />
+                      </>
                     ) : null}
                   </section>
                 ) : null}
@@ -518,7 +466,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 {event.artists.length > 0 ? (
                   <details className="group rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-2.5">
                     <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
-                      <span>Artists</span>
+                      <span><PublicText text={"Artists"} /></span>
                       <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                         {event.artists.length}
                         <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
@@ -537,21 +485,17 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 <div className="hidden flex-wrap gap-2 md:flex">
                   <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="full" />
                   {event.instagramPostUrl ? (
-                    <a
+                    <LocalizedElement as="a"
                       aria-label={`View post: original Instagram announcement for ${event.title}`}
                       className="button-primary gap-2"
                       href={event.instagramPostUrl}
                       rel="noreferrer"
                       target="_blank"
-                    >
-                      View post
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
+                    ><PublicText text={"View post"} /><ExternalLink className="h-4 w-4" />
+                    </LocalizedElement>
                   ) : null}
                   <EventCalendarBackLink className="button-secondary gap-2" href={calendarHref}>
-                    <CalendarDays className="h-4 w-4" />
-                    Calendar
-                  </EventCalendarBackLink>
+                    <CalendarDays className="h-4 w-4" /><PublicText text={"Calendar"} /></EventCalendarBackLink>
                 </div>
               </div>
 
@@ -570,9 +514,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     </div>
                   </div>
                 ) : (
-                  <div className="flex min-h-40 items-center justify-center rounded-[1.1rem] border border-dashed border-border/80 bg-card/82 px-6 text-center text-sm text-muted-foreground lg:min-h-72">
-                    No poster image available.
-                  </div>
+                  <div className="flex min-h-40 items-center justify-center rounded-[1.1rem] border border-dashed border-border/80 bg-card/82 px-6 text-center text-sm text-muted-foreground lg:min-h-72"><PublicText text={"No poster image available."} /></div>
                 )}
               </aside>
             </div>
@@ -593,21 +535,17 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   variant="full"
                 />
               {event.instagramPostUrl ? (
-                <a
+                <LocalizedElement as="a"
                   aria-label={`View post: original Instagram announcement for ${event.title}`}
                   className="button-primary min-h-11 flex-1 gap-2 px-3 py-0"
                   href={event.instagramPostUrl}
                   rel="noreferrer"
                   target="_blank"
-                >
-                  View post
-                  <ExternalLink className="h-4 w-4" />
-                </a>
+                ><PublicText text={"View post"} /><ExternalLink className="h-4 w-4" />
+                </LocalizedElement>
               ) : null}
               <EventCalendarBackLink className="button-secondary min-h-11 flex-1 gap-2 px-3 py-0" href={calendarHref}>
-                <CalendarDays className="h-4 w-4" />
-                Calendar
-              </EventCalendarBackLink>
+                <CalendarDays className="h-4 w-4" /><PublicText text={"Calendar"} /></EventCalendarBackLink>
             </div>
           </div>
     </main>

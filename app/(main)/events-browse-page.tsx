@@ -1,4 +1,6 @@
-import Link from "next/link";
+
+import { PublicText } from "@/components/i18n/public-text";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import Image from "next/image";
 import skyline from "@/public/images/belgrade-skyline.png";
 import {
@@ -16,7 +18,11 @@ import type { CalendarEventSummary } from "@/lib/events/calendar-agenda-types";
 import { resolveCalendarVenueSelection } from "@/lib/events/calendar-venue-selection";
 import { JsonLd } from "@/components/seo/json-ld";
 import { MobileWeekCalendar } from "@/components/calendar/mobile-week-calendar";
-import { getMobileDayHeading, getMobileDayLabel, getMobileWeekDateKeys } from "@/lib/events/mobile-week";
+import { getMobileWeekDateKeys } from "@/lib/events/mobile-week";
+import { getLocale } from "@/i18n/server";
+import { LOCALE_LANGUAGE_TAGS, localizeHref } from "@/i18n/config";
+import { eventNoun, formatPublicDate, publicDayHeading, publicDayLabel } from "@/lib/i18n/display";
+import { getHomeFaqItems } from "@/lib/i18n/seo";
 import mobileStyles from "@/components/calendar/mobile-events-home.module.css";
 import { getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
 import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
@@ -24,7 +30,7 @@ import { cn } from "@/lib/utils";
 import { addDaysToDateKey, dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
 import { getOpenNowEventState, getOpenNowEventWindow, type OpenNowEventState } from "@/lib/venues/venue-open-now";
 import { matchesPublicEventNameArtistOrVenue } from "@/lib/events/public-event-search";
-import { HOME_FAQ_ITEMS, buildHomePageStructuredData } from "@/lib/seo/site";
+import { buildHomePageStructuredData } from "@/lib/seo/site";
 import {
   getPublicEventVenueFilterValue,
   matchesPublicEventVenueFilter,
@@ -132,8 +138,6 @@ function isWeekendDate(date: Date): boolean {
 
 // These formats are fixed for this page. Reuse ICU formatters instead of
 // rebuilding their locale data for every calendar cell and every request.
-const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-const dayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" });
 
 function eventMatchesSearch(event: PublicEvent, query: string | undefined): boolean {
   return matchesPublicEventNameArtistOrVenue(event, query);
@@ -231,6 +235,7 @@ function getCalendarDayBucket(
 }
 
 export default async function CalendarPage({ searchParams }: CalendarPageProps) {
+  const locale = await getLocale();
   const resolvedSearchParams = await searchParams;
   const now = Date.now();
   const openNowActive = getSingleValue(resolvedSearchParams?.open) === "now";
@@ -350,7 +355,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
         month: monthParam,
         day: dayKey,
       })}`,
-      weekdayLabel: weekdayFormatter.format(day),
+      weekdayLabel: formatPublicDate(locale, day, { weekday: "short" }),
       dayNumber: day.getDate(),
       eventCount: dayBucket?.eventCount ?? 0,
       categoryCounts: dayBucket?.categoryCounts ?? createEmptyDayCategoryCounts(),
@@ -371,13 +376,13 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const mobileWeekDays = weekDateKeys.map((dayKey) => ({
     dayKey,
     href: `/${buildQueryString({ ...dateNavigationFilters, month: dayKey.slice(0, 7), day: dayKey })}`,
-    label: getMobileDayLabel(dayKey, todayKey),
+    label: publicDayLabel(locale, dayKey, todayKey),
     eventCount: weekDayBuckets.get(dayKey)?.eventCount ?? 0,
     categoryCounts: weekDayBuckets.get(dayKey)?.categoryCounts ?? createEmptyDayCategoryCounts(),
     isWeekend: isWeekendDate(dateKeyToLocalNoonDate(dayKey)),
   }));
   const hasActiveFilters = Boolean(selectedSearchQuery || venueSelection.value || hiddenCategoriesParam || hiddenSort || openNowActive);
-  const dateLabel = new Intl.DateTimeFormat("sr-Latn", { weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Belgrade" }).format(selectedDate);
+  const dateLabel = formatPublicDate(locale, selectedDate, { weekday: "long", day: "numeric", month: "long" });
 
   return (
     <CalendarOverviewProvider
@@ -386,23 +391,23 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       selectedDay={{ date: selectedDayKey, groups: selectedDayAgendaEvents.map(event => ({ date: selectedDayKey, category: getDayCategory(event), venueValue: getPublicEventVenueFilterValue(event), count: 1, legacyVenueMatchCount: 1 })) }}
     >
     <main className={cn("app-page", mobileStyles.home)} data-mobile-week-home="true">
-      <JsonLd data={buildHomePageStructuredData(selectedDayAgendaEvents)} />
+      <JsonLd data={buildHomePageStructuredData(selectedDayAgendaEvents, locale)} />
       <CalendarScrollRestoration />
       <section className={mobileStyles.intro} aria-labelledby="events-heading">
         <Image className={mobileStyles.panorama} src={skyline} alt="" fill priority sizes="(max-width: 767px) 100vw, 1240px" />
-        <div><h1 className={mobileStyles.heading} id="events-heading" lang="sr-Latn-RS">{getMobileDayHeading(selectedDayKey, todayKey)}</h1>
-          <p className={mobileStyles.total} lang="sr-Latn-RS"><span data-calendar-mobile-day-count="true">{selectedDayEventCount}</span> {selectedDayEventCount === 1 ? "događaj" : "događaja"} u gradu</p>
+        <div><h1 className={mobileStyles.heading} id="events-heading" lang={LOCALE_LANGUAGE_TAGS[locale]}>{publicDayHeading(locale, selectedDayKey, todayKey)}</h1>
+          <p className={mobileStyles.total}><span data-calendar-mobile-day-count="true">{selectedDayEventCount}</span> {eventNoun(locale, selectedDayEventCount)}<PublicText text={" u gradu"} /></p>
         </div>
         <p className={mobileStyles.selectedDate}>{dateLabel.charAt(0).toUpperCase() + dateLabel.slice(1)}</p>
       </section>
       <MobileWeekCalendar days={mobileWeekDays} monthDays={mobileMonthDays.map(({ dayKey, eventCount }) => ({ dayKey, eventCount }))} selectedDayKey={selectedDayKey} todayKey={todayKey} />
       <EventsToolbar query={selectedSearchQuery} sortMode={selectedSortMode} openNowActive={openNowActive} openNowHref={openNowHref} now={now} />
-      {venueSelection.value ? <p className="mb-2 text-xs text-muted-foreground">Izabrano mesto: {selectedVenueLabel} · <Link href={`/${buildQueryString({ ...baseFilters, month: monthParam, day: selectedDayKey, venue: undefined })}`} prefetch={false} scroll={false} data-calendar-client-navigation="true" className="text-primary underline underline-offset-4">Poništi</Link></p> : null}
-      {error ? <p className="py-4 text-sm text-destructive" role="alert">{error}</p> : <CalendarAgenda
+      {venueSelection.value ? <p className="mb-2 text-xs text-muted-foreground"><PublicText text={"Izabrano mesto: "} />{selectedVenueLabel} · <Link href={`/${buildQueryString({ ...baseFilters, month: monthParam, day: selectedDayKey, venue: undefined })}`} prefetch={false} scroll={false} data-calendar-client-navigation="true" className="text-primary underline underline-offset-4"><PublicText text={"Poništi"} /></Link></p> : null}
+      {error ? <p className="py-4 text-sm text-destructive" role="alert"><PublicText text={error} /></p> : <CalendarAgenda
         key={JSON.stringify([selectedDayKey, venueSelection.value, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}
         events={projectCalendarAgendaEvents(sortedDayAgendaEvents, new Map(sortedDayAgendaEvents.map((event, index) => [event._id, index])), openNowStates)}
         hiddenDayCategories={hiddenDayCategories} selectedDayEventCount={selectedDayEventCount}
-        dayLabel={dayFormatter.format(selectedDate)} openNowActive={openNowActive} openNowHref={openNowHref}
+        dayLabel={formatPublicDate(locale, selectedDate, { weekday: "short", month: "short", day: "numeric" })} openNowActive={openNowActive} openNowHref={localizeHref(openNowHref, locale)}
         now={now} authEnabled={authEnabled} sortMode={selectedSortMode} hasActiveFilters={hasActiveFilters}
         clearFiltersHref={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`} />}
 
@@ -412,31 +417,19 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       >
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)]">
           <div>
-            <h2 id="belgrade-events-guide" className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              What&apos;s on in Belgrade?
-            </h2>
+            <h2 id="belgrade-events-guide" className="mt-2 text-2xl font-semibold tracking-tight text-foreground"><PublicText text={"What's on in Belgrade?"} /></h2>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground"><PublicText text={"Use Event Zeka to plan a night out or a culture-filled day. Check the selected date, open an event for announced times and ticket details, then confirm the latest information with the linked venue or original Instagram post."} /></p>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              Use Event Zeka to plan a night out or a culture-filled day. Check the selected date,
-              open an event for announced times and ticket details, then confirm the latest information
-              with the linked venue or original Instagram post.
-            </p>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground" lang="sr-Latn-RS">
-              <strong className="text-foreground">Događaji u Beogradu:</strong> izaberite datum,
-              pretražite izvođača ili mesto i proverite detalje događaja pre polaska.
-            </p>
+              <strong className="text-foreground"><PublicText text={"Događaji u Beogradu:"} /></strong><PublicText text={" izaberite datum, pretražite izvođača ili mesto i proverite detalje događaja pre polaska."} /></p>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Link className="button-secondary min-h-10 px-4 py-0" href="/discover">
-                Discover tonight
-              </Link>
-              <Link className="button-secondary min-h-10 px-4 py-0" href="/map">
-                Explore venues
-              </Link>
+              <Link className="button-secondary min-h-10 px-4 py-0" href="/discover"><PublicText text={"Discover tonight"} /></Link>
+              <Link className="button-secondary min-h-10 px-4 py-0" href="/map"><PublicText text={"Explore venues"} /></Link>
             </div>
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-lg font-semibold text-foreground">Belgrade events FAQ</h2>
-            {HOME_FAQ_ITEMS.map((item) => (
+            <h2 className="text-lg font-semibold text-foreground"><PublicText text={"Belgrade events FAQ"} /></h2>
+            {getHomeFaqItems(locale).map((item) => (
               <details className="rounded-[0.95rem] border border-border/75 bg-white/[0.025] px-3.5 py-3" key={item.question}>
                 <summary className="cursor-pointer text-sm font-semibold text-foreground">
                   {item.question}

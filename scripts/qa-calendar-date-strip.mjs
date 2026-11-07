@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import * as venueTypes from "../lib/taxonomy/venue-types.ts";
+import "./register-ts-paths.mjs";
+const localeConfig = await import("../i18n/config.ts");
+const localeDisplay = await import("../lib/i18n/display.ts");
 
 const source = readFileSync("components/calendar/mobile-month-day-strip.tsx", "utf8");
 const compiled = ts.transpileModule(source, {
@@ -60,6 +63,7 @@ function mount({ selectedDay = 20, surface = "mobile", month = "2026-10", storag
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "next/link") return { default: "link" };
+      if (name === "@/components/i18n/public-text") return { LocalizedLink: "link", useLocalizedRouter: () => ({ push: (...args) => routes.push(args) }) };
       if (name === "next/navigation") return { useRouter: () => ({ push: (...args) => routes.push(args) }) };
       if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
       throw new Error(`Unexpected component import: ${name}`);
@@ -241,6 +245,9 @@ function mountCategoryChips(initialHiddenCategories = []) {
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "next/navigation") return { usePathname: () => "/", useRouter: () => router };
+      if (name === "@/components/i18n/public-text") return { PublicText: "public-text", useLocalizedRouter: () => router };
+      if (name === "@/i18n/config") return localeConfig;
+      if (name === "@/lib/i18n/display") return localeDisplay;
       if (name === "@/lib/taxonomy/event-categories") return categories.exports;
       if (name === "@/components/events/event-meta") return { EVENT_CATEGORY_TONES: Object.fromEntries(
         ["club", "live", "culture", "event"].map((key) => [key, {}])) };

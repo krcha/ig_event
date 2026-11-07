@@ -17,6 +17,14 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { startInstallGuideLanding } from "@/lib/install/guide-landing";
 import styles from "./install-guide.module.css";
+import { useLocale } from "@/i18n/client";
+import { localizeHref, LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
+import { accountText } from "@/lib/i18n/account-messages";
+
+function useInstallCopy() {
+  const locale = useLocale();
+  return { locale, t: (key: Parameters<typeof accountText>[1]) => accountText(locale, key) };
+}
 
 type Platform = "ios" | "android" | "desktop";
 
@@ -53,124 +61,127 @@ function Step({ title, children, diagram }: { title: string; children: ReactNode
 }
 
 function IPhoneSteps() {
+  const { t } = useInstallCopy();
   return (
     <>
-      <p className={styles.platformNote}>U Safariju na iPhone-u</p>
+      <p className={styles.platformNote}>{t("install.iosNote")}</p>
       <ol className={styles.steps}>
         <Step
-          title="Otvori deljenje"
+          title={t("install.shareTitle")}
           diagram={(
-            <Diagram label="Ilustracija Safari menija: izaberi Share, ikonicu deljenja.">
+            <Diagram label={t("install.safariDiagram")}>
               <div className={styles.browserAddress}><span>eventzeka.com</span><RefreshCw aria-hidden="true" /></div>
-              <div className={`${styles.menuLine} ${styles.highlight}`}><Share aria-hidden="true" /><strong>Share</strong><span className={styles.tapCaption}>Dodirni ovde</span></div>
+              <div className={`${styles.menuLine} ${styles.highlight}`}><Share aria-hidden="true" /><strong>Share</strong><span className={styles.tapCaption}>{t("install.tapHere")}</span></div>
               <div className={`${styles.menuLine} ${styles.mutedLine}`}><Bookmark aria-hidden="true" />Add to Bookmarks</div>
             </Diagram>
           )}
         >
-          Dodirni <strong>Share</strong> <Share aria-hidden="true" className={styles.inlineIcon} />. Ako ga ne vidiš, otvori meni stranice pa izaberi Share.
+          {t("install.tap")} <strong lang="en">Share</strong> <Share aria-hidden="true" className={styles.inlineIcon} />. {t("install.shareAfter")}
         </Step>
         <Step
-          title="Dodaj na početni ekran"
+          title={t("install.addHome")}
           diagram={(
-            <Diagram label="Ilustracija liste deljenja: izaberi Add to Home Screen.">
+            <Diagram label={t("install.shareDiagram")}>
               <div className={styles.sharePreview}><AppIcon size={32} /><div><strong>Event Zeka</strong><span>eventzeka.com</span></div></div>
               <div className={`${styles.menuLine} ${styles.mutedLine}`}><Search aria-hidden="true" />Find on Page</div>
               <div className={`${styles.menuLine} ${styles.highlight}`}><Plus aria-hidden="true" /><strong>Add to Home Screen</strong></div>
             </Diagram>
           )}
         >
-          U listi pronađi <strong>Add to Home Screen</strong>. Po potrebi pomeri listu nadole.
+          {t("install.findInList")} <strong lang="en">Add to Home Screen</strong>. {t("install.scrollList")}
         </Step>
         <Step
-          title="Potvrdi dodavanje"
+          title={t("install.confirmAdd")}
           diagram={(
-            <Diagram label="Ilustracija potvrde: Open as Web App je uključeno, a Add potvrđuje dodavanje.">
+            <Diagram label={t("install.iosConfirmDiagram")}>
               <div className={styles.confirmTop}><span>Cancel</span><strong>Add to Home Screen</strong><span className={styles.nativeAction}>Add</span></div>
               <AppIdentity />
               <div className={styles.switchRow}><span>Open as Web App</span><span aria-hidden="true" className={styles.nativeSwitch} /></div>
             </Diagram>
           )}
         >
-          Ako se prikazuje <strong>Open as Web App</strong>, ostavi uključeno. Zatim dodirni <strong>Add</strong>.
+          {t("install.ifShown")} <strong lang="en">Open as Web App</strong>, {t("install.keepEnabled")} <strong lang="en">Add</strong>.
         </Step>
       </ol>
-      <p className={styles.browserFootnote}>Ilustracije menija. Nazivi i raspored zavise od verzije i jezika iOS-a.</p>
+      <p className={styles.browserFootnote}>{t("install.iosFootnote")}</p>
     </>
   );
 }
 
 function AndroidSteps() {
+  const { t } = useInstallCopy();
   return (
     <>
-      <p className={styles.platformNote}>U Chrome-u na Android telefonu</p>
+      <p className={styles.platformNote}>{t("install.androidNote")}</p>
       <ol className={styles.steps}>
         <Step
-          title="Otvori Chrome meni"
+          title={t("install.openChrome")}
           diagram={(
-            <Diagram label="Ilustracija Chrome adresne trake: otvori meni sa tri tačke.">
+            <Diagram label={t("install.androidMenuDiagram")}>
               <div className={styles.chromeAddress}><span>eventzeka.com</span><span className={`${styles.highlight} ${styles.kebab}`}><EllipsisVertical aria-hidden="true" /></span></div>
             </Diagram>
           )}
         >
-          Na sajtu eventzeka.com dodirni tri tačke u Chrome-u.
-        </Step>
+          {t("install.androidOpen")}</Step>
         <Step
-          title="Pronađi instaliranje"
+          title={t("install.findInstall")}
           diagram={(
-            <Diagram label="Ilustracija Chrome menija: izaberi Install and create shortcut.">
+            <Diagram label={t("install.chromeInstallDiagram")}>
               <div className={`${styles.menuLine} ${styles.mutedLine}`}>Find in page</div>
               <div className={`${styles.menuLine} ${styles.highlight}`}><Download aria-hidden="true" /><strong>Install and create shortcut</strong></div>
             </Diagram>
           )}
         >
-          Izaberi <strong>Install and create shortcut</strong>. U nekim verzijama piše Install app ili Add to Home screen.
+          {t("install.choose")} <strong lang="en">Install and create shortcut</strong>. {t("install.chromeVersions")}
         </Step>
         <Step
-          title="Potvrdi instaliranje"
+          title={t("install.confirmInstall")}
           diagram={(
-            <Diagram label="Ilustracija potvrde za Event Zeka: izaberi Install.">
+            <Diagram label={t("install.androidConfirmDiagram")}>
               <AppIdentity />
               <div className={styles.androidActions}><span>Cancel</span><strong className={styles.nativeAction}>Install</strong></div>
             </Diagram>
           )}
         >
-          Dodirni <strong>Install</strong> i prati potvrdu telefona. Ako nudi samo prečicu, potvrdi dodavanje prečice.
+          {t("install.tap")} <strong lang="en">Install</strong> {t("install.androidConfirm")}
         </Step>
       </ol>
-      <p className={styles.browserFootnote}>Ilustracije menija. Dostupna opcija zavisi od Chrome-a i uređaja.</p>
+      <p className={styles.browserFootnote}>{t("install.androidFootnote")}</p>
     </>
   );
 }
 
 function DesktopSteps() {
+  const { t } = useInstallCopy();
   return (
     <>
-      <p className={styles.platformNote}>Chrome na računaru</p>
+      <p className={styles.platformNote}>{t("install.desktopNote")}</p>
       <ol className={styles.steps}>
-        <Step title="Otvori eventzeka.com">U Chrome-u otvori meni sa tri tačke.</Step>
+        <Step title={t("install.openWebsite")}>{t("install.desktopOpen")}</Step>
         <Step
-          title="Pronađi instaliranje"
+          title={t("install.findInstall")}
           diagram={(
-            <Diagram label="Ilustracija Chrome menija: Cast, save, and share, pa Install page as app.">
+            <Diagram label={t("install.desktopMenuDiagram")}>
               <div className={`${styles.menuLine} ${styles.mutedLine}`}>Cast, save, and share</div>
               <div className={`${styles.menuLine} ${styles.highlight}`}><Monitor aria-hidden="true" /><strong>Install page as app…</strong></div>
             </Diagram>
           )}
         >
-          Izaberi <strong>Cast, save, and share</strong>, pa <strong>Install page as app…</strong>. Može biti dostupna i ikonica za instaliranje u adresnoj traci.
+          {t("install.choose")} <strong lang="en">Cast, save, and share</strong>, {t("install.then")} <strong lang="en">Install page as app…</strong>. {t("install.addressInstall")}
         </Step>
-        <Step title="Potvrdi sa Install">Event Zeku zatim otvaraš iz liste svojih aplikacija.</Step>
+        <Step title={t("install.confirmWithInstall")}>{t("install.openFromApps")}</Step>
       </ol>
       <details className={styles.helpDetail}>
-        <summary>Koristim Safari na Mac-u</summary>
-        <p>Na macOS Sonoma 14 ili novijem: Share → Add to Dock → Add. Naziv i adresu proveri pre potvrde.</p>
+        <summary>{t("install.macSafari")}</summary>
+        <p>{t("install.macHelp")}</p>
       </details>
-      <p className={styles.browserFootnote}>Ilustracija Chrome menija. Opcije mogu da se razlikuju.</p>
+      <p className={styles.browserFootnote}>{t("install.desktopFootnote")}</p>
     </>
   );
 }
 
 export function InstallGuide() {
+  const { locale, t } = useInstallCopy();
   const [platform, setPlatform] = useState<Platform>("ios");
   const [platformReady, setPlatformReady] = useState(false);
   const guideRef = useRef<HTMLElement>(null);
@@ -202,16 +213,16 @@ export function InstallGuide() {
   }
 
   return (
-    <main className={styles.guide} lang="sr-Latn" ref={guideRef}>
-      <Link className={styles.backLink} href="/"><ArrowLeft aria-hidden="true" />Nazad na događaje</Link>
+    <main className={styles.guide} lang={LOCALE_LANGUAGE_TAGS[locale]} ref={guideRef}>
+      <Link className={styles.backLink} href={localizeHref("/", locale)}><ArrowLeft aria-hidden="true" />{t("install.backEvents")}</Link>
       <section className={styles.hero}>
-        <Image alt="EventZeka App ikonica" className={styles.heroIcon} height={88} priority src="/event-zeka-icon-192.png" width={88} />
-        <h1>Instaliraj<br /><span>EventZeka App</span></h1>
-        <p>Izaberi uređaj i prati korake.</p>
+        <Image alt={t("install.iconAlt")} className={styles.heroIcon} height={88} priority src="/event-zeka-icon-192.png" width={88} />
+        <h1>{t("install.install")}<br /><span>EventZeka App</span></h1>
+        <p>{t("install.pickDevice")}</p>
       </section>
       <section className={styles.installation} aria-labelledby="install-guide-title">
-        <h2 id="install-guide-title" ref={headingRef} tabIndex={-1}>Uputstvo za instalaciju</h2>
-        <div aria-label="Izaberi uređaj" className={styles.platformTabs} role="tablist">
+        <h2 id="install-guide-title" ref={headingRef} tabIndex={-1}>{t("install.instructions")}</h2>
+        <div aria-label={t("install.chooseDevice")} className={styles.platformTabs} role="tablist">
           {PLATFORMS.map((item, index) => (
             <button
               aria-controls={`install-platform-${item.id}`}
@@ -224,7 +235,7 @@ export function InstallGuide() {
               role="tab"
               tabIndex={platform === item.id ? 0 : -1}
               type="button"
-            >{item.label}</button>
+            >{item.id === "desktop" ? t("install.computer") : item.label}</button>
           ))}
         </div>
         {PLATFORMS.map(item => (
@@ -233,26 +244,26 @@ export function InstallGuide() {
           </div>
         ))}
         <div className={styles.guideDone}>
-          <Link className="button-primary gap-3" href="/">Nazad na događaje<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link>
-          <p>Instalaciju potvrđuješ u pregledaču.</p>
+          <Link className="button-primary gap-3" href={localizeHref("/", locale)}>{t("install.backEvents")}<ArrowRight aria-hidden="true" className="h-4 w-4" /></Link>
+          <p>{t("install.confirmInBrowser")}</p>
         </div>
       </section>
       <section aria-labelledby="install-help-title" className={styles.help}>
-        <h2 id="install-help-title">Ne vidiš istu opciju?</h2>
+        <h2 id="install-help-title">{t("install.differentOption")}</h2>
         <details className={styles.helpDetail}>
-          <summary>Otvorio/la sam sajt iz Instagrama</summary>
-          <p>U meniju Instagrama izaberi otvaranje u spoljašnjem pregledaču. Nastavi u Safariju na iPhone-u ili Chrome-u na Androidu.</p>
+          <summary>{t("install.fromInstagram")}</summary>
+          <p>{t("install.externalBrowser")}</p>
         </details>
         <details className={styles.helpDetail}>
-          <summary>Šta je EventZeka App?</summary>
-          <p>EventZeka App je web aplikacija koja se dodaje iz pregledača. Za pregled događaja potreban je internet.</p>
+          <summary>{t("install.whatIsApp")}</summary>
+          <p>{t("install.appDefinition")}</p>
         </details>
         <details className={styles.helpDetail}>
-          <summary>Gde su zvanična uputstva?</summary>
+          <summary>{t("install.officialHelp")}</summary>
           <p className={styles.sourceLinks}>
             <a href="https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/27/ios/27" rel="noopener noreferrer" target="_blank">Apple: iPhone</a>
             <a href="https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DAndroid&hl=en" rel="noopener noreferrer" target="_blank">Google: Android</a>
-            <a href="https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DDesktop&hl=en" rel="noopener noreferrer" target="_blank">Google: računar</a>
+            <a href="https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DDesktop&hl=en" rel="noopener noreferrer" target="_blank">{t("install.googleDesktop")}</a>
             <a href="https://support.apple.com/en-ca/104996" rel="noopener noreferrer" target="_blank">Apple: Mac</a>
           </p>
         </details>

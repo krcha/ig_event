@@ -1,4 +1,8 @@
 "use client";
+import { PublicText } from "@/components/i18n/public-text";
+
+import { LocalizedElement } from "@/components/i18n/public-text";
+
 
 import { Heart } from "lucide-react";
 import { useState } from "react";
@@ -58,7 +62,7 @@ export function FavoriteVenueButton({
 
   return (
     <span className={cn("inline-flex flex-col items-stretch gap-1", className)}>
-      <button
+      <LocalizedElement as="button"
         aria-label={label}
         aria-pressed={isFavorite}
         className={cn(
@@ -85,9 +89,9 @@ export function FavoriteVenueButton({
       >
         <Heart className={cn("h-4 w-4", isFavorite && "fill-current")} />
         {variant === "full" ? <span>{displayLabel}</span> : null}
-      </button>
+      </LocalizedElement>
       {variant === "full" && error ? (
-        <span className="text-xs leading-5 text-destructive">{error}</span>
+        <span className="text-xs leading-5 text-destructive"><PublicText text={error} /></span>
       ) : null}
     </span>
   );

@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
+import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";

@@ -7,6 +7,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuthUser } from "@/components/providers/auth-user-provider";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/i18n/client";
+import { localizeHref, LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
+import { accountText } from "@/lib/i18n/account-messages";
 
 const AUTH_LOAD_TIMEOUT_MS = 8000;
 const DEFAULT_SCENES = ["Techno", "House", "Live jazz", "Free events"];
@@ -65,17 +68,17 @@ function ProfileLoadingCard() {
 }
 
 function SignInPromptCard() {
+  const locale = useLocale();
+  const t = (key: Parameters<typeof accountText>[1]) => accountText(locale, key);
   return (
-    <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7" lang="sr-Latn">
+    <section className="hero-panel px-4 py-5 sm:px-6 sm:py-7" lang={LOCALE_LANGUAGE_TAGS[locale]}>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.42fr)] lg:items-center">
         <div className="space-y-3">
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-[-0.025em] sm:text-4xl">
-              Sačuvaj svoj izbor
-            </h1>
+              {t("profile.saveChoice")}</h1>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-              Prijavi se da sačuvane događaje i omiljena mesta vidiš na svim svojim uređajima.
-            </p>
+              {t("profile.signInSync")}</p>
           </div>
         </div>
 
@@ -85,20 +88,17 @@ function SignInPromptCard() {
               <UserRound className="h-5 w-5" />
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">Tvoj Event Zeka nalog</p>
+              <p className="text-sm font-semibold text-foreground">{t("profile.accountTitle")}</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Događaje možeš da pregledaš i bez naloga.
-              </p>
+                {t("profile.browseWithoutAccount")}</p>
             </div>
           </div>
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
-            <Link className="button-primary min-h-12 w-full px-4 py-0" href="/sign-in?redirect_url=%2Fyou">
-              Prijavi se
-            </Link>
-            <Link className="button-secondary min-h-12 w-full px-4 py-0" href="/sign-up?redirect_url=%2Fyou">
-              Napravi nalog
-            </Link>
+            <Link className="button-primary min-h-12 w-full px-4 py-0" href={`${localizeHref("/sign-in", locale)}?redirect_url=${encodeURIComponent(localizeHref("/you", locale))}`}>
+              {t("auth.signIn")}</Link>
+            <Link className="button-secondary min-h-12 w-full px-4 py-0" href={`${localizeHref("/sign-up", locale)}?redirect_url=${encodeURIComponent(localizeHref("/you", locale))}`}>
+              {t("auth.signUp")}</Link>
           </div>
         </div>
       </div>
@@ -107,17 +107,16 @@ function SignInPromptCard() {
 }
 
 function ProfileAuthUnavailableCard() {
+  const locale = useLocale();
+  const t = (key: Parameters<typeof accountText>[1]) => accountText(locale, key);
   return (
-    <section className="hero-panel px-4 py-5 text-center sm:px-6 sm:py-7" lang="sr-Latn">
+    <section className="hero-panel px-4 py-5 text-center sm:px-6 sm:py-7" lang={LOCALE_LANGUAGE_TAGS[locale]}>
       <h1 className="text-2xl font-semibold tracking-[-0.025em] sm:text-4xl">
-        Prijava se nije učitala
-      </h1>
+        {t("profile.authNotLoaded")}</h1>
       <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
-        Osveži stranicu i pokušaj ponovo. Događaje možeš da pregledaš i bez prijave.
-      </p>
-      <Link className="button-secondary mt-4 min-h-11 px-4" href="/">
-        Nazad na događaje
-      </Link>
+        {t("profile.refresh")}</p>
+      <Link className="button-secondary mt-4 min-h-11 px-4" href={localizeHref("/", locale)}>
+        {t("install.backEvents")}</Link>
     </section>
   );
 }
@@ -137,6 +136,8 @@ function StatTile({ label, value }: { label: string; value: string }) {
 }
 
 export function YouProfilePanel() {
+  const locale = useLocale();
+  const t = (key: Parameters<typeof accountText>[1]) => accountText(locale, key);
   const clerk = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
   const authUser = useAuthUser();
@@ -211,7 +212,7 @@ export function YouProfilePanel() {
     return <SignInPromptCard />;
   }
 
-  const email = user.primaryEmailAddress?.emailAddress ?? authUser.email ?? "No email on file";
+  const email = user.primaryEmailAddress?.emailAddress ?? authUser.email ?? t("profile.noEmail");
   const displayName = user.fullName ?? authUser.name ?? user.username ?? email;
   const imageUrl = user.imageUrl || authUser.imageUrl || "";
   const savedEventsValue = isLibraryLoaded ? String(upcomingSavedEventCount) : "...";
@@ -227,7 +228,7 @@ export function YouProfilePanel() {
   }
 
   function addScene() {
-    const nextScene = normalizeSceneName(window.prompt("Add a scene") ?? "");
+    const nextScene = normalizeSceneName(window.prompt(t("profile.addScene")) ?? "");
     if (!nextScene) {
       return;
     }
@@ -243,7 +244,7 @@ export function YouProfilePanel() {
 
   async function signOut() {
     setIsSigningOut(true);
-    await clerk.signOut({ redirectUrl: "/you" });
+    await clerk.signOut({ redirectUrl: localizeHref("/you", locale) });
   }
 
   return (
@@ -266,13 +267,13 @@ export function YouProfilePanel() {
       </div>
 
       <div className="flex gap-3">
-        <StatTile label="Saved events" value={savedEventsValue} />
-        <StatTile label="Favourite places" value={favoritePlacesValue} />
+        <StatTile label={t("profile.savedEvents")} value={savedEventsValue} />
+        <StatTile label={t("profile.favouritePlaces")} value={favoritePlacesValue} />
       </div>
 
       <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-4 sm:px-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold tracking-[-0.02em] text-foreground">Your scenes</h2>
+          <h2 className="text-base font-semibold tracking-[-0.02em] text-foreground">{t("profile.scenes")}</h2>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {scenes.map((scene) => {
@@ -291,7 +292,7 @@ export function YouProfilePanel() {
                 onClick={() => toggleScene(scene)}
                 type="button"
               >
-                {scene}
+                {scene === DEFAULT_SCENES[2] ? t("profile.liveJazz") : scene === DEFAULT_SCENES[3] ? t("profile.freeEvents") : scene}
               </button>
             );
           })}
@@ -301,20 +302,19 @@ export function YouProfilePanel() {
             type="button"
           >
             <Plus className="h-4 w-4" />
-            Add
-          </button>
+            {t("profile.add")}</button>
         </div>
       </div>
 
       <div className="rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#1B2233] px-4 py-4 sm:px-5">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">Remind me before saved events</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">A nudge two hours before doors</p>
+            <p className="text-sm font-semibold text-foreground">{t("profile.remind")}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("profile.remindHint")}</p>
           </div>
           <button
             aria-checked={remindersEnabled}
-            aria-label="Remind me before saved events"
+            aria-label={t("profile.remind")}
             className={cn(
               "relative h-8 w-14 flex-none rounded-full border p-1",
               remindersEnabled
@@ -344,7 +344,7 @@ export function YouProfilePanel() {
         type="button"
       >
         <LogOut className="h-4 w-4" />
-        {isSigningOut ? "Signing out..." : "Sign out"}
+        {isSigningOut ? t("profile.signingOut") : t("profile.signOut")}
       </button>
     </section>
   );

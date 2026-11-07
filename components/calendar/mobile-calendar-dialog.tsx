@@ -1,4 +1,8 @@
 "use client";
+import { LocalizedElement, PublicWeekday } from "@/components/i18n/public-text";
+import { useLocale } from "@/i18n/client";
+import { formatPublicDate } from "@/lib/i18n/display";
+
 
 import { useEffect, useId, useRef } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
@@ -16,6 +20,7 @@ type Props = {
 
 /** This module and its month grid are loaded only when the picker is opened. */
 export default function MobileCalendarDialog({ month, selectedDayKey, todayKey, counts, onMonthChange, onSelect, onClose }: Props) {
+  const locale = useLocale();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -27,7 +32,7 @@ export default function MobileCalendarDialog({ month, selectedDayKey, todayKey, 
   }, []);
   const [year, monthNumber] = month.split("-").map(Number);
   const monthDate = new Date(Date.UTC(year, monthNumber - 1, 1, 12));
-  const monthLabel = new Intl.DateTimeFormat("sr-Latn-RS", { month: "long", year: "numeric", timeZone: "UTC" }).format(monthDate);
+  const monthLabel = formatPublicDate(locale, monthDate, { month: "long", year: "numeric", timeZone: "UTC" });
   const monthLength = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   const leadingEmptyDays = (monthDate.getUTCDay() + 6) % 7;
   const countByDate = new Map(counts.map(day => [day.dayKey, day.eventCount]));
@@ -42,17 +47,17 @@ export default function MobileCalendarDialog({ month, selectedDayKey, todayKey, 
     <div className={styles.dialogHeader}>
       <h2 className={styles.dialogTitle} id={titleId}>{monthLabel}</h2>
       <div className="flex items-center gap-1">
-        <button aria-label="Prethodni mesec" className={styles.iconButton} disabled={month <= todayKey.slice(0, 7)} onClick={() => moveMonth(-1)} type="button"><ChevronLeft className="h-4 w-4" /></button>
-        <button aria-label="Sledeći mesec" className={styles.iconButton} onClick={() => moveMonth(1)} type="button"><ChevronRight className="h-4 w-4" /></button>
-        <button aria-label="Zatvori kalendar" className={styles.iconButton} onClick={closeDialog} type="button"><X className="h-4 w-4" /></button>
+        <LocalizedElement as="button" aria-label="Prethodni mesec" className={styles.iconButton} disabled={month <= todayKey.slice(0, 7)} onClick={() => moveMonth(-1)} type="button"><ChevronLeft className="h-4 w-4" /></LocalizedElement>
+        <LocalizedElement as="button" aria-label="Sledeći mesec" className={styles.iconButton} onClick={() => moveMonth(1)} type="button"><ChevronRight className="h-4 w-4" /></LocalizedElement>
+        <LocalizedElement as="button" aria-label="Zatvori kalendar" className={styles.iconButton} onClick={closeDialog} type="button"><X className="h-4 w-4" /></LocalizedElement>
       </div>
     </div>
     <div className={styles.monthGrid}>
-      {["Pon", "Uto", "Sre", "Čet", "Pet", "Sub", "Ned"].map(label => <span className={styles.weekday} key={label}>{label}</span>)}
+      {[1, 2, 3, 4, 5, 6, 0].map(day => <span className={styles.weekday} key={day}><PublicWeekday day={day} /></span>)}
       {Array.from({ length: leadingEmptyDays }, (_, index) => <span aria-hidden="true" key={`empty-${index}`} />)}
       {Array.from({ length: monthLength }, (_, index) => {
         const dayKey = `${month}-${String(index + 1).padStart(2, "0")}`;
-        return <button aria-current={dayKey === selectedDayKey ? "date" : undefined} aria-label={dayKey} className={styles.monthDay} disabled={dayKey < todayKey} key={dayKey} onClick={() => { dialogRef.current?.close(); onSelect(dayKey); }} type="button"><span>{index + 1}</span>{countByDate.has(dayKey) ? <small>{countByDate.get(dayKey)}</small> : null}</button>;
+        return <LocalizedElement as="button" aria-current={dayKey === selectedDayKey ? "date" : undefined} aria-label={dayKey} className={styles.monthDay} disabled={dayKey < todayKey} key={dayKey} onClick={() => { dialogRef.current?.close(); onSelect(dayKey); }} type="button"><span>{index + 1}</span>{countByDate.has(dayKey) ? <small>{countByDate.get(dayKey)}</small> : null}</LocalizedElement>;
       })}
     </div>
   </dialog>;

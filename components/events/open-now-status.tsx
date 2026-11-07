@@ -1,4 +1,5 @@
 import type { OpenNowEventState } from "@/lib/venues/venue-open-now";
+import { PublicText } from "@/components/i18n/public-text";
 
 export const OPEN_NOW_POSSIBLE_LABEL = "Possibly still on - end unconfirmed";
 
@@ -11,7 +12,7 @@ export function OpenNowStatus({ eventId, state }: { eventId: string; state?: Ope
       data-open-now-event-id={eventId}
       data-open-now-status="possible"
     >
-      {OPEN_NOW_POSSIBLE_LABEL}
+      <PublicText text={OPEN_NOW_POSSIBLE_LABEL} />
     </span>
   );
 }

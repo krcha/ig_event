@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { CircleUserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/i18n/client";
+import { localizeHref } from "@/i18n/config";
+import { accountText } from "@/lib/i18n/account-messages";
 
 type ProfileAvatarLinkProps = {
   className?: string;
@@ -15,10 +18,11 @@ export function ProfileAvatarLink({
   isActive = false,
   variant = "mobile",
 }: ProfileAvatarLinkProps) {
+  const locale = useLocale();
   return (
     <Link
       aria-current={isActive ? "page" : undefined}
-      aria-label="Your profile"
+      aria-label={accountText(locale, "nav.profile")}
       className={cn(
         "inline-flex flex-none items-center justify-center rounded-full ring-1 transition",
         variant === "desktop" ? "h-8.5 w-8.5" : "h-8 w-8",
@@ -27,8 +31,8 @@ export function ProfileAvatarLink({
           : "bg-white/[0.05] text-muted-foreground ring-white/[0.08] hover:bg-primary/[0.16] hover:text-primary",
         className,
       )}
-      href="/you"
-      title="Your profile"
+      href={localizeHref("/you", locale)}
+      title={accountText(locale, "nav.profile")}
     >
       <CircleUserRound className="h-4 w-4" />
     </Link>

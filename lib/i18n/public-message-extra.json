@@ -1,0 +1,1517 @@
+{
+  "Event Zeka could not finish loading this set of picks. Retry it here or reload a clean copy of the page.": {
+    "sr": "Event Zeka nije uspeo da učita ovaj izbor. Pokušaj ponovo ili ponovo učitaj stranicu.",
+    "en": "Event Zeka could not finish loading this set of picks. Retry it here or reload a clean copy of the page.",
+    "ru": "Не удалось загрузить эту подборку. Попробуйте ещё раз или обновите страницу."
+  },
+  "Event Zeka nije uspeo da učita ovaj izbor. Pokušaj ponovo ili ponovo učitaj stranicu.": {
+    "sr": "Event Zeka nije uspeo da učita ovaj izbor. Pokušaj ponovo ili ponovo učitaj stranicu.",
+    "en": "Event Zeka could not finish loading this set of picks. Retry it here or reload a clean copy of the page.",
+    "ru": "Не удалось загрузить эту подборку. Попробуйте ещё раз или обновите страницу."
+  },
+  "Back": {
+    "sr": "Nazad",
+    "en": "Back",
+    "ru": "Назад"
+  },
+  "Nazad": {
+    "sr": "Nazad",
+    "en": "Back",
+    "ru": "Назад"
+  },
+  "Open": {
+    "sr": "Otvori",
+    "en": "Open",
+    "ru": "Открыть"
+  },
+  "Otvori": {
+    "sr": "Otvori",
+    "en": "Open",
+    "ru": "Открыть"
+  },
+  "View post": {
+    "sr": "Pogledaj objavu",
+    "en": "View post",
+    "ru": "Смотреть публикацию"
+  },
+  "Pogledaj objavu": {
+    "sr": "Pogledaj objavu",
+    "en": "View post",
+    "ru": "Смотреть публикацию"
+  },
+  "Calendar": {
+    "sr": "Kalendar",
+    "en": "Calendar",
+    "ru": "Календарь"
+  },
+  "Kalendar": {
+    "sr": "Kalendar",
+    "en": "Calendar",
+    "ru": "Календарь"
+  },
+  "No poster image available.": {
+    "sr": "Plakat nije dostupan.",
+    "en": "No poster image available.",
+    "ru": "Афиша недоступна."
+  },
+  "Plakat nije dostupan.": {
+    "sr": "Plakat nije dostupan.",
+    "en": "No poster image available.",
+    "ru": "Афиша недоступна."
+  },
+  "u gradu": {
+    "sr": "u gradu",
+    "en": "in the city",
+    "ru": "в городе"
+  },
+  "Izabrano mesto:": {
+    "sr": "Izabrano mesto:",
+    "en": "Selected venue:",
+    "ru": "Выбранное место:"
+  },
+  "Poništi": {
+    "sr": "Poništi",
+    "en": "Clear",
+    "ru": "Сбросить"
+  },
+  "What's on in Belgrade?": {
+    "sr": "Šta se dešava u Beogradu?",
+    "en": "What's on in Belgrade?",
+    "ru": "Что происходит в Белграде?"
+  },
+  "Šta se dešava u Beogradu?": {
+    "sr": "Šta se dešava u Beogradu?",
+    "en": "What's on in Belgrade?",
+    "ru": "Что происходит в Белграде?"
+  },
+  "Use Event Zeka to plan a night out or a culture-filled day. Check the selected date, open an event for announced times and ticket details, then confirm the latest information with the linked venue or original Instagram post.": {
+    "sr": "Uz Event Zeka isplaniraj izlazak ili dan ispunjen kulturom. Izaberi datum, otvori događaj za najavljenu satnicu i podatke o ulaznicama, pa proveri najnovije informacije kod mesta održavanja ili u originalnoj Instagram objavi.",
+    "en": "Use Event Zeka to plan a night out or a culture-filled day. Check the selected date, open an event for announced times and ticket details, then confirm the latest information with the linked venue or original Instagram post.",
+    "ru": "Планируйте вечер или культурный досуг с Event Zeka. Выберите дату, откройте событие, чтобы узнать объявленное время и информацию о билетах, и проверьте актуальные сведения у площадки или в исходной публикации Instagram."
+  },
+  "Uz Event Zeka isplaniraj izlazak ili dan ispunjen kulturom. Izaberi datum, otvori događaj za najavljenu satnicu i podatke o ulaznicama, pa proveri najnovije informacije kod mesta održavanja ili u originalnoj Instagram objavi.": {
+    "sr": "Uz Event Zeka isplaniraj izlazak ili dan ispunjen kulturom. Izaberi datum, otvori događaj za najavljenu satnicu i podatke o ulaznicama, pa proveri najnovije informacije kod mesta održavanja ili u originalnoj Instagram objavi.",
+    "en": "Use Event Zeka to plan a night out or a culture-filled day. Check the selected date, open an event for announced times and ticket details, then confirm the latest information with the linked venue or original Instagram post.",
+    "ru": "Планируйте вечер или культурный досуг с Event Zeka. Выберите дату, откройте событие, чтобы узнать объявленное время и информацию о билетах, и проверьте актуальные сведения у площадки или в исходной публикации Instagram."
+  },
+  "Događaji u Beogradu:": {
+    "sr": "Događaji u Beogradu:",
+    "en": "Belgrade events:",
+    "ru": "События в Белграде:"
+  },
+  "izaberite datum, pretražite izvođača ili mesto i proverite detalje događaja pre polaska.": {
+    "sr": "izaberi datum, pretraži izvođača ili mesto i proveri detalje događaja pre polaska.",
+    "en": "choose a date, search for an artist or venue, and check the event details before heading out.",
+    "ru": "выберите дату, найдите участника или площадку и проверьте подробности перед выходом."
+  },
+  "izaberi datum, pretraži izvođača ili mesto i proveri detalje događaja pre polaska.": {
+    "sr": "izaberi datum, pretraži izvođača ili mesto i proveri detalje događaja pre polaska.",
+    "en": "izaberite datum, pretražite izvođača ili mesto i proverite detalje događaja pre polaska.",
+    "ru": "выберите дату, найдите участника или площадку и проверьте подробности перед выходом."
+  },
+  "Discover tonight": {
+    "sr": "Otkrij večerašnje događaje",
+    "en": "Discover tonight",
+    "ru": "Выбрать событие на вечер"
+  },
+  "Otkrij večerašnje događaje": {
+    "sr": "Otkrij večerašnje događaje",
+    "en": "Discover tonight",
+    "ru": "Выбрать событие на вечер"
+  },
+  "Explore venues": {
+    "sr": "Istraži mesta",
+    "en": "Explore venues",
+    "ru": "Посмотреть места"
+  },
+  "Istraži mesta": {
+    "sr": "Istraži mesta",
+    "en": "Explore venues",
+    "ru": "Посмотреть места"
+  },
+  "Belgrade events FAQ": {
+    "sr": "Pitanja o događajima u Beogradu",
+    "en": "Belgrade events FAQ",
+    "ru": "Вопросы о событиях в Белграде"
+  },
+  "Pitanja o događajima u Beogradu": {
+    "sr": "Pitanja o događajima u Beogradu",
+    "en": "Belgrade events FAQ",
+    "ru": "Вопросы о событиях в Белграде"
+  },
+  "Belgrade event map": {
+    "sr": "Mapa događaja u Beogradu",
+    "en": "Belgrade event map",
+    "ru": "Карта событий Белграда"
+  },
+  "Mapa događaja u Beogradu": {
+    "sr": "Mapa događaja u Beogradu",
+    "en": "Belgrade event map",
+    "ru": "Карта событий Белграда"
+  },
+  "Open directions": {
+    "sr": "Otvori putanju",
+    "en": "Open directions",
+    "ru": "Открыть маршрут"
+  },
+  "Otvori putanju": {
+    "sr": "Otvori putanju",
+    "en": "Open directions",
+    "ru": "Открыть маршрут"
+  },
+  "Instagram": {
+    "sr": "Instagram",
+    "en": "Instagram",
+    "ru": "Instagram"
+  },
+  "Venues": {
+    "sr": "Mesta",
+    "en": "Venues",
+    "ru": "Места"
+  },
+  "Mesta": {
+    "sr": "Mesta",
+    "en": "Venues",
+    "ru": "Места"
+  },
+  "Posts": {
+    "sr": "Objave",
+    "en": "Posts",
+    "ru": "Публикации"
+  },
+  "Objave": {
+    "sr": "Objave",
+    "en": "Posts",
+    "ru": "Публикации"
+  },
+  "No event posts yet.": {
+    "sr": "Još nema objava događaja.",
+    "en": "No event posts yet.",
+    "ru": "Публикаций о событиях пока нет."
+  },
+  "Još nema objava događaja.": {
+    "sr": "Još nema objava događaja.",
+    "en": "No event posts yet.",
+    "ru": "Публикаций о событиях пока нет."
+  },
+  "Venue not found.": {
+    "sr": "Mesto nije pronađeno.",
+    "en": "Venue not found.",
+    "ru": "Место не найдено."
+  },
+  "Mesto nije pronađeno.": {
+    "sr": "Mesto nije pronađeno.",
+    "en": "Venue not found.",
+    "ru": "Место не найдено."
+  },
+  "It may have been removed from the public venue list.": {
+    "sr": "Mesto možda više nije u javnom spisku.",
+    "en": "It may have been removed from the public venue list.",
+    "ru": "Возможно, место больше не представлено в открытом каталоге."
+  },
+  "Mesto možda više nije u javnom spisku.": {
+    "sr": "Mesto možda više nije u javnom spisku.",
+    "en": "It may have been removed from the public venue list.",
+    "ru": "Возможно, место больше не представлено в открытом каталоге."
+  },
+  "Back to calendar": {
+    "sr": "Nazad na kalendar",
+    "en": "Back to calendar",
+    "ru": "Вернуться к календарю"
+  },
+  "Nazad na kalendar": {
+    "sr": "Nazad na kalendar",
+    "en": "Back to calendar",
+    "ru": "Вернуться к календарю"
+  },
+  "Venue page": {
+    "sr": "Stranica mesta",
+    "en": "Venue page",
+    "ru": "Страница места"
+  },
+  "Stranica mesta": {
+    "sr": "Stranica mesta",
+    "en": "Venue page",
+    "ru": "Страница места"
+  },
+  "Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.": {
+    "sr": "Klubovi, barovi, galerije, pozorišta i koncertni prostori za Beograđane i posetioce. Pronađi mesta i njihove aktuelne događaje.",
+    "en": "Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.",
+    "ru": "Клубы, бары, галереи, театры и концертные площадки для жителей и гостей Белграда. Находите места и их актуальные события."
+  },
+  "Klubovi, barovi, galerije, pozorišta i koncertni prostori za Beograđane i posetioce. Pronađi mesta i njihove aktuelne događaje.": {
+    "sr": "Klubovi, barovi, galerije, pozorišta i koncertni prostori za Beograđane i posetioce. Pronađi mesta i njihove aktuelne događaje.",
+    "en": "Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.",
+    "ru": "Клубы, бары, галереи, театры и концертные площадки для жителей и гостей Белграда. Находите места и их актуальные события."
+  },
+  "With IG data": {
+    "sr": "Sa Instagram podacima",
+    "en": "With IG data",
+    "ru": "С данными Instagram"
+  },
+  "Sa Instagram podacima": {
+    "sr": "Sa Instagram podacima",
+    "en": "With IG data",
+    "ru": "С данными Instagram"
+  },
+  "Event map": {
+    "sr": "Mapa događaja",
+    "en": "Event map",
+    "ru": "Карта событий"
+  },
+  "Mapa događaja": {
+    "sr": "Mapa događaja",
+    "en": "Event map",
+    "ru": "Карта событий"
+  },
+  "Filter": {
+    "sr": "Filtriraj",
+    "en": "Filter",
+    "ru": "Фильтр"
+  },
+  "Filtriraj": {
+    "sr": "Filtriraj",
+    "en": "Filter",
+    "ru": "Фильтр"
+  },
+  "matches": {
+    "sr": "rezultata",
+    "en": "matches",
+    "ru": "совпадений"
+  },
+  "rezultata": {
+    "sr": "rezultata",
+    "en": "matches",
+    "ru": "совпадений"
+  },
+  "Clear filters": {
+    "sr": "Poništi filtere",
+    "en": "Clear filters",
+    "ru": "Сбросить фильтры"
+  },
+  "Poništi filtere": {
+    "sr": "Poništi filtere",
+    "en": "Clear filters",
+    "ru": "Сбросить фильтры"
+  },
+  "Showing": {
+    "sr": "Prikazano",
+    "en": "Showing",
+    "ru": "Показано"
+  },
+  "Prikazano": {
+    "sr": "Prikazano",
+    "en": "Showing",
+    "ru": "Показано"
+  },
+  "of": {
+    "sr": "od",
+    "en": "of",
+    "ru": "из"
+  },
+  "od": {
+    "sr": "od",
+    "en": "of",
+    "ru": "из"
+  },
+  "venues": {
+    "sr": "mesta",
+    "en": "venues",
+    "ru": "мест"
+  },
+  "mesta": {
+    "sr": "mesta",
+    "en": "venues",
+    "ru": "мест"
+  },
+  "Page": {
+    "sr": "Stranica",
+    "en": "Page",
+    "ru": "Страница"
+  },
+  "Stranica": {
+    "sr": "Stranica",
+    "en": "Page",
+    "ru": "Страница"
+  },
+  "Previous": {
+    "sr": "Prethodna",
+    "en": "Previous",
+    "ru": "Назад"
+  },
+  "Prethodna": {
+    "sr": "Prethodna",
+    "en": "Previous",
+    "ru": "Назад"
+  },
+  "Next": {
+    "sr": "Sledeća",
+    "en": "Next",
+    "ru": "Далее"
+  },
+  "Sledeća": {
+    "sr": "Sledeća",
+    "en": "Next",
+    "ru": "Далее"
+  },
+  "Instaliraj EventZeka App": {
+    "sr": "Instaliraj EventZeka App",
+    "en": "Install EventZeka App",
+    "ru": "Установить EventZeka App"
+  },
+  "Prijava trenutno nije dostupna": {
+    "sr": "Prijava trenutno nije dostupna",
+    "en": "Sign in is currently unavailable",
+    "ru": "Вход сейчас недоступен"
+  },
+  "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Saved.": {
+    "sr": "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Sačuvano.",
+    "en": "Try again later. Events saved on this device remain available in Saved.",
+    "ru": "Попробуйте позже. События, сохранённые на этом устройстве, остаются доступны в разделе «Сохранённое»."
+  },
+  "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Sačuvano.": {
+    "sr": "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Sačuvano.",
+    "en": "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Saved.",
+    "ru": "Попробуйте позже. События, сохранённые на этом устройстве, остаются доступны в разделе «Сохранённое»."
+  },
+  "Nema događaja za ovaj izbor.": {
+    "sr": "Nema događaja za ovaj izbor.",
+    "en": "No events match this selection.",
+    "ru": "Для этого выбора событий нет."
+  },
+  "Probaj drugu pretragu, kategoriju ili datum.": {
+    "sr": "Probaj drugu pretragu, kategoriju ili datum.",
+    "en": "Try another search, category or date.",
+    "ru": "Попробуйте другой запрос, категорию или дату."
+  },
+  "Pregled dana": {
+    "sr": "Pregled dana",
+    "en": "Day overview",
+    "ru": "Обзор дня"
+  },
+  "Vreme i izvor.": {
+    "sr": "Vreme i izvor.",
+    "en": "Time and source.",
+    "ru": "Время и источник."
+  },
+  "Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa.": {
+    "sr": "Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa.",
+    "en": "When the start is not announced, we show the available venue opening hours for that day. Venue hours do not describe the duration of the programme.",
+    "ru": "Если время начала не объявлено, показываем известные часы работы места на этот день. Часы работы места не означают продолжительность программы."
+  },
+  "Calendar counts are temporarily unavailable. Events are still available.": {
+    "sr": "Brojevi događaja u kalendaru trenutno nisu dostupni. Događaje i dalje možeš da pregledaš.",
+    "en": "Calendar counts are temporarily unavailable. Events are still available.",
+    "ru": "Количество событий в календаре временно недоступно. Сами события по-прежнему доступны."
+  },
+  "Brojevi događaja u kalendaru trenutno nisu dostupni. Događaje i dalje možeš da pregledaš.": {
+    "sr": "Brojevi događaja u kalendaru trenutno nisu dostupni. Događaje i dalje možeš da pregledaš.",
+    "en": "Calendar counts are temporarily unavailable. Events are still available.",
+    "ru": "Количество событий в календаре временно недоступно. Сами события по-прежнему доступны."
+  },
+  "All venues": {
+    "sr": "Sva mesta",
+    "en": "All venues",
+    "ru": "Все места"
+  },
+  "Sva mesta": {
+    "sr": "Sva mesta",
+    "en": "All venues",
+    "ru": "Все места"
+  },
+  "off": {
+    "sr": "isključeno",
+    "en": "off",
+    "ru": "выкл."
+  },
+  "isključeno": {
+    "sr": "isključeno",
+    "en": "off",
+    "ru": "выкл."
+  },
+  "Učitavanje događaja": {
+    "sr": "Učitavanje događaja",
+    "en": "Loading events",
+    "ru": "Загрузка событий"
+  },
+  "Izaberi dan": {
+    "sr": "Izaberi dan",
+    "en": "Choose a day",
+    "ru": "Выберите день"
+  },
+  "Otvori mesečni kalendar": {
+    "sr": "Otvori mesečni kalendar",
+    "en": "Open monthly calendar",
+    "ru": "Открыть календарь на месяц"
+  },
+  "Učitavanje kalendara...": {
+    "sr": "Učitavanje kalendara...",
+    "en": "Loading calendar...",
+    "ru": "Загрузка календаря…"
+  },
+  "· caption unavailable from Instagram": {
+    "sr": "· tekst objave nije dostupan sa Instagrama",
+    "en": "· caption unavailable from Instagram",
+    "ru": "· текст публикации Instagram недоступен"
+  },
+  "· tekst objave nije dostupan sa Instagrama": {
+    "sr": "· tekst objave nije dostupan sa Instagrama",
+    "en": "· caption unavailable from Instagram",
+    "ru": "· текст публикации Instagram недоступен"
+  },
+  "Discover Belgrade": {
+    "sr": "Otkrij Beograd",
+    "en": "Discover Belgrade",
+    "ru": "Откройте Белград"
+  },
+  "Otkrij Beograd": {
+    "sr": "Otkrij Beograd",
+    "en": "Discover Belgrade",
+    "ru": "Откройте Белград"
+  },
+  "events": {
+    "sr": "događaja",
+    "en": "events",
+    "ru": "событий"
+  },
+  "događaja": {
+    "sr": "događaja",
+    "en": "events",
+    "ru": "событий"
+  },
+  "Discover dates": {
+    "sr": "Datumi za otkrivanje događaja",
+    "en": "Discover dates",
+    "ru": "Даты подборок"
+  },
+  "Datumi za otkrivanje događaja": {
+    "sr": "Datumi za otkrivanje događaja",
+    "en": "Discover dates",
+    "ru": "Даты подборок"
+  },
+  "Loading more posts…": {
+    "sr": "Učitavanje dodatnih objava…",
+    "en": "Loading more posts…",
+    "ru": "Загрузка публикаций…"
+  },
+  "Učitavanje dodatnih objava…": {
+    "sr": "Učitavanje dodatnih objava…",
+    "en": "Loading more posts…",
+    "ru": "Загрузка публикаций…"
+  },
+  "Reload this day": {
+    "sr": "Ponovo učitaj ovaj dan",
+    "en": "Reload this day",
+    "ru": "Обновить этот день"
+  },
+  "Ponovo učitaj ovaj dan": {
+    "sr": "Ponovo učitaj ovaj dan",
+    "en": "Reload this day",
+    "ru": "Обновить этот день"
+  },
+  "Retry": {
+    "sr": "Pokušaj ponovo",
+    "en": "Retry",
+    "ru": "Повторить"
+  },
+  "Pokušaj ponovo": {
+    "sr": "Pokušaj ponovo",
+    "en": "Retry",
+    "ru": "Повторить"
+  },
+  "Open next page": {
+    "sr": "Otvori sledeću stranicu",
+    "en": "Open next page",
+    "ru": "Открыть следующую страницу"
+  },
+  "Otvori sledeću stranicu": {
+    "sr": "Otvori sledeću stranicu",
+    "en": "Open next page",
+    "ru": "Открыть следующую страницу"
+  },
+  "More picks": {
+    "sr": "Još događaja",
+    "en": "More picks",
+    "ru": "Ещё события"
+  },
+  "Još događaja": {
+    "sr": "Još događaja",
+    "en": "More picks",
+    "ru": "Ещё события"
+  },
+  "Previous page": {
+    "sr": "Prethodna stranica",
+    "en": "Previous page",
+    "ru": "Предыдущая страница"
+  },
+  "Prethodna stranica": {
+    "sr": "Prethodna stranica",
+    "en": "Previous page",
+    "ru": "Предыдущая страница"
+  },
+  "Discover događaji": {
+    "sr": "Otkrij događaje",
+    "en": "Discover events",
+    "ru": "Подборка событий"
+  },
+  "Otkrij događaje": {
+    "sr": "Otkrij događaje",
+    "en": "Discover događaji",
+    "ru": "Подборка событий"
+  },
+  "Dan za Discover": {
+    "sr": "Dan za otkrivanje događaja",
+    "en": "Discover day",
+    "ru": "День подборки"
+  },
+  "Dan za otkrivanje događaja": {
+    "sr": "Dan za otkrivanje događaja",
+    "en": "Dan za Discover",
+    "ru": "День подборки"
+  },
+  "Izbor događaja za dan": {
+    "sr": "Izbor događaja za dan",
+    "en": "Event picks for the day",
+    "ru": "Подборка событий на день"
+  },
+  "Izbor se čuva na ovom uređaju. Prijavi se da ga sinhronizuješ.": {
+    "sr": "Izbor se čuva na ovom uređaju. Prijavi se da ga sinhronizuješ.",
+    "en": "Your picks are stored on this device. Sign in to sync them.",
+    "ru": "Ваш выбор хранится на этом устройстве. Войдите, чтобы синхронизировать его."
+  },
+  "Već imam nalog": {
+    "sr": "Već imam nalog",
+    "en": "I already have an account",
+    "ru": "У меня уже есть аккаунт"
+  },
+  "Prijava trenutno nije dostupna.": {
+    "sr": "Prijava trenutno nije dostupna.",
+    "en": "Sign in is currently unavailable.",
+    "ru": "Вход сейчас недоступен."
+  },
+  "Vrati poslednju ·": {
+    "sr": "Vrati poslednju ·",
+    "en": "Undo last ·",
+    "ru": "Отменить последнее ·"
+  },
+  "Nastavi · još": {
+    "sr": "Nastavi · još",
+    "en": "Continue · remaining",
+    "ru": "Продолжить · осталось"
+  },
+  "Ponovo biraj ·": {
+    "sr": "Ponovo biraj ·",
+    "en": "Choose again ·",
+    "ru": "Выбрать заново ·"
+  },
+  "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Saved.": {
+    "sr": "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Sačuvano.",
+    "en": "The event could not be removed from Saved. Try again in Saved.",
+    "ru": "Не удалось удалить событие из сохранённого. Попробуйте в разделе «Сохранённое»."
+  },
+  "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Sačuvano.": {
+    "sr": "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Sačuvano.",
+    "en": "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Saved.",
+    "ru": "Не удалось удалить событие из сохранённого. Попробуйте в разделе «Сохранённое»."
+  },
+  "Biraj događaje": {
+    "sr": "Biraj događaje",
+    "en": "Pick events",
+    "ru": "Выбрать события"
+  },
+  "Događaji koji su već sačuvani ostaju u Saved.": {
+    "sr": "Događaji koji su već sačuvani ostaju u Sačuvano.",
+    "en": "Events already saved remain in Saved.",
+    "ru": "Уже сохранённые события остаются в разделе «Сохранённое»."
+  },
+  "Događaji koji su već sačuvani ostaju u Sačuvano.": {
+    "sr": "Događaji koji su već sačuvani ostaju u Sačuvano.",
+    "en": "Događaji koji su već sačuvani ostaju u Saved.",
+    "ru": "Уже сохранённые события остаются в разделе «Сохранённое»."
+  },
+  "Fotografija nije dostupna.": {
+    "sr": "Fotografija nije dostupna.",
+    "en": "Photo unavailable.",
+    "ru": "Фотография недоступна."
+  },
+  "Sviđa mi se": {
+    "sr": "Sviđa mi se",
+    "en": "Like",
+    "ru": "Нравится"
+  },
+  "Preskačem": {
+    "sr": "Preskačem",
+    "en": "Skip",
+    "ru": "Пропустить"
+  },
+  "Zatvori detalje": {
+    "sr": "Zatvori detalje",
+    "en": "Close details",
+    "ru": "Закрыть подробности"
+  },
+  "Objava trenutno nije dostupna.": {
+    "sr": "Objava trenutno nije dostupna.",
+    "en": "The post is currently unavailable.",
+    "ru": "Публикация сейчас недоступна."
+  },
+  "Učitavanje originalne objave": {
+    "sr": "Učitavanje originalne objave",
+    "en": "Loading original post",
+    "ru": "Загрузка исходной публикации"
+  },
+  "Belgrade, day by day": {
+    "sr": "Beograd, iz dana u dan",
+    "en": "Belgrade, day by day",
+    "ru": "Белград день за днём"
+  },
+  "Beograd, iz dana u dan": {
+    "sr": "Beograd, iz dana u dan",
+    "en": "Belgrade, day by day",
+    "ru": "Белград день за днём"
+  },
+  "Find your next stop.": {
+    "sr": "Pronađi sledeće mesto.",
+    "en": "Find your next stop.",
+    "ru": "Найдите следующее место."
+  },
+  "Pronađi sledeće mesto.": {
+    "sr": "Pronađi sledeće mesto.",
+    "en": "Find your next stop.",
+    "ru": "Найдите следующее место."
+  },
+  "Pick a day. See what's happening and where to go.": {
+    "sr": "Izaberi dan. Pogledaj šta se dešava i gde možeš da odeš.",
+    "en": "Pick a day. See what's happening and where to go.",
+    "ru": "Выберите день. Посмотрите, что происходит и куда пойти."
+  },
+  "Izaberi dan. Pogledaj šta se dešava i gde možeš da odeš.": {
+    "sr": "Izaberi dan. Pogledaj šta se dešava i gde možeš da odeš.",
+    "en": "Pick a day. See what's happening and where to go.",
+    "ru": "Выберите день. Посмотрите, что происходит и куда пойти."
+  },
+  "Venue directory": {
+    "sr": "Spisak mesta",
+    "en": "Venue directory",
+    "ru": "Каталог мест"
+  },
+  "Spisak mesta": {
+    "sr": "Spisak mesta",
+    "en": "Venue directory",
+    "ru": "Каталог мест"
+  },
+  "Choose an event date": {
+    "sr": "Izaberi datum događaja",
+    "en": "Choose an event date",
+    "ru": "Выберите дату события"
+  },
+  "Izaberi datum događaja": {
+    "sr": "Izaberi datum događaja",
+    "en": "Choose an event date",
+    "ru": "Выберите дату события"
+  },
+  "Previous week": {
+    "sr": "Prethodna nedelja",
+    "en": "Previous week",
+    "ru": "Предыдущая неделя"
+  },
+  "Prethodna nedelja": {
+    "sr": "Prethodna nedelja",
+    "en": "Previous week",
+    "ru": "Предыдущая неделя"
+  },
+  "Next week": {
+    "sr": "Sledeća nedelja",
+    "en": "Next week",
+    "ru": "Следующая неделя"
+  },
+  "Sledeća nedelja": {
+    "sr": "Sledeća nedelja",
+    "en": "Next week",
+    "ru": "Следующая неделя"
+  },
+  "Today": {
+    "sr": "Danas",
+    "en": "Today",
+    "ru": "Сегодня"
+  },
+  "Danas": {
+    "sr": "Danas",
+    "en": "Today",
+    "ru": "Сегодня"
+  },
+  "Choose date": {
+    "sr": "Izaberi datum",
+    "en": "Choose date",
+    "ru": "Выберите дату"
+  },
+  "Izaberi datum": {
+    "sr": "Izaberi datum",
+    "en": "Choose date",
+    "ru": "Выберите дату"
+  },
+  "Go to selected date": {
+    "sr": "Idi na izabrani datum",
+    "en": "Go to selected date",
+    "ru": "Перейти к выбранной дате"
+  },
+  "Idi na izabrani datum": {
+    "sr": "Idi na izabrani datum",
+    "en": "Go to selected date",
+    "ru": "Перейти к выбранной дате"
+  },
+  "Event days": {
+    "sr": "Dani sa događajima",
+    "en": "Event days",
+    "ru": "Дни с событиями"
+  },
+  "Dani sa događajima": {
+    "sr": "Dani sa događajima",
+    "en": "Event days",
+    "ru": "Дни с событиями"
+  },
+  "mapped": {
+    "sr": "na mapi",
+    "en": "mapped",
+    "ru": "на карте"
+  },
+  "na mapi": {
+    "sr": "na mapi",
+    "en": "mapped",
+    "ru": "на карте"
+  },
+  "Choose a map date": {
+    "sr": "Izaberi datum na mapi",
+    "en": "Choose a map date",
+    "ru": "Выберите дату на карте"
+  },
+  "Izaberi datum na mapi": {
+    "sr": "Izaberi datum na mapi",
+    "en": "Choose a map date",
+    "ru": "Выберите дату на карте"
+  },
+  "Previous day": {
+    "sr": "Prethodni dan",
+    "en": "Previous day",
+    "ru": "Предыдущий день"
+  },
+  "Prethodni dan": {
+    "sr": "Prethodni dan",
+    "en": "Previous day",
+    "ru": "Предыдущий день"
+  },
+  "Next day": {
+    "sr": "Sledeći dan",
+    "en": "Next day",
+    "ru": "Следующий день"
+  },
+  "Sledeći dan": {
+    "sr": "Sledeći dan",
+    "en": "Next day",
+    "ru": "Следующий день"
+  },
+  "The lineup": {
+    "sr": "Program",
+    "en": "The lineup",
+    "ru": "Программа"
+  },
+  "Program": {
+    "sr": "Program",
+    "en": "The lineup",
+    "ru": "Программа"
+  },
+  "Tap a pin or a venue to explore its events.": {
+    "sr": "Dodirni oznaku ili mesto da pogledaš događaje.",
+    "en": "Tap a pin or a venue to explore its events.",
+    "ru": "Нажмите на отметку или место, чтобы посмотреть события."
+  },
+  "Dodirni oznaku ili mesto da pogledaš događaje.": {
+    "sr": "Dodirni oznaku ili mesto da pogledaš događaje.",
+    "en": "Tap a pin or a venue to explore its events.",
+    "ru": "Нажмите на отметку или место, чтобы посмотреть события."
+  },
+  "Directions": {
+    "sr": "Putanja",
+    "en": "Directions",
+    "ru": "Маршрут"
+  },
+  "Putanja": {
+    "sr": "Putanja",
+    "en": "Directions",
+    "ru": "Маршрут"
+  },
+  "Location not mapped": {
+    "sr": "Lokacija nije na mapi",
+    "en": "Location not mapped",
+    "ru": "Место не отмечено на карте"
+  },
+  "Lokacija nije na mapi": {
+    "sr": "Lokacija nije na mapi",
+    "en": "Location not mapped",
+    "ru": "Место не отмечено на карте"
+  },
+  "These events don't have confirmed map coordinates yet.": {
+    "sr": "Ovi događaji još nemaju potvrđene koordinate na mapi.",
+    "en": "These events don't have confirmed map coordinates yet.",
+    "ru": "У этих событий пока нет подтверждённых координат."
+  },
+  "Ovi događaji još nemaju potvrđene koordinate na mapi.": {
+    "sr": "Ovi događaji još nemaju potvrđene koordinate na mapi.",
+    "en": "These events don't have confirmed map coordinates yet.",
+    "ru": "У этих событий пока нет подтверждённых координат."
+  },
+  "Dates and times are local to Belgrade. Select a venue pin to see its full lineup.": {
+    "sr": "Datumi i satnica su po beogradskom vremenu. Izaberi oznaku mesta da pogledaš ceo program.",
+    "en": "Dates and times are local to Belgrade. Select a venue pin to see its full lineup.",
+    "ru": "Даты и время указаны по Белграду. Выберите отметку места, чтобы увидеть всю программу."
+  },
+  "Datumi i satnica su po beogradskom vremenu. Izaberi oznaku mesta da pogledaš ceo program.": {
+    "sr": "Datumi i satnica su po beogradskom vremenu. Izaberi oznaku mesta da pogledaš ceo program.",
+    "en": "Dates and times are local to Belgrade. Select a venue pin to see its full lineup.",
+    "ru": "Даты и время указаны по Белграду. Выберите отметку места, чтобы увидеть всю программу."
+  },
+  "Event locations in Belgrade. Use arrow keys to pan and plus or minus to zoom.": {
+    "sr": "Lokacije događaja u Beogradu. Strelicama pomeraj mapu, a tasterima plus i minus menjaj uvećanje.",
+    "en": "Event locations in Belgrade. Use arrow keys to pan and plus or minus to zoom.",
+    "ru": "Места событий в Белграде. Используйте стрелки для перемещения, плюс и минус для масштаба."
+  },
+  "Lokacije događaja u Beogradu. Strelicama pomeraj mapu, a tasterima plus i minus menjaj uvećanje.": {
+    "sr": "Lokacije događaja u Beogradu. Strelicama pomeraj mapu, a tasterima plus i minus menjaj uvećanje.",
+    "en": "Event locations in Belgrade. Use arrow keys to pan and plus or minus to zoom.",
+    "ru": "Места событий в Белграде. Используйте стрелки для перемещения, плюс и минус для масштаба."
+  },
+  "Reset map to Belgrade": {
+    "sr": "Vrati mapu na Beograd",
+    "en": "Reset map to Belgrade",
+    "ru": "Вернуть карту к Белграду"
+  },
+  "Vrati mapu na Beograd": {
+    "sr": "Vrati mapu na Beograd",
+    "en": "Reset map to Belgrade",
+    "ru": "Вернуть карту к Белграду"
+  },
+  "Belgrade": {
+    "sr": "Beograd",
+    "en": "Belgrade",
+    "ru": "Белград"
+  },
+  "Beograd": {
+    "sr": "Beograd",
+    "en": "Belgrade",
+    "ru": "Белград"
+  },
+  "on the map": {
+    "sr": "na mapi",
+    "en": "on the map",
+    "ru": "на карте"
+  },
+  "The street map could not load. Venue pins and event details are still available.": {
+    "sr": "Ulična mapa nije učitana. Oznake mesta i detalji događaja su i dalje dostupni.",
+    "en": "The street map could not load. Venue pins and event details are still available.",
+    "ru": "Не удалось загрузить карту улиц. Отметки мест и подробности событий по-прежнему доступны."
+  },
+  "Ulična mapa nije učitana. Oznake mesta i detalji događaja su i dalje dostupni.": {
+    "sr": "Ulična mapa nije učitana. Oznake mesta i detalji događaja su i dalje dostupni.",
+    "en": "The street map could not load. Venue pins and event details are still available.",
+    "ru": "Не удалось загрузить карту улиц. Отметки мест и подробности событий по-прежнему доступны."
+  },
+  "No mapped locations for this day.": {
+    "sr": "Nema lokacija na mapi za ovaj dan.",
+    "en": "No mapped locations for this day.",
+    "ru": "Для этого дня нет мест на карте."
+  },
+  "Nema lokacija na mapi za ovaj dan.": {
+    "sr": "Nema lokacija na mapi za ovaj dan.",
+    "en": "No mapped locations for this day.",
+    "ru": "Для этого дня нет мест на карте."
+  },
+  "Loading event map": {
+    "sr": "Učitavanje mape događaja",
+    "en": "Loading event map",
+    "ru": "Загрузка карты событий"
+  },
+  "Učitavanje mape događaja": {
+    "sr": "Učitavanje mape događaja",
+    "en": "Loading event map",
+    "ru": "Загрузка карты событий"
+  },
+  "Conservative merge: same date, same or similar venue, and matching title, description, or Instagram source.": {
+    "sr": "Oprezno spajanje: isti datum, isto ili slično mesto i odgovarajući naslov, opis ili Instagram izvor.",
+    "en": "Conservative merge: same date, same or similar venue, and matching title, description, or Instagram source.",
+    "ru": "Осторожное объединение: одинаковая дата, то же или похожее место и совпадающие название, описание или источник Instagram."
+  },
+  "Oprezno spajanje: isti datum, isto ili slično mesto i odgovarajući naslov, opis ili Instagram izvor.": {
+    "sr": "Oprezno spajanje: isti datum, isto ili slično mesto i odgovarajući naslov, opis ili Instagram izvor.",
+    "en": "Conservative merge: same date, same or similar venue, and matching title, description, or Instagram source.",
+    "ru": "Осторожное объединение: одинаковая дата, то же или похожее место и совпадающие название, описание или источник Instagram."
+  },
+  "going": {
+    "sr": "dolazi",
+    "en": "going",
+    "ru": "пойдут"
+  },
+  "dolazi": {
+    "sr": "dolazi",
+    "en": "going",
+    "ru": "пойдут"
+  },
+  "Share image": {
+    "sr": "Podeli sliku",
+    "en": "Share image",
+    "ru": "Поделиться изображением"
+  },
+  "Podeli sliku": {
+    "sr": "Podeli sliku",
+    "en": "Share image",
+    "ru": "Поделиться изображением"
+  },
+  "Download image": {
+    "sr": "Preuzmi sliku",
+    "en": "Download image",
+    "ru": "Скачать изображение"
+  },
+  "Preuzmi sliku": {
+    "sr": "Preuzmi sliku",
+    "en": "Download image",
+    "ru": "Скачать изображение"
+  },
+  "Copy link": {
+    "sr": "Kopiraj link",
+    "en": "Copy link",
+    "ru": "Скопировать ссылку"
+  },
+  "Kopiraj link": {
+    "sr": "Kopiraj link",
+    "en": "Copy link",
+    "ru": "Скопировать ссылку"
+  },
+  "Time": {
+    "sr": "Vreme",
+    "en": "Time",
+    "ru": "Время"
+  },
+  "Vreme": {
+    "sr": "Vreme",
+    "en": "Time",
+    "ru": "Время"
+  },
+  "Venue opening hours": {
+    "sr": "Radno vreme mesta",
+    "en": "Venue opening hours",
+    "ru": "Часы работы места"
+  },
+  "Radno vreme mesta": {
+    "sr": "Radno vreme mesta",
+    "en": "Venue opening hours",
+    "ru": "Часы работы места"
+  },
+  "Today’s hours": {
+    "sr": "Današnje radno vreme",
+    "en": "Today’s hours",
+    "ru": "Часы работы сегодня"
+  },
+  "Današnje radno vreme": {
+    "sr": "Današnje radno vreme",
+    "en": "Today’s hours",
+    "ru": "Часы работы сегодня"
+  },
+  "Closed": {
+    "sr": "Zatvoreno",
+    "en": "Closed",
+    "ru": "Закрыто"
+  },
+  "Zatvoreno": {
+    "sr": "Zatvoreno",
+    "en": "Closed",
+    "ru": "Закрыто"
+  },
+  "Open 24 hours": {
+    "sr": "Otvoreno 24 sata",
+    "en": "Open 24 hours",
+    "ru": "Круглосуточно"
+  },
+  "Otvoreno 24 sata": {
+    "sr": "Otvoreno 24 sata",
+    "en": "Open 24 hours",
+    "ru": "Круглосуточно"
+  },
+  "Hours not available": {
+    "sr": "Radno vreme nije dostupno",
+    "en": "Hours not available",
+    "ru": "Часы работы недоступны"
+  },
+  "Radno vreme nije dostupno": {
+    "sr": "Radno vreme nije dostupno",
+    "en": "Hours not available",
+    "ru": "Часы работы недоступны"
+  },
+  "Time not announced": {
+    "sr": "Satnica nije najavljena",
+    "en": "Time not announced",
+    "ru": "Время не объявлено"
+  },
+  "Satnica nije najavljena": {
+    "sr": "Satnica nije najavljena",
+    "en": "Time not announced",
+    "ru": "Время не объявлено"
+  },
+  "Unknown": {
+    "sr": "Nepoznato",
+    "en": "Unknown",
+    "ru": "Неизвестно"
+  },
+  "Nepoznato": {
+    "sr": "Nepoznato",
+    "en": "Unknown",
+    "ru": "Неизвестно"
+  },
+  "Daytime": {
+    "sr": "Tokom dana",
+    "en": "Daytime",
+    "ru": "Днём"
+  },
+  "Tokom dana": {
+    "sr": "Tokom dana",
+    "en": "Daytime",
+    "ru": "Днём"
+  },
+  "Evening": {
+    "sr": "Veče",
+    "en": "Evening",
+    "ru": "Вечером"
+  },
+  "Veče": {
+    "sr": "Veče",
+    "en": "Evening",
+    "ru": "Вечером"
+  },
+  "Late night": {
+    "sr": "Kasno noću",
+    "en": "Late night",
+    "ru": "Поздно ночью"
+  },
+  "Kasno noću": {
+    "sr": "Kasno noću",
+    "en": "Late night",
+    "ru": "Поздно ночью"
+  },
+  "All day": {
+    "sr": "Ceo dan",
+    "en": "All day",
+    "ru": "Весь день"
+  },
+  "Ceo dan": {
+    "sr": "Ceo dan",
+    "en": "All day",
+    "ru": "Весь день"
+  },
+  "By time": {
+    "sr": "Po vremenu",
+    "en": "By time",
+    "ru": "По времени"
+  },
+  "Po vremenu": {
+    "sr": "Po vremenu",
+    "en": "By time",
+    "ru": "По времени"
+  },
+  "Live/Svirke": {
+    "sr": "Svirke",
+    "en": "Live music",
+    "ru": "Живая музыка"
+  },
+  "Svirke": {
+    "sr": "Svirke",
+    "en": "Live/Svirke",
+    "ru": "Живая музыка"
+  },
+  "Nightlife": {
+    "sr": "Noćni život",
+    "en": "Nightlife",
+    "ru": "Ночная жизнь"
+  },
+  "Noćni život": {
+    "sr": "Noćni život",
+    "en": "Nightlife",
+    "ru": "Ночная жизнь"
+  },
+  "Theatre": {
+    "sr": "Pozorište",
+    "en": "Theatre",
+    "ru": "Театр"
+  },
+  "Pozorište": {
+    "sr": "Pozorište",
+    "en": "Theatre",
+    "ru": "Театр"
+  },
+  "Theater": {
+    "sr": "Pozorište",
+    "en": "Theater",
+    "ru": "Театр"
+  },
+  "Exhibition": {
+    "sr": "Izložba",
+    "en": "Exhibition",
+    "ru": "Выставка"
+  },
+  "Izložba": {
+    "sr": "Izložba",
+    "en": "Exhibition",
+    "ru": "Выставка"
+  },
+  "Workshop": {
+    "sr": "Radionica",
+    "en": "Workshop",
+    "ru": "Мастер-класс"
+  },
+  "Radionica": {
+    "sr": "Radionica",
+    "en": "Workshop",
+    "ru": "Мастер-класс"
+  },
+  "Film": {
+    "sr": "Film",
+    "en": "Film",
+    "ru": "Кино"
+  },
+  "Quiz": {
+    "sr": "Kviz",
+    "en": "Quiz",
+    "ru": "Квиз"
+  },
+  "Kviz": {
+    "sr": "Kviz",
+    "en": "Quiz",
+    "ru": "Квиз"
+  },
+  "Tasting": {
+    "sr": "Degustacija",
+    "en": "Tasting",
+    "ru": "Дегустация"
+  },
+  "Degustacija": {
+    "sr": "Degustacija",
+    "en": "Tasting",
+    "ru": "Дегустация"
+  },
+  "Festival": {
+    "sr": "Festival",
+    "en": "Festival",
+    "ru": "Фестиваль"
+  },
+  "Club": {
+    "sr": "Klub",
+    "en": "Club",
+    "ru": "Клуб"
+  },
+  "Klub": {
+    "sr": "Klub",
+    "en": "Club",
+    "ru": "Клуб"
+  },
+  "Bar": {
+    "sr": "Bar",
+    "en": "Bar",
+    "ru": "Бар"
+  },
+  "Gallery": {
+    "sr": "Galerija",
+    "en": "Gallery",
+    "ru": "Галерея"
+  },
+  "Galerija": {
+    "sr": "Galerija",
+    "en": "Gallery",
+    "ru": "Галерея"
+  },
+  "Restaurant": {
+    "sr": "Restoran",
+    "en": "Restaurant",
+    "ru": "Ресторан"
+  },
+  "Restoran": {
+    "sr": "Restoran",
+    "en": "Restaurant",
+    "ru": "Ресторан"
+  },
+  "Concert venue": {
+    "sr": "Koncertni prostor",
+    "en": "Concert venue",
+    "ru": "Концертная площадка"
+  },
+  "Koncertni prostor": {
+    "sr": "Koncertni prostor",
+    "en": "Concert venue",
+    "ru": "Концертная площадка"
+  },
+  "Cinema": {
+    "sr": "Bioskop",
+    "en": "Cinema",
+    "ru": "Кинотеатр"
+  },
+  "Bioskop": {
+    "sr": "Bioskop",
+    "en": "Cinema",
+    "ru": "Кинотеатр"
+  },
+  "Cultural center": {
+    "sr": "Kulturni centar",
+    "en": "Cultural center",
+    "ru": "Культурный центр"
+  },
+  "Kulturni centar": {
+    "sr": "Kulturni centar",
+    "en": "Cultural center",
+    "ru": "Культурный центр"
+  },
+  "Techno": {
+    "sr": "Techno",
+    "en": "Techno",
+    "ru": "Техно"
+  },
+  "House": {
+    "sr": "House",
+    "en": "House",
+    "ru": "Хаус"
+  },
+  "Disco": {
+    "sr": "Disco",
+    "en": "Disco",
+    "ru": "Диско"
+  },
+  "Rock": {
+    "sr": "Rock",
+    "en": "Rock",
+    "ru": "Рок"
+  },
+  "Jazz": {
+    "sr": "Džez",
+    "en": "Jazz",
+    "ru": "Джаз"
+  },
+  "Džez": {
+    "sr": "Džez",
+    "en": "Jazz",
+    "ru": "Джаз"
+  },
+  "Blues": {
+    "sr": "Bluz",
+    "en": "Blues",
+    "ru": "Блюз"
+  },
+  "Bluz": {
+    "sr": "Bluz",
+    "en": "Blues",
+    "ru": "Блюз"
+  },
+  "Metal": {
+    "sr": "Metal",
+    "en": "Metal",
+    "ru": "Метал"
+  },
+  "Pop": {
+    "sr": "Pop",
+    "en": "Pop",
+    "ru": "Поп"
+  },
+  "DJ set": {
+    "sr": "DJ set",
+    "en": "DJ set",
+    "ru": "DJ-сет"
+  },
+  "Stand-up": {
+    "sr": "Stand-up",
+    "en": "Stand-up",
+    "ru": "Стендап"
+  },
+  "Free entry": {
+    "sr": "Besplatan ulaz",
+    "en": "Free entry",
+    "ru": "Вход свободный"
+  },
+  "Besplatan ulaz": {
+    "sr": "Besplatan ulaz",
+    "en": "Free entry",
+    "ru": "Вход свободный"
+  },
+  "in the city": {
+    "sr": "u gradu",
+    "en": "in the city",
+    "ru": "в городе"
+  },
+  "Selected venue:": {
+    "sr": "Izabrano mesto:",
+    "en": "Selected venue:",
+    "ru": "Выбранное место:"
+  },
+  "Clear": {
+    "sr": "Poništi",
+    "en": "Clear",
+    "ru": "Сбросить"
+  },
+  "Belgrade events:": {
+    "sr": "Događaji u Beogradu:",
+    "en": "Belgrade events:",
+    "ru": "События в Белграде:"
+  },
+  "choose a date, search for an artist or venue, and check the event details before heading out.": {
+    "sr": "izaberi datum, pretraži izvođača ili mesto i proveri detalje događaja pre polaska.",
+    "en": "choose a date, search for an artist or venue, and check the event details before heading out.",
+    "ru": "выберите дату, найдите участника или площадку и проверьте подробности перед выходом."
+  },
+  "Install EventZeka App": {
+    "sr": "Instaliraj EventZeka App",
+    "en": "Install EventZeka App",
+    "ru": "Установить EventZeka App"
+  },
+  "Sign in is currently unavailable": {
+    "sr": "Prijava trenutno nije dostupna",
+    "en": "Sign in is currently unavailable",
+    "ru": "Вход сейчас недоступен"
+  },
+  "Try again later. Events saved on this device remain available in Saved.": {
+    "sr": "Pokušaj ponovo kasnije. Sačuvani događaji na ovom uređaju ostaju dostupni u Sačuvano.",
+    "en": "Try again later. Events saved on this device remain available in Saved.",
+    "ru": "Попробуйте позже. События, сохранённые на этом устройстве, остаются доступны в разделе «Сохранённое»."
+  },
+  "No events match this selection.": {
+    "sr": "Nema događaja za ovaj izbor.",
+    "en": "No events match this selection.",
+    "ru": "Для этого выбора событий нет."
+  },
+  "Try another search, category or date.": {
+    "sr": "Probaj drugu pretragu, kategoriju ili datum.",
+    "en": "Try another search, category or date.",
+    "ru": "Попробуйте другой запрос, категорию или дату."
+  },
+  "Day overview": {
+    "sr": "Pregled dana",
+    "en": "Day overview",
+    "ru": "Обзор дня"
+  },
+  "Time and source.": {
+    "sr": "Vreme i izvor.",
+    "en": "Time and source.",
+    "ru": "Время и источник."
+  },
+  "When the start is not announced, we show the available venue opening hours for that day. Venue hours do not describe the duration of the programme.": {
+    "sr": "Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa.",
+    "en": "When the start is not announced, we show the available venue opening hours for that day. Venue hours do not describe the duration of the programme.",
+    "ru": "Если время начала не объявлено, показываем известные часы работы места на этот день. Часы работы места не означают продолжительность программы."
+  },
+  "Loading events": {
+    "sr": "Učitavanje događaja",
+    "en": "Loading events",
+    "ru": "Загрузка событий"
+  },
+  "Choose a day": {
+    "sr": "Izaberi dan",
+    "en": "Choose a day",
+    "ru": "Выберите день"
+  },
+  "Open monthly calendar": {
+    "sr": "Otvori mesečni kalendar",
+    "en": "Open monthly calendar",
+    "ru": "Открыть календарь на месяц"
+  },
+  "Loading calendar...": {
+    "sr": "Učitavanje kalendara...",
+    "en": "Loading calendar...",
+    "ru": "Загрузка календаря…"
+  },
+  "Discover events": {
+    "sr": "Otkrij događaje",
+    "en": "Discover events",
+    "ru": "Подборка событий"
+  },
+  "Discover day": {
+    "sr": "Dan za otkrivanje događaja",
+    "en": "Discover day",
+    "ru": "День подборки"
+  },
+  "Event picks for the day": {
+    "sr": "Izbor događaja za dan",
+    "en": "Event picks for the day",
+    "ru": "Подборка событий на день"
+  },
+  "Your picks are stored on this device. Sign in to sync them.": {
+    "sr": "Izbor se čuva na ovom uređaju. Prijavi se da ga sinhronizuješ.",
+    "en": "Your picks are stored on this device. Sign in to sync them.",
+    "ru": "Ваш выбор хранится на этом устройстве. Войдите, чтобы синхронизировать его."
+  },
+  "I already have an account": {
+    "sr": "Već imam nalog",
+    "en": "I already have an account",
+    "ru": "У меня уже есть аккаунт"
+  },
+  "Sign in is currently unavailable.": {
+    "sr": "Prijava trenutno nije dostupna.",
+    "en": "Sign in is currently unavailable.",
+    "ru": "Вход сейчас недоступен."
+  },
+  "Undo last ·": {
+    "sr": "Vrati poslednju ·",
+    "en": "Undo last ·",
+    "ru": "Отменить последнее ·"
+  },
+  "Continue · remaining": {
+    "sr": "Nastavi · još",
+    "en": "Continue · remaining",
+    "ru": "Продолжить · осталось"
+  },
+  "Choose again ·": {
+    "sr": "Ponovo biraj ·",
+    "en": "Choose again ·",
+    "ru": "Выбрать заново ·"
+  },
+  "The event could not be removed from Saved. Try again in Saved.": {
+    "sr": "Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Sačuvano.",
+    "en": "The event could not be removed from Saved. Try again in Saved.",
+    "ru": "Не удалось удалить событие из сохранённого. Попробуйте в разделе «Сохранённое»."
+  },
+  "Pick events": {
+    "sr": "Biraj događaje",
+    "en": "Pick events",
+    "ru": "Выбрать события"
+  },
+  "Events already saved remain in Saved.": {
+    "sr": "Događaji koji su već sačuvani ostaju u Sačuvano.",
+    "en": "Events already saved remain in Saved.",
+    "ru": "Уже сохранённые события остаются в разделе «Сохранённое»."
+  },
+  "Photo unavailable.": {
+    "sr": "Fotografija nije dostupna.",
+    "en": "Photo unavailable.",
+    "ru": "Фотография недоступна."
+  },
+  "Like": {
+    "sr": "Sviđa mi se",
+    "en": "Like",
+    "ru": "Нравится"
+  },
+  "Skip": {
+    "sr": "Preskačem",
+    "en": "Skip",
+    "ru": "Пропустить"
+  },
+  "Close details": {
+    "sr": "Zatvori detalje",
+    "en": "Close details",
+    "ru": "Закрыть подробности"
+  },
+  "The post is currently unavailable.": {
+    "sr": "Objava trenutno nije dostupna.",
+    "en": "The post is currently unavailable.",
+    "ru": "Публикация сейчас недоступна."
+  },
+  "Loading original post": {
+    "sr": "Učitavanje originalne objave",
+    "en": "Loading original post",
+    "ru": "Загрузка исходной публикации"
+  },
+  "Live music": {
+    "sr": "Svirke",
+    "en": "Live music",
+    "ru": "Живая музыка"
+  }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useLocalizedRouter as useRouter, PublicText, LocalizedElement } from "@/components/i18n/public-text";
 import { useEffect, useTransition } from "react";
 import { Check, Clock3, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -50,7 +50,7 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
   }, [active, router]);
 
   return (
-    <button
+    <LocalizedElement as="button"
       aria-busy={pending}
       aria-label={appearance === "events" ? "Otvoreno sada" : "Open now"}
       aria-pressed={active}
@@ -99,7 +99,7 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
           <Clock3 className="size-full" />
         )}
       </span>
-      <span>{appearance === "events" ? "Otvoreno sada" : "Open now"}</span>
-    </button>
+      <span><PublicText text={appearance === "events" ? "Otvoreno sada" : "Open now"} /></span>
+    </LocalizedElement>
   );
 }

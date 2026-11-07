@@ -1,8 +1,10 @@
+
+import { LocalizedElement } from "@/components/i18n/public-text";
 import "./event-calendar-map.css";
 
 export function EventMapLoading() {
   return (
-    <main aria-busy="true" aria-label="Loading event map" className="app-page event-calendar-page gap-4">
+    <LocalizedElement as="main" aria-busy="true" aria-label="Loading event map" className="app-page event-calendar-page gap-4">
       <section className="hero-panel hidden px-4 py-5 sm:px-6 lg:block">
         <div className="animate-pulse space-y-4">
           <div className="h-4 w-24 rounded-full bg-muted" />
@@ -18,6 +20,6 @@ export function EventMapLoading() {
           ))}
         </div>
       </div>
-    </main>
+    </LocalizedElement>
   );
 }

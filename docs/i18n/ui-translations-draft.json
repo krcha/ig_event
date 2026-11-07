@@ -1,0 +1,2993 @@
+{
+  "$comment": "Planning artifact only. Not imported by runtime. Unicode translations are intentional.",
+  "schemaVersion": 1,
+  "status": "draft",
+  "createdAt": "2026-11-07",
+  "locales": [
+    "en",
+    "sr",
+    "ru"
+  ],
+  "languageTags": {
+    "en": "en-RS",
+    "sr": "sr-Latn-RS",
+    "ru": "ru-RS"
+  },
+  "messageCount": 184,
+  "scope": "Starter inventory of public interface copy and proposed localization controls. English and Serbian source text already coexist in the current application.",
+  "reviewPolicy": "Serbian Latin and Russian Cyrillic translations require native-language editorial review and in-context layout checks before release.",
+  "rules": [
+    "Translate display labels only; retain route query values, event-category keys, database IDs and API error codes.",
+    "Do not translate or overwrite artist names, venue names, official event titles, source captions, extracted evidence or original posters.",
+    "English translations may differ from source.text when the current interface text is Serbian.",
+    "Preserve interpolation identifiers in every language. Render plain strings through React text nodes, not HTML injection.",
+    "Plural drafts require ICU-compatible formatting or equivalent tested Intl.PluralRules branches; never concatenate translated noun fragments.",
+    "Format dates, weekdays, times and numbers through locale-aware formatters; do not introduce hardcoded translated month or weekday arrays.",
+    "External browser menu captions in installation diagrams must match the illustrated browser language and version; do not blindly replace OS labels with website translations."
+  ],
+  "remainingInventory": [
+    "Long installation instructions and browser-specific illustrated menus.",
+    "Complete custom auth validation/reset flows, Clerk error-code mapping and all email templates.",
+    "Long SEO descriptions, FAQ answers, structured data, social artwork and calendar export text.",
+    "Additional map controls, loading skeleton accessibility labels, profile scenes and venue category variants.",
+    "Accessibility labels assembled from dynamic event titles, venue names and counts.",
+    "All public-facing fallback errors currently returned as raw server or provider messages."
+  ],
+  "messages": [
+    {
+      "key": "nav.events",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 37,
+        "text": "Events"
+      },
+      "translations": {
+        "en": "Events",
+        "sr": "Događaji",
+        "ru": "События"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.discover",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 44,
+        "text": "Discover"
+      },
+      "translations": {
+        "en": "Discover",
+        "sr": "Otkrij",
+        "ru": "Подборка"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.map",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 50,
+        "text": "Map"
+      },
+      "translations": {
+        "en": "Map",
+        "sr": "Mapa",
+        "ru": "Карта"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.saved",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 57,
+        "text": "Saved"
+      },
+      "translations": {
+        "en": "Saved",
+        "sr": "Sačuvano",
+        "ru": "Сохранённое"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.followInstagram",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 126,
+        "text": "Follow @eventzeka on Instagram"
+      },
+      "translations": {
+        "en": "Follow @eventzeka on Instagram",
+        "sr": "Prati @eventzeka na Instagramu",
+        "ru": "Подписаться на @eventzeka в Instagram"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.instagramA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 118,
+        "text": "Follow @eventzeka on Instagram (opens in a new tab)"
+      },
+      "translations": {
+        "en": "Follow @eventzeka on Instagram (opens in a new tab)",
+        "sr": "Prati @eventzeka na Instagramu (otvara se u novoj kartici)",
+        "ru": "Подписаться на @eventzeka в Instagram (откроется в новой вкладке)"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.follow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 129,
+        "text": "Follow"
+      },
+      "translations": {
+        "en": "Follow",
+        "sr": "Prati",
+        "ru": "Подписаться"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.homeA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/app-toolbar.tsx",
+        "line": 217,
+        "text": "Event Zeka home"
+      },
+      "translations": {
+        "en": "Event Zeka home",
+        "sr": "Event Zeka početna stranica",
+        "ru": "Главная страница Event Zeka"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "nav.profile",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/navigation/profile-avatar-link.tsx",
+        "line": 21,
+        "text": "Your profile"
+      },
+      "translations": {
+        "en": "Your profile",
+        "sr": "Tvoj profil",
+        "ru": "Ваш профиль"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.save",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/save-event-button.tsx",
+        "line": 30,
+        "text": "Save"
+      },
+      "translations": {
+        "en": "Save",
+        "sr": "Sačuvaj",
+        "ru": "Сохранить"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.saved",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/save-event-button.tsx",
+        "line": 32,
+        "text": "Saved"
+      },
+      "translations": {
+        "en": "Saved",
+        "sr": "Sačuvano",
+        "ru": "Сохранено"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.unsave",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/save-event-button.tsx",
+        "line": 30,
+        "text": "Unsave"
+      },
+      "translations": {
+        "en": "Unsave",
+        "sr": "Ukloni iz sačuvanih",
+        "ru": "Удалить из сохранённого"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.saveFailed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/save-event-button.tsx",
+        "line": 46,
+        "text": "Could not update this event."
+      },
+      "translations": {
+        "en": "Could not update this event.",
+        "sr": "Nije uspelo ažuriranje ovog događaja.",
+        "ru": "Не удалось обновить это событие."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.follow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/favorite-venue-button.tsx",
+        "line": 35,
+        "text": "Follow"
+      },
+      "translations": {
+        "en": "Follow",
+        "sr": "Prati",
+        "ru": "Подписаться"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.following",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/favorite-venue-button.tsx",
+        "line": 37,
+        "text": "Following"
+      },
+      "translations": {
+        "en": "Following",
+        "sr": "Pratiš",
+        "ru": "Вы подписаны"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.unfollow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/favorite-venue-button.tsx",
+        "line": 35,
+        "text": "Unfollow"
+      },
+      "translations": {
+        "en": "Unfollow",
+        "sr": "Prestani da pratiš",
+        "ru": "Отписаться"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.notLinked",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/favorite-venue-button.tsx",
+        "line": 43,
+        "text": "This venue is not linked yet."
+      },
+      "translations": {
+        "en": "This venue is not linked yet.",
+        "sr": "Ovo mesto još nije povezano.",
+        "ru": "Это место ещё не связано с каталогом."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.updateFailed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/favorite-venue-button.tsx",
+        "line": 55,
+        "text": "Could not update this venue."
+      },
+      "translations": {
+        "en": "Could not update this venue.",
+        "sr": "Nije uspelo ažuriranje ovog mesta.",
+        "ru": "Не удалось обновить это место."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.button",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 98,
+        "text": "Share"
+      },
+      "translations": {
+        "en": "Share",
+        "sr": "Podeli",
+        "ru": "Поделиться"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.title",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 109,
+        "text": "Share this event"
+      },
+      "translations": {
+        "en": "Share this event",
+        "sr": "Podeli ovaj događaj",
+        "ru": "Поделиться событием"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.format",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 110,
+        "text": "Story image - 1080 x 1920"
+      },
+      "translations": {
+        "en": "Story image - 1080 x 1920",
+        "sr": "Slika za Story - 1080 x 1920",
+        "ru": "Изображение для Stories — 1080 × 1920"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.closeA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 112,
+        "text": "Close sharing"
+      },
+      "translations": {
+        "en": "Close sharing",
+        "sr": "Zatvori deljenje",
+        "ru": "Закрыть окно отправки"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.preparing",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 124,
+        "text": "Preparing image..."
+      },
+      "translations": {
+        "en": "Preparing image...",
+        "sr": "Priprema slike…",
+        "ru": "Подготовка изображения…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.previewUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 126,
+        "text": "Image preview unavailable"
+      },
+      "translations": {
+        "en": "Image preview unavailable",
+        "sr": "Pregled slike nije dostupan",
+        "ru": "Предпросмотр изображения недоступен"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.retryImage",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 132,
+        "text": "Try image again"
+      },
+      "translations": {
+        "en": "Try image again",
+        "sr": "Pokušaj ponovo sa slikom",
+        "ru": "Попробовать загрузить изображение снова"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.linkCopied",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 68,
+        "text": "Event link copied."
+      },
+      "translations": {
+        "en": "Event link copied.",
+        "sr": "Link događaja je kopiran.",
+        "ru": "Ссылка на событие скопирована."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.copyFallback",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 70,
+        "text": "Copy the link below to share this event."
+      },
+      "translations": {
+        "en": "Copy the link below to share this event.",
+        "sr": "Kopiraj link ispod da podeliš ovaj događaj.",
+        "ru": "Скопируйте ссылку ниже, чтобы поделиться событием."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.imageUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 49,
+        "text": "The image is unavailable. You can still copy the event link."
+      },
+      "translations": {
+        "en": "The image is unavailable. You can still copy the event link.",
+        "sr": "Slika nije dostupna. Link događaja i dalje možeš da kopiraš.",
+        "ru": "Изображение недоступно. Вы по-прежнему можете скопировать ссылку на событие."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.imageTimeout",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 50,
+        "text": "Preparing the image took too long. Please try again."
+      },
+      "translations": {
+        "en": "Preparing the image took too long. Please try again.",
+        "sr": "Priprema slike traje predugo. Pokušaj ponovo.",
+        "ru": "Подготовка изображения заняла слишком много времени. Попробуйте ещё раз."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.nativeUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 83,
+        "text": "Sharing is unavailable here. Download the image or copy the event link."
+      },
+      "translations": {
+        "en": "Sharing is unavailable here. Download the image or copy the event link.",
+        "sr": "Deljenje ovde nije dostupno. Preuzmi sliku ili kopiraj link događaja.",
+        "ru": "Здесь отправка недоступна. Скачайте изображение или скопируйте ссылку на событие."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "share.eventLink",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-share-button.tsx",
+        "line": 153,
+        "text": "Event link"
+      },
+      "translations": {
+        "en": "Event link",
+        "sr": "Link događaja",
+        "ru": "Ссылка на событие"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.searchAndFilters",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 23,
+        "text": "Pretraga i filteri"
+      },
+      "translations": {
+        "en": "Search and filters",
+        "sr": "Pretraga i filteri",
+        "ru": "Поиск и фильтры"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.searchEvents",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 29,
+        "text": "Pretraži događaje"
+      },
+      "translations": {
+        "en": "Search events",
+        "sr": "Pretraži događaje",
+        "ru": "Поиск событий"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.searchPlaceholder",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 30,
+        "text": "Događaj, mesto ili žanr"
+      },
+      "translations": {
+        "en": "Event, artist or venue",
+        "sr": "Događaj, izvođač ili mesto",
+        "ru": "Событие, участник или место"
+      },
+      "note": "Intentional copy correction to match the existing canonical search contract: event titles, artists, venue names and aliases. Preserve source.text as the current inventory; this draft does not change search behavior.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.label",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 33,
+        "text": "Filteri"
+      },
+      "translations": {
+        "en": "Filters",
+        "sr": "Filteri",
+        "ru": "Фильтры"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.extraActive",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 36,
+        "text": "Dodatne kontrole su aktivne."
+      },
+      "translations": {
+        "en": "Additional filters are active.",
+        "sr": "Dodatni filteri su aktivni.",
+        "ru": "Дополнительные фильтры включены."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.openExtra",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 36,
+        "text": "Otvori dodatne kontrole."
+      },
+      "translations": {
+        "en": "Open additional filters.",
+        "sr": "Otvori dodatne filtere.",
+        "ru": "Открыть дополнительные фильтры."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.sort",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/events-toolbar.tsx",
+        "line": 42,
+        "text": "Sortiranje"
+      },
+      "translations": {
+        "en": "Sort by",
+        "sr": "Sortiranje",
+        "ru": "Сортировка"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.sortTime",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/agenda-sort-options.ts",
+        "line": 5,
+        "text": "Po vremenu"
+      },
+      "translations": {
+        "en": "By time",
+        "sr": "Po vremenu",
+        "ru": "По времени"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.sortLate",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/agenda-sort-options.ts",
+        "line": 6,
+        "text": "Kasnije prvo"
+      },
+      "translations": {
+        "en": "Latest first",
+        "sr": "Kasnije prvo",
+        "ru": "Сначала поздние"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.sortTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/agenda-sort-options.ts",
+        "line": 7,
+        "text": "Po nazivu"
+      },
+      "translations": {
+        "en": "By title",
+        "sr": "Po nazivu",
+        "ru": "По названию"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.sortVenue",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/agenda-sort-options.ts",
+        "line": 8,
+        "text": "Po imenu mesta"
+      },
+      "translations": {
+        "en": "By venue name",
+        "sr": "Po nazivu mesta",
+        "ru": "По названию места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.openNow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/open-now-filter.tsx",
+        "line": 55,
+        "text": "Open now"
+      },
+      "translations": {
+        "en": "Open now",
+        "sr": "Otvoreno sada",
+        "ru": "Открыто сейчас"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.all",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-kind-toggle-chips.tsx",
+        "line": 15,
+        "text": "All"
+      },
+      "translations": {
+        "en": "All",
+        "sr": "Sve",
+        "ru": "Все"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.selectedDayA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-kind-toggle-chips.tsx",
+        "line": 356,
+        "text": "Selected day filters"
+      },
+      "translations": {
+        "en": "Selected day filters",
+        "sr": "Filteri za izabrani dan",
+        "ru": "Фильтры для выбранного дня"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "filters.selectedCategoriesA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-kind-toggle-chips.tsx",
+        "line": 356,
+        "text": "Selected day categories"
+      },
+      "translations": {
+        "en": "Selected day categories",
+        "sr": "Kategorije za izabrani dan",
+        "ru": "Категории для выбранного дня"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "calendar.previousMonth",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/mobile-calendar-dialog.tsx",
+        "line": 45,
+        "text": "Prethodni mesec"
+      },
+      "translations": {
+        "en": "Previous month",
+        "sr": "Prethodni mesec",
+        "ru": "Предыдущий месяц"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "calendar.nextMonth",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/mobile-calendar-dialog.tsx",
+        "line": 46,
+        "text": "Sledeći mesec"
+      },
+      "translations": {
+        "en": "Next month",
+        "sr": "Sledeći mesec",
+        "ru": "Следующий месяц"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "calendar.close",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/mobile-calendar-dialog.tsx",
+        "line": 47,
+        "text": "Zatvori kalendar"
+      },
+      "translations": {
+        "en": "Close calendar",
+        "sr": "Zatvori kalendar",
+        "ru": "Закрыть календарь"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "category.club",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 4,
+        "text": "Zurke"
+      },
+      "translations": {
+        "en": "Parties",
+        "sr": "Žurke",
+        "ru": "Вечеринки"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "category.live",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 5,
+        "text": "Live music"
+      },
+      "translations": {
+        "en": "Live music",
+        "sr": "Svirke",
+        "ru": "Живая музыка"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "category.culture",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 6,
+        "text": "Kultura"
+      },
+      "translations": {
+        "en": "Culture",
+        "sr": "Kultura",
+        "ru": "Культура"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "category.other",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 7,
+        "text": "Ostalo"
+      },
+      "translations": {
+        "en": "Other",
+        "sr": "Ostalo",
+        "ru": "Другое"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "tag.film",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 134,
+        "text": "Film"
+      },
+      "translations": {
+        "en": "Film",
+        "sr": "Film",
+        "ru": "Кино"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "tag.workshop",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 136,
+        "text": "Radionica"
+      },
+      "translations": {
+        "en": "Workshop",
+        "sr": "Radionica",
+        "ru": "Мастер-класс"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "tag.quiz",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 137,
+        "text": "Kviz"
+      },
+      "translations": {
+        "en": "Quiz",
+        "sr": "Kviz",
+        "ru": "Квиз"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "tag.tasting",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 138,
+        "text": "Degustacija"
+      },
+      "translations": {
+        "en": "Tasting",
+        "sr": "Degustacija",
+        "ru": "Дегустация"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "tag.freeEntry",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/taxonomy/event-categories.ts",
+        "line": 150,
+        "text": "Besplatan ulaz"
+      },
+      "translations": {
+        "en": "Free entry",
+        "sr": "Besplatan ulaz",
+        "ru": "Вход свободный"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.day",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-meta.tsx",
+        "line": 41,
+        "text": "Day"
+      },
+      "translations": {
+        "en": "Day",
+        "sr": "Dan",
+        "ru": "День"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.night",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-meta.tsx",
+        "line": 41,
+        "text": "Night"
+      },
+      "translations": {
+        "en": "Night",
+        "sr": "Noć",
+        "ru": "Ночь"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.free",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/event-meta.tsx",
+        "line": 143,
+        "text": "Free"
+      },
+      "translations": {
+        "en": "Free",
+        "sr": "Besplatno",
+        "ru": "Бесплатно"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.timeUnknown",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/event-time.ts",
+        "line": 19,
+        "text": "Time not announced"
+      },
+      "translations": {
+        "en": "Time not announced",
+        "sr": "Satnica nije najavljena",
+        "ru": "Время не объявлено"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.timeSourceMissing",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/event-time.ts",
+        "line": 421,
+        "text": "No confirmed start-time source"
+      },
+      "translations": {
+        "en": "No confirmed start-time source",
+        "sr": "Nema potvrđenog izvora za vreme početka",
+        "ru": "Нет подтверждённого источника времени начала"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.timeAiSource",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "lib/events/event-time.ts",
+        "line": 428,
+        "text": "AI extraction"
+      },
+      "translations": {
+        "en": "AI extraction",
+        "sr": "AI izdvajanje podataka",
+        "ru": "Данные, извлечённые ИИ"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.possiblyStillOn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/events/open-now-status.tsx",
+        "line": 3,
+        "text": "Possibly still on - end unconfirmed"
+      },
+      "translations": {
+        "en": "Possibly still on - end unconfirmed",
+        "sr": "Možda još traje - kraj nije potvrđen",
+        "ru": "Возможно, ещё идёт — время окончания не подтверждено"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.breadcrumbHome",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 390,
+        "text": "Belgrade events"
+      },
+      "translations": {
+        "en": "Belgrade events",
+        "sr": "Događaji u Beogradu",
+        "ru": "События в Белграде"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.details",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 436,
+        "text": "Event details"
+      },
+      "translations": {
+        "en": "Event details",
+        "sr": "Detalji događaja",
+        "ru": "О событии"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.date",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 444,
+        "text": "Date"
+      },
+      "translations": {
+        "en": "Date",
+        "sr": "Datum",
+        "ru": "Дата"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.venue",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 462,
+        "text": "Venue"
+      },
+      "translations": {
+        "en": "Venue",
+        "sr": "Mesto",
+        "ru": "Место"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.whatToKnow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 488,
+        "text": "What to know"
+      },
+      "translations": {
+        "en": "What to know",
+        "sr": "Šta treba da znaš",
+        "ru": "Полезная информация"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.update",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 491,
+        "text": "Update:"
+      },
+      "translations": {
+        "en": "Update:",
+        "sr": "Izmena:",
+        "ru": "Обновление:"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.artists",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 521,
+        "text": "Artists"
+      },
+      "translations": {
+        "en": "Artists",
+        "sr": "Izvođači",
+        "ru": "Участники"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "common.breadcrumbA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/events/[eventId]/page.tsx",
+        "line": 404,
+        "text": "Breadcrumb"
+      },
+      "translations": {
+        "en": "Breadcrumb",
+        "sr": "Putanja stranice",
+        "ru": "Навигационная цепочка"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.instagramPost",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 45,
+        "text": "Instagram post"
+      },
+      "translations": {
+        "en": "Instagram post",
+        "sr": "Instagram objava",
+        "ru": "Публикация в Instagram"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.closePost",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 58,
+        "text": "Close Instagram post"
+      },
+      "translations": {
+        "en": "Close Instagram post",
+        "sr": "Zatvori Instagram objavu",
+        "ru": "Закрыть публикацию Instagram"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.loadingImage",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 89,
+        "text": "Loading post image"
+      },
+      "translations": {
+        "en": "Loading post image",
+        "sr": "Učitavanje slike iz objave",
+        "ru": "Загрузка изображения из публикации"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.originalImageUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 105,
+        "text": "The original image is unavailable."
+      },
+      "translations": {
+        "en": "The original image is unavailable.",
+        "sr": "Originalna slika nije dostupna.",
+        "ru": "Оригинальное изображение недоступно."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.retryImage",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 106,
+        "text": "Retry image"
+      },
+      "translations": {
+        "en": "Retry image",
+        "sr": "Pokušaj ponovo sa slikom",
+        "ru": "Загрузить изображение снова"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.originalCaption",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 114,
+        "text": "Original caption"
+      },
+      "translations": {
+        "en": "Original caption",
+        "sr": "Originalni tekst objave",
+        "ru": "Оригинальный текст публикации"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.eventDescription",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 114,
+        "text": "Event description"
+      },
+      "translations": {
+        "en": "Event description",
+        "sr": "Opis događaja",
+        "ru": "Описание события"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.captionUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 125,
+        "text": "The original caption is unavailable. You can view the source on Instagram."
+      },
+      "translations": {
+        "en": "The original caption is unavailable. You can view the source on Instagram.",
+        "sr": "Originalni tekst objave nije dostupan. Izvor možeš da pogledaš na Instagramu.",
+        "ru": "Оригинальный текст публикации недоступен. Источник можно посмотреть в Instagram."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.loadingCaption",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/event-post-preview.tsx",
+        "line": 127,
+        "text": "Loading original caption..."
+      },
+      "translations": {
+        "en": "Loading original caption...",
+        "sr": "Učitavanje originalnog teksta objave…",
+        "ru": "Загрузка оригинального текста публикации…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.postGone",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/calendar-event-preview.tsx",
+        "line": 67,
+        "text": "This post is no longer available."
+      },
+      "translations": {
+        "en": "This post is no longer available.",
+        "sr": "Ova objava više nije dostupna.",
+        "ru": "Эта публикация больше недоступна."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.postLoadFailed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/calendar-event-preview.tsx",
+        "line": 68,
+        "text": "The post could not be loaded. Please try again."
+      },
+      "translations": {
+        "en": "The post could not be loaded. Please try again.",
+        "sr": "Objava nije učitana. Pokušaj ponovo.",
+        "ru": "Не удалось загрузить публикацию. Попробуйте ещё раз."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.loadingPost",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/calendar/calendar-event-preview.tsx",
+        "line": 161,
+        "text": "Loading Instagram post..."
+      },
+      "translations": {
+        "en": "Loading Instagram post...",
+        "sr": "Učitavanje Instagram objave…",
+        "ru": "Загрузка публикации Instagram…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.tonight",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 133,
+        "text": "Tonight"
+      },
+      "translations": {
+        "en": "Tonight",
+        "sr": "Večeras",
+        "ru": "Сегодня вечером"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.tomorrow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 136,
+        "text": "Tomorrow"
+      },
+      "translations": {
+        "en": "Tomorrow",
+        "sr": "Sutra",
+        "ru": "Завтра"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.noUpcoming",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 242,
+        "text": "No upcoming events yet"
+      },
+      "translations": {
+        "en": "No upcoming events yet",
+        "sr": "Još nema predstojećih događaja",
+        "ru": "Предстоящих событий пока нет"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.savePlans",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 340,
+        "text": "Save your plans"
+      },
+      "translations": {
+        "en": "Save your plans",
+        "sr": "Sačuvaj svoje planove",
+        "ru": "Сохраните свои планы"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.signInKeepPlans",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 341,
+        "text": "Sign in to keep your plans."
+      },
+      "translations": {
+        "en": "Sign in to keep your plans.",
+        "sr": "Prijavi se da sačuvaš svoje planove.",
+        "ru": "Войдите, чтобы сохранить свои планы."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.authUnavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 355,
+        "text": "Sign in is currently unavailable. You can keep browsing events."
+      },
+      "translations": {
+        "en": "Sign in is currently unavailable. You can keep browsing events.",
+        "sr": "Prijava trenutno nije dostupna. Možeš da nastaviš da pregledaš događaje.",
+        "ru": "Вход сейчас недоступен. Вы можете продолжить просмотр событий."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.loading",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 367,
+        "text": "Loading saved items..."
+      },
+      "translations": {
+        "en": "Loading saved items...",
+        "sr": "Učitavanje sačuvanih stavki…",
+        "ru": "Загрузка сохранённого…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.subtitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 595,
+        "text": "Your kept events and places"
+      },
+      "translations": {
+        "en": "Your kept events and places",
+        "sr": "Tvoji sačuvani događaji i mesta",
+        "ru": "Ваши сохранённые события и места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.places",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 607,
+        "text": "Places"
+      },
+      "translations": {
+        "en": "Places",
+        "sr": "Mesta",
+        "ru": "Места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.syncCta",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 615,
+        "text": "Sign in to sync your saved events."
+      },
+      "translations": {
+        "en": "Sign in to sync your saved events.",
+        "sr": "Prijavi se da sinhronizuješ sačuvane događaje.",
+        "ru": "Войдите, чтобы синхронизировать сохранённые события."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.syncing",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 616,
+        "text": "Syncing device saves..."
+      },
+      "translations": {
+        "en": "Syncing device saves...",
+        "sr": "Sinhronizovanje sačuvanog sa uređaja…",
+        "ru": "Синхронизация сохранённого на устройстве…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.emptyEventsTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 694,
+        "text": "No saved events yet."
+      },
+      "translations": {
+        "en": "No saved events yet.",
+        "sr": "Još nema sačuvanih događaja.",
+        "ru": "Сохранённых событий пока нет."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.emptyEventsBody",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 691,
+        "text": "Tap the bookmark on any event to keep it here. Past events automatically fall away from this list."
+      },
+      "translations": {
+        "en": "Tap the bookmark on any event to keep it here. Past events automatically fall away from this list.",
+        "sr": "Dodirni obeleživač na bilo kom događaju da ga sačuvaš ovde. Prošli događaji se automatski uklanjaju sa ove liste.",
+        "ru": "Нажмите на закладку у события, чтобы сохранить его здесь. Прошедшие события автоматически исчезают из этого списка."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.browseEvents",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 692,
+        "text": "Browse events"
+      },
+      "translations": {
+        "en": "Browse events",
+        "sr": "Pregledaj događaje",
+        "ru": "Смотреть события"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.emptyPlacesTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 707,
+        "text": "No favourite places yet."
+      },
+      "translations": {
+        "en": "No favourite places yet.",
+        "sr": "Još nema omiljenih mesta.",
+        "ru": "Избранных мест пока нет."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.emptyPlacesBody",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 704,
+        "text": "Tap the heart beside any venue to keep it here and see its next upcoming event."
+      },
+      "translations": {
+        "en": "Tap the heart beside any venue to keep it here and see its next upcoming event.",
+        "sr": "Dodirni srce pored mesta da ga sačuvaš ovde i vidiš njegov sledeći događaj.",
+        "ru": "Нажмите на сердце рядом с местом, чтобы сохранить его здесь и увидеть ближайшее событие."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "saved.findPlaces",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/saved/saved-library-panel.tsx",
+        "line": 705,
+        "text": "Find places"
+      },
+      "translations": {
+        "en": "Find places",
+        "sr": "Pronađi mesta",
+        "ru": "Найти места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.accountTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 88,
+        "text": "Tvoj Event Zeka nalog"
+      },
+      "translations": {
+        "en": "Your Event Zeka account",
+        "sr": "Tvoj Event Zeka nalog",
+        "ru": "Ваш аккаунт Event Zeka"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.noEmail",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 214,
+        "text": "No email on file"
+      },
+      "translations": {
+        "en": "No email on file",
+        "sr": "Email nije dodat",
+        "ru": "Адрес электронной почты не указан"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.savedEvents",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 269,
+        "text": "Saved events"
+      },
+      "translations": {
+        "en": "Saved events",
+        "sr": "Sačuvani događaji",
+        "ru": "Сохранённые события"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.favouritePlaces",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 270,
+        "text": "Favourite places"
+      },
+      "translations": {
+        "en": "Favourite places",
+        "sr": "Omiljena mesta",
+        "ru": "Избранные места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.scenes",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 275,
+        "text": "Your scenes"
+      },
+      "translations": {
+        "en": "Your scenes",
+        "sr": "Tvoja interesovanja",
+        "ru": "Ваши интересы"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.addScene",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 230,
+        "text": "Add a scene"
+      },
+      "translations": {
+        "en": "Add a scene",
+        "sr": "Dodaj interesovanje",
+        "ru": "Добавить интерес"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.signingOut",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 347,
+        "text": "Signing out..."
+      },
+      "translations": {
+        "en": "Signing out...",
+        "sr": "Odjavljivanje…",
+        "ru": "Выход…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "profile.signOut",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/you-profile-panel.tsx",
+        "line": 347,
+        "text": "Sign out"
+      },
+      "translations": {
+        "en": "Sign out",
+        "sr": "Odjavi se",
+        "ru": "Выйти"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.signIn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 29,
+        "text": "Prijavi se"
+      },
+      "translations": {
+        "en": "Sign in",
+        "sr": "Prijavi se",
+        "ru": "Войти"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.signUp",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 33,
+        "text": "Napravi nalog"
+      },
+      "translations": {
+        "en": "Create an account",
+        "sr": "Napravi nalog",
+        "ru": "Создать аккаунт"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.signInDescription",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 30,
+        "text": "Sinhronizuj sačuvane događaje i omiljena mesta na svojim uređajima."
+      },
+      "translations": {
+        "en": "Sync saved events and favourite places across your devices.",
+        "sr": "Sinhronizuj sačuvane događaje i omiljena mesta na svojim uređajima.",
+        "ru": "Синхронизируйте сохранённые события и избранные места на своих устройствах."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.noAccount",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 32,
+        "text": "Nemaš nalog?"
+      },
+      "translations": {
+        "en": "Don't have an account?",
+        "sr": "Nemaš nalog?",
+        "ru": "Нет аккаунта?"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.existingAccount",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 39,
+        "text": "Već imaš nalog?"
+      },
+      "translations": {
+        "en": "Already have an account?",
+        "sr": "Već imaš nalog?",
+        "ru": "Уже есть аккаунт?"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.verifyEmail",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 83,
+        "text": "Potvrdi email"
+      },
+      "translations": {
+        "en": "Verify email",
+        "sr": "Potvrdi email",
+        "ru": "Подтвердить электронную почту"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.verifySignIn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 87,
+        "text": "Potvrdi prijavu"
+      },
+      "translations": {
+        "en": "Verify sign-in",
+        "sr": "Potvrdi prijavu",
+        "ru": "Подтвердить вход"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.extraVerification",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 87,
+        "text": "Još jedan korak da potvrdimo da si to ti."
+      },
+      "translations": {
+        "en": "One more step to verify it's you.",
+        "sr": "Još jedan korak da potvrdimo da si to ti.",
+        "ru": "Ещё один шаг, чтобы подтвердить, что это вы."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.forgotPassword",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 88,
+        "text": "Zaboravljena lozinka?"
+      },
+      "translations": {
+        "en": "Forgot password?",
+        "sr": "Zaboravljena lozinka?",
+        "ru": "Забыли пароль?"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.enterCode",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 89,
+        "text": "Unesi kod"
+      },
+      "translations": {
+        "en": "Enter the code",
+        "sr": "Unesi kod",
+        "ru": "Введите код"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.emailCode",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 494,
+        "text": "Kod iz emaila"
+      },
+      "translations": {
+        "en": "Email code",
+        "sr": "Kod iz emaila",
+        "ru": "Код из письма"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.newPassword",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 90,
+        "text": "Nova lozinka"
+      },
+      "translations": {
+        "en": "New password",
+        "sr": "Nova lozinka",
+        "ru": "Новый пароль"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.passwordMismatch",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 261,
+        "text": "Nove lozinke se ne podudaraju. Unesi istu lozinku u oba polja."
+      },
+      "translations": {
+        "en": "The new passwords do not match. Enter the same password in both fields.",
+        "sr": "Nove lozinke se ne podudaraju. Unesi istu lozinku u oba polja.",
+        "ru": "Новые пароли не совпадают. Введите одинаковый пароль в обоих полях."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.signingIn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 391,
+        "text": "Prijavljivanje…"
+      },
+      "translations": {
+        "en": "Signing in…",
+        "sr": "Prijavljivanje…",
+        "ru": "Вход…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.verifying",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 431,
+        "text": "Proveravanje…"
+      },
+      "translations": {
+        "en": "Verifying…",
+        "sr": "Proveravanje…",
+        "ru": "Проверка…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.confirmSignIn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 431,
+        "text": "Potvrdi i prijavi se"
+      },
+      "translations": {
+        "en": "Verify and sign in",
+        "sr": "Potvrdi i prijavi se",
+        "ru": "Подтвердить и войти"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.confirmCode",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 512,
+        "text": "Potvrdi kod"
+      },
+      "translations": {
+        "en": "Verify code",
+        "sr": "Potvrdi kod",
+        "ru": "Подтвердить код"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.creatingAccount",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 635,
+        "text": "Pravljenje naloga…"
+      },
+      "translations": {
+        "en": "Creating account…",
+        "sr": "Pravljenje naloga…",
+        "ru": "Создание аккаунта…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.backToSignIn",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 454,
+        "text": "Nazad na prijavu"
+      },
+      "translations": {
+        "en": "Back to sign-in",
+        "sr": "Nazad na prijavu",
+        "ru": "Вернуться ко входу"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.sending",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 477,
+        "text": "Slanje…"
+      },
+      "translations": {
+        "en": "Sending…",
+        "sr": "Slanje…",
+        "ru": "Отправка…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "auth.sendCode",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/auth/email-auth-card.tsx",
+        "line": 477,
+        "text": "Pošalji kod"
+      },
+      "translations": {
+        "en": "Send code",
+        "sr": "Pošalji kod",
+        "ru": "Отправить код"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.title",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 282,
+        "text": "Belgrade venues"
+      },
+      "translations": {
+        "en": "Belgrade venues",
+        "sr": "Mesta u Beogradu",
+        "ru": "Места в Белграде"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.guide",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 283,
+        "text": "Belgrade venue guide"
+      },
+      "translations": {
+        "en": "Belgrade venue guide",
+        "sr": "Vodič kroz mesta u Beogradu",
+        "ru": "Путеводитель по местам Белграда"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.followers",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 210,
+        "text": "Followers"
+      },
+      "translations": {
+        "en": "Followers",
+        "sr": "Pratioci",
+        "ru": "Подписчики"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.search",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 321,
+        "text": "Search venues"
+      },
+      "translations": {
+        "en": "Search venues",
+        "sr": "Pretraži mesta",
+        "ru": "Поиск мест"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.allCategories",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 330,
+        "text": "All categories"
+      },
+      "translations": {
+        "en": "All categories",
+        "sr": "Sve kategorije",
+        "ru": "Все категории"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.pagesA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 370,
+        "text": "Venue directory pages"
+      },
+      "translations": {
+        "en": "Venue directory pages",
+        "sr": "Stranice imenika mesta",
+        "ru": "Страницы каталога мест"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venues.empty",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/directory/page.tsx",
+        "line": 403,
+        "text": "No venues found"
+      },
+      "translations": {
+        "en": "No venues found",
+        "sr": "Nema pronađenih mesta",
+        "ru": "Места не найдены"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.title",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 50,
+        "text": "Hours"
+      },
+      "translations": {
+        "en": "Hours",
+        "sr": "Radno vreme",
+        "ru": "Часы работы"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.confirmationNeeded",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 55,
+        "text": "Hours need confirmation"
+      },
+      "translations": {
+        "en": "Hours need confirmation",
+        "sr": "Radno vreme treba potvrditi",
+        "ru": "Часы работы требуют подтверждения"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.temporarilyClosed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 57,
+        "text": "Temporarily closed"
+      },
+      "translations": {
+        "en": "Temporarily closed",
+        "sr": "Privremeno zatvoreno",
+        "ru": "Временно закрыто"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.permanentlyClosed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 58,
+        "text": "Permanently closed"
+      },
+      "translations": {
+        "en": "Permanently closed",
+        "sr": "Trajno zatvoreno",
+        "ru": "Закрыто навсегда"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.weeklySchedule",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 71,
+        "text": "Regular weekly schedule"
+      },
+      "translations": {
+        "en": "Regular weekly schedule",
+        "sr": "Redovno nedeljno radno vreme",
+        "ru": "Обычное расписание на неделю"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.closed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 82,
+        "text": "Closed"
+      },
+      "translations": {
+        "en": "Closed",
+        "sr": "Zatvoreno",
+        "ru": "Закрыто"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.unavailable",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 84,
+        "text": "Not available"
+      },
+      "translations": {
+        "en": "Not available",
+        "sr": "Nije dostupno",
+        "ru": "Нет данных"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "hours.source",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/venues/venue-weekly-hours.tsx",
+        "line": 95,
+        "text": "Hours source"
+      },
+      "translations": {
+        "en": "Hours source",
+        "sr": "Izvor radnog vremena",
+        "ru": "Источник часов работы"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.mapTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/map/error.tsx",
+        "line": 19,
+        "text": "The event map could not load"
+      },
+      "translations": {
+        "en": "The event map could not load",
+        "sr": "Mapa događaja nije učitana",
+        "ru": "Не удалось загрузить карту событий"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.mapBody",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/map/error.tsx",
+        "line": 21,
+        "text": "Refresh to load the latest events and their locations."
+      },
+      "translations": {
+        "en": "Refresh to load the latest events and their locations.",
+        "sr": "Osveži da učitaš najnovije događaje i njihove lokacije.",
+        "ru": "Обновите страницу, чтобы загрузить последние события и их местоположение."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "common.tryAgain",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/map/error.tsx",
+        "line": 25,
+        "text": "Try again"
+      },
+      "translations": {
+        "en": "Try again",
+        "sr": "Pokušaj ponovo",
+        "ru": "Попробовать ещё раз"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "common.browseCalendar",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/map/error.tsx",
+        "line": 28,
+        "text": "Browse calendar"
+      },
+      "translations": {
+        "en": "Browse calendar",
+        "sr": "Pregledaj kalendar",
+        "ru": "Открыть календарь"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.discoverTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/discover/error.tsx",
+        "line": 20,
+        "text": "The feed needs a quick refresh"
+      },
+      "translations": {
+        "en": "The feed needs a quick refresh",
+        "sr": "Pregled treba osvežiti",
+        "ru": "Подборку нужно обновить"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.reloadDiscover",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/discover/error.tsx",
+        "line": 31,
+        "text": "Reload Discover"
+      },
+      "translations": {
+        "en": "Reload Discover",
+        "sr": "Ponovo učitaj Otkrij",
+        "ru": "Перезагрузить подборку"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.venuesTitle",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/error.tsx",
+        "line": 19,
+        "text": "Venues could not load"
+      },
+      "translations": {
+        "en": "Venues could not load",
+        "sr": "Mesta nisu učitana",
+        "ru": "Не удалось загрузить места"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "error.venuesBody",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "app/(main)/venues/error.tsx",
+        "line": 21,
+        "text": "Refresh to load the latest venue information."
+      },
+      "translations": {
+        "en": "Refresh to load the latest venue information.",
+        "sr": "Osveži da učitaš najnovije podatke o mestima.",
+        "ru": "Обновите страницу, чтобы загрузить последние сведения о местах."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.promptA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-prompt.tsx",
+        "line": 233,
+        "text": "Zatvori predlog za instalaciju"
+      },
+      "translations": {
+        "en": "Close installation suggestion",
+        "sr": "Zatvori predlog za instalaciju",
+        "ru": "Закрыть предложение об установке"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.description",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-prompt.tsx",
+        "line": 240,
+        "text": "App za događaje u Beogradu"
+      },
+      "translations": {
+        "en": "Your app for Belgrade events",
+        "sr": "Aplikacija za događaje u Beogradu",
+        "ru": "Приложение для событий в Белграде"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.notNow",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-prompt.tsx",
+        "line": 246,
+        "text": "Ne sada"
+      },
+      "translations": {
+        "en": "Not now",
+        "sr": "Ne sada",
+        "ru": "Не сейчас"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.backEvents",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-guide.tsx",
+        "line": 206,
+        "text": "Nazad na događaje"
+      },
+      "translations": {
+        "en": "Back to events",
+        "sr": "Nazad na događaje",
+        "ru": "Назад к событиям"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.chooseDevice",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-guide.tsx",
+        "line": 214,
+        "text": "Izaberi uređaj"
+      },
+      "translations": {
+        "en": "Choose your device",
+        "sr": "Izaberi uređaj",
+        "ru": "Выберите устройство"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.instructions",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-guide.tsx",
+        "line": 213,
+        "text": "Uputstvo za instalaciju"
+      },
+      "translations": {
+        "en": "Installation guide",
+        "sr": "Uputstvo za instalaciju",
+        "ru": "Инструкция по установке"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "install.confirmInBrowser",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/install/install-guide.tsx",
+        "line": 237,
+        "text": "Instalaciju potvrđuješ u pregledaču."
+      },
+      "translations": {
+        "en": "Confirm installation in your browser.",
+        "sr": "Instalaciju potvrđuješ u pregledaču.",
+        "ru": "Подтвердите установку в браузере."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.categoriesA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 186,
+        "text": "Kategorije događaja"
+      },
+      "translations": {
+        "en": "Event categories",
+        "sr": "Kategorije događaja",
+        "ru": "Категории событий"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.continue",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 190,
+        "text": "Nastavi pregledanje"
+      },
+      "translations": {
+        "en": "Continue browsing",
+        "sr": "Nastavi pregledanje",
+        "ru": "Продолжить просмотр"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.saving",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 191,
+        "text": "Čuvanje…"
+      },
+      "translations": {
+        "en": "Saving…",
+        "sr": "Čuvanje…",
+        "ru": "Сохранение…"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.someSaveFailed",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 191,
+        "text": "Neki događaji nisu sačuvani."
+      },
+      "translations": {
+        "en": "Some events were not saved.",
+        "sr": "Neki događaji nisu sačuvani.",
+        "ru": "Некоторые события не сохранены."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.selectionSaved",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 191,
+        "text": "Izbor je sačuvan."
+      },
+      "translations": {
+        "en": "Your selection is saved.",
+        "sr": "Izbor je sačuvan.",
+        "ru": "Ваш выбор сохранён."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.noneSelected",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 194,
+        "text": "Nijedan događaj nije izabran."
+      },
+      "translations": {
+        "en": "No events selected.",
+        "sr": "Nijedan događaj nije izabran.",
+        "ru": "Вы не выбрали ни одного события."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.swipeA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 198,
+        "text": "Prevuci karticu levo ili desno"
+      },
+      "translations": {
+        "en": "Swipe the card left or right",
+        "sr": "Prevuci karticu levo ili desno",
+        "ru": "Смахните карточку влево или вправо"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.skipA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 201,
+        "text": "Preskoči događaj"
+      },
+      "translations": {
+        "en": "Skip event",
+        "sr": "Preskoči događaj",
+        "ru": "Пропустить событие"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.likeA11y",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 201,
+        "text": "Sviđa mi se događaj"
+      },
+      "translations": {
+        "en": "Like event",
+        "sr": "Sviđa mi se događaj",
+        "ru": "Нравится событие"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.noCategoryEvents",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 199,
+        "text": "Nema događaja u ovoj kategoriji."
+      },
+      "translations": {
+        "en": "No events in this category.",
+        "sr": "Nema događaja u ovoj kategoriji.",
+        "ru": "В этой категории нет событий."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.chooseOther",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 199,
+        "text": "Izaberi drugu kategoriju ili datum."
+      },
+      "translations": {
+        "en": "Choose another category or date.",
+        "sr": "Izaberi drugu kategoriju ili datum.",
+        "ru": "Выберите другую категорию или дату."
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "discover.restart",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 204,
+        "text": "Ponovo biraj"
+      },
+      "translations": {
+        "en": "Start choosing again",
+        "sr": "Ponovo biraj",
+        "ru": "Выбрать заново"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "common.cancel",
+      "kind": "text",
+      "source": {
+        "status": "existing",
+        "path": "components/discover/mobile-discover.tsx",
+        "line": 204,
+        "text": "Odustani"
+      },
+      "translations": {
+        "en": "Cancel",
+        "sr": "Odustani",
+        "ru": "Отмена"
+      },
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "locale.choose",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Language",
+        "sr": "Jezik",
+        "ru": "Язык"
+      },
+      "note": "Language switcher label.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "locale.english",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "English",
+        "sr": "English",
+        "ru": "English"
+      },
+      "note": "Autonym; preserve in every language.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "locale.serbian",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Srpski",
+        "sr": "Srpski",
+        "ru": "Srpski"
+      },
+      "note": "Serbian Latin autonym; preserve in every language.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "locale.russian",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Русский",
+        "sr": "Русский",
+        "ru": "Русский"
+      },
+      "note": "Russian autonym; preserve in every language.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.translationLabel",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Translated description",
+        "sr": "Prevedeni opis",
+        "ru": "Переведённое описание"
+      },
+      "note": "Label for translated editorial description; source captions stay original.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.showOriginal",
+      "kind": "text",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Show original",
+        "sr": "Prikaži original",
+        "ru": "Показать оригинал"
+      },
+      "note": "Control for original editorial description alongside a translation.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "event.saveNamedA11y",
+      "kind": "interpolation",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Save {title}",
+        "sr": "Sačuvaj: {title}",
+        "ru": "Сохранить: {title}"
+      },
+      "note": "Replace concatenation in SaveEventButton; the title remains unchanged.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "venue.followNamedA11y",
+      "kind": "interpolation",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Follow {venue}",
+        "sr": "Prati: {venue}",
+        "ru": "Подписаться на {venue}"
+      },
+      "note": "Replace concatenation in FavoriteVenueButton; venue name remains unchanged.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "source.translatedFrom",
+      "kind": "interpolation",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "Translated from {language}",
+        "sr": "Prevedeno sa jezika: {language}",
+        "ru": "Переведено с языка: {language}"
+      },
+      "note": "Use localized language display name; do not claim human translation.",
+      "reviewStatus": "native_review_required"
+    },
+    {
+      "key": "events.count",
+      "kind": "plural_icu",
+      "source": {
+        "status": "proposed",
+        "path": null,
+        "line": null,
+        "text": null
+      },
+      "translations": {
+        "en": "{count, plural, one {# event} other {# events}}",
+        "sr": "{count, plural, one {# događaj} few {# događaja} other {# događaja}}",
+        "ru": "{count, plural, one {# событие} few {# события} many {# событий} other {# события}}"
+      },
+      "note": "ICU draft for count labels currently composed inline. Test 0,1,2,5,11,21,22,25 and decimals. Runtime ICU parser is not installed by this catalog.",
+      "reviewStatus": "native_review_required"
+    }
+  ]
+}

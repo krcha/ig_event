@@ -1,5 +1,10 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { LOCALE_LANGUAGE_TAGS, type Locale } from "@/i18n/config";
+import { localizedMetadata, SITE_COPY } from "@/lib/i18n/seo";
+
+import { PublicText, LocalizedElement } from "@/components/i18n/public-text";
 import type { Metadata } from "next";
-import Link from "next/link";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { cache } from "react";
 import {
   ArrowRight,
@@ -25,7 +30,6 @@ import {
   paginatePublicVenueDirectory,
 } from "@/lib/venues/public-venue-directory-pagination";
 import {
-  SITE_ORIGIN,
   buildVenueDirectoryStructuredData,
 } from "@/lib/seo/site";
 import { cn } from "@/lib/utils";
@@ -45,60 +49,16 @@ type VenuesPageProps = {
 };
 
 export async function generateMetadata({ searchParams }: VenuesPageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
-  const requestedPage = normalizePublicVenueDirectoryPage(
-    getSingleValue(resolvedSearchParams?.page),
-  );
-  const hasFilters = Boolean(
-    getSingleValue(resolvedSearchParams?.category)?.trim() ||
-      getSingleValue(resolvedSearchParams?.q)?.trim(),
-  );
+  const requestedPage = normalizePublicVenueDirectoryPage(getSingleValue(resolvedSearchParams?.page));
+  const hasFilters = Boolean(getSingleValue(resolvedSearchParams?.category)?.trim() || getSingleValue(resolvedSearchParams?.q)?.trim());
   const { venues } = await loadVenueDirectory();
-  const currentPage = hasFilters
-    ? 1
-    : paginatePublicVenueDirectory(venues, requestedPage).currentPage;
-  const canonicalPath = currentPage > 1
-    ? `/venues/directory?page=${currentPage}`
-    : "/venues/directory";
-  const title =
-    currentPage > 1
-      ? `Belgrade Venue Guide — Page ${currentPage}`
-      : "Belgrade Venues: Nightlife & Culture Guide";
-  const description =
-    "Explore Belgrade clubs, bars, concert spaces, galleries, theatres, and cultural venues with upcoming events, locations, and official Instagram links.";
-
-  return {
-    title,
-    description,
-    alternates: {
-      canonical: canonicalPath,
-    },
-    openGraph: {
-      title: `${title} | Event Zeka`,
-      description,
-      type: "website",
-      locale: "en_RS",
-
-      siteName: "Event Zeka",
-      url: new URL(canonicalPath, SITE_ORIGIN).toString(),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${title} | Event Zeka`,
-      description,
-    },
-    robots: {
-      index: !hasFilters,
-      follow: true,
-      googleBot: {
-        index: !hasFilters,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  const currentPage = hasFilters ? 1 : paginatePublicVenueDirectory(venues, requestedPage).currentPage;
+  const canonicalPath = currentPage > 1 ? `/venues/directory?page=${currentPage}` : "/venues/directory";
+  const copy = SITE_COPY[locale];
+  const title = currentPage > 1 ? `${copy.directoryTitle} — ${copy.page} ${currentPage}` : copy.directoryTitle;
+  return localizedMetadata({ locale, path: canonicalPath, title, description: copy.directoryDescription, index: !hasFilters });
 }
 
 function getSingleValue(value: string | string[] | undefined): string | undefined {
@@ -116,12 +76,12 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
-function formatCompactNumber(value: number | null | undefined): string {
+function formatCompactNumber(value: number | null | undefined, locale: Locale): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "Not captured";
   }
 
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(LOCALE_LANGUAGE_TAGS[locale], {
     compactDisplay: "short",
     maximumFractionDigits: value >= 1000 ? 1 : 0,
     notation: "compact",
@@ -167,9 +127,11 @@ function filterVenues(
 }
 
 function VenueDirectoryCard({
+  locale,
   authEnabled,
   venue,
 }: {
+  locale: Locale;
   authEnabled: boolean;
   venue: PublicVenueDirectoryItem;
 }) {
@@ -180,7 +142,7 @@ function VenueDirectoryCard({
     >
       <div className="flex items-start justify-between gap-3">
         <Link className="min-w-0" href={`/venues/${venue._id}`} prefetch={false}>
-          <p className="section-kicker">{venue.category || "Venue"}</p>
+          <p className="section-kicker"><PublicText text={venue.category || "Venue"} /></p>
           <h2 className="mt-1 line-clamp-2 text-lg font-semibold leading-6 text-foreground">
             {venue.name}
           </h2>
@@ -207,10 +169,10 @@ function VenueDirectoryCard({
 
       <div className="mt-4">
         <div className="rounded-[0.85rem] border border-border/70 bg-card/70 px-3 py-2">
-          <p className="section-kicker">Followers</p>
+          <p className="section-kicker"><PublicText text={"Followers"} /></p>
           <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Users className="h-4 w-4 text-primary" />
-            {formatCompactNumber(venue.instagramFollowerCount)}
+            {formatCompactNumber(venue.instagramFollowerCount, locale)}
           </p>
         </div>
       </div>
@@ -219,15 +181,14 @@ function VenueDirectoryCard({
         className="button-secondary mt-4 min-h-10 w-full gap-2 px-4 py-0"
         href={`/venues/${venue._id}`}
         prefetch={false}
-      >
-        Venue page
-        <ArrowRight className="h-4 w-4" />
+      ><PublicText text={"Venue page"} /><ArrowRight className="h-4 w-4" />
       </Link>
     </article>
   );
 }
 
 export default async function VenueDirectoryPage({ searchParams }: VenuesPageProps) {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
   const { error, venues } = await loadVenueDirectory();
   if (error) {
@@ -269,7 +230,7 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
   return (
     <main className="app-page gap-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
       <JsonLd
-        data={buildVenueDirectoryStructuredData(visibleVenues, currentPage, firstItemNumber)}
+        data={buildVenueDirectoryStructuredData(visibleVenues, currentPage, firstItemNumber, locale)}
       />
       <section className="hero-panel px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
         <div className="flex flex-col gap-3 sm:gap-5 lg:flex-row lg:items-end lg:justify-between">
@@ -277,26 +238,23 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
             <span className="hidden h-11 w-11 items-center justify-center rounded-[1rem] bg-primary text-primary-foreground sm:inline-flex">
               <Warehouse className="h-5 w-5" />
             </span>
-            <p className="section-kicker mt-4 hidden sm:block">Venues</p>
+            <p className="section-kicker mt-4 hidden sm:block"><PublicText text={"Venues"} /></p>
             <h1 className="whitespace-nowrap text-2xl font-semibold leading-tight text-foreground sm:mt-2 sm:whitespace-normal sm:text-5xl">
-              <span className="sm:hidden">Belgrade venues</span>
-              <span className="hidden sm:inline">Belgrade venue guide</span>
+              <span className="sm:hidden"><PublicText text={"Belgrade venues"} /></span>
+              <span className="hidden sm:inline"><PublicText text={"Belgrade venue guide"} /></span>
             </h1>
-            <p className="mt-3 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
-              Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and
-              visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima.
-            </p>
+            <p className="mt-3 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base"><PublicText text={"Clubs, bars, galleries, theatres, concert spaces, and late-night rooms for locals and visitors. Vodič kroz beogradske klubove i kulturne prostore sa aktuelnim događajima."} /></p>
           </div>
           <div className="grid w-full grid-cols-2 gap-2 lg:w-auto lg:min-w-80">
             <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-              <p className="section-kicker">Venues</p>
+              <p className="section-kicker"><PublicText text={"Venues"} /></p>
               <p className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
                 <Warehouse className="h-4 w-4 text-primary" />
                 {venues.length}
               </p>
             </div>
             <div className="rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3">
-              <p className="section-kicker">With IG data</p>
+              <p className="section-kicker"><PublicText text={"With IG data"} /></p>
               <p className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
                 <Users className="h-4 w-4 text-primary" />
                 {venues.filter((venue) => typeof venue.instagramFollowerCount === "number").length}
@@ -307,14 +265,12 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
       </section>
 
       <Link className="button-secondary w-fit gap-2" href="/map" prefetch={false}>
-        <ChevronLeft className="h-4 w-4" />
-        Event map
-      </Link>
+        <ChevronLeft className="h-4 w-4" /><PublicText text={"Event map"} /></Link>
 
-      <form className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto] lg:items-center" action="/venues/directory">
+      <LocalizedElement as="form" className="glass-panel grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_14rem_auto] lg:items-center" action="/venues/directory">
         <label className="relative min-w-0">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
+          <LocalizedElement as="input"
             className="min-h-11 w-full rounded-[0.9rem] border border-border/75 bg-background/80 py-0 pl-9 pr-3 text-sm text-foreground outline-none focus:border-primary/45"
             defaultValue={searchQuery}
             name="q"
@@ -327,46 +283,39 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
             defaultValue={selectedCategory ?? ""}
             name="category"
           >
-            <option value="">All categories</option>
+            <option value=""><PublicText text={"All categories"} /></option>
             {categories.map((category) => (
               <option key={category} value={category}>
-                {category}
+                <PublicText text={category} />
               </option>
             ))}
           </select>
         </label>
         <button className="button-primary min-h-11 gap-2 px-4 py-0" type="submit">
-          <SlidersHorizontal className="h-4 w-4" />
-          Filter
-        </button>
-      </form>
+          <SlidersHorizontal className="h-4 w-4" /><PublicText text={"Filter"} /></button>
+      </LocalizedElement>
 
       {activeFilterCount > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="app-chip bg-card/95">{filteredVenues.length} matches</span>
-          <Link className="app-chip bg-white/[0.04] hover:bg-white/[0.07]" href="/venues/directory">
-            Clear filters
-          </Link>
+          <span className="app-chip bg-card/95">{filteredVenues.length}<PublicText text={" matches"} /></span>
+          <Link className="app-chip bg-white/[0.04] hover:bg-white/[0.07]" href="/venues/directory"><PublicText text={"Clear filters"} /></Link>
         </div>
       ) : null}
 
       {filteredVenues.length > 0 ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-            <p aria-live="polite">
-              Showing {firstItemNumber}–{lastItemNumber} of {filteredVenues.length} venues
-            </p>
-            <p>
-              Page {currentPage} of {totalPages}
+            <p aria-live="polite"><PublicText text={"Showing "} />{firstItemNumber}–{lastItemNumber}<PublicText text={" of "} />{filteredVenues.length}<PublicText text={" venues"} /></p>
+            <p><PublicText text={"Page "} />{currentPage}<PublicText text={" of "} />{totalPages}
             </p>
           </div>
           <section className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visibleVenues.map((venue) => (
-              <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} venue={venue} />
+              <VenueDirectoryCard authEnabled={authEnabled} key={venue._id} locale={locale} venue={venue} />
             ))}
           </section>
           {totalPages > 1 ? (
-            <nav
+            <LocalizedElement as="nav"
               aria-label="Venue directory pages"
               className="flex items-center justify-between gap-3"
             >
@@ -377,9 +326,7 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
                   prefetch={false}
                   rel="prev"
                 >
-                  <ChevronLeft className="h-4 w-4" />
-                  Previous
-                </Link>
+                  <ChevronLeft className="h-4 w-4" /><PublicText text={"Previous"} /></Link>
               ) : (
                 <span />
               )}
@@ -389,24 +336,20 @@ export default async function VenueDirectoryPage({ searchParams }: VenuesPagePro
                   href={`/venues/directory${nextPageHref}`}
                   prefetch={false}
                   rel="next"
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4" />
+                ><PublicText text={"Next"} /><ChevronRight className="h-4 w-4" />
                 </Link>
               ) : null}
-            </nav>
+            </LocalizedElement>
           ) : null}
         </>
       ) : (
         <section className="rounded-[1rem] border border-dashed border-border/80 bg-white/[0.025] px-4 py-10 text-center">
           <Heart className="mx-auto h-7 w-7 text-primary" />
-          <h2 className="mt-4 text-lg font-semibold text-foreground">No venues found</h2>
+          <h2 className="mt-4 text-lg font-semibold text-foreground"><PublicText text={"No venues found"} /></h2>
           <Link
             className={cn("button-secondary mt-5", activeFilterCount === 0 && "hidden")}
             href="/venues/directory"
-          >
-            Clear filters
-          </Link>
+          ><PublicText text={"Clear filters"} /></Link>
         </section>
       )}
     </main>

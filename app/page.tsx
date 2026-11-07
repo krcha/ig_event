@@ -1,8 +1,9 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { localizedMetadata, SITE_COPY } from "@/lib/i18n/seo";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import EventsBrowsePage from "./(main)/events-browse-page";
 import EventsLoading from "@/components/calendar/events-browse-loading";
-import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
 
 // The calendar is backed by external Convex reads. A persisted Next.js route
 // cache can outlive ingestion updates and keep serving old event counts, so keep
@@ -15,44 +16,11 @@ type RootPageProps = {
 };
 
 export async function generateMetadata({ searchParams }: RootPageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
-  const hasSearchParams = Object.values(resolvedSearchParams ?? {}).some((value) =>
-    Array.isArray(value) ? value.length > 0 : Boolean(value),
-  );
-  const title = "Dešavanja u Beogradu: žurke i koncerti";
-
-  return {
-    title: `${title} | Event Zeka`,
-    description: SITE_DESCRIPTION,
-    alternates: {
-      canonical: "/",
-    },
-    openGraph: {
-      title: `${title} | Event Zeka`,
-      description: SITE_DESCRIPTION,
-      type: "website",
-      locale: "en_RS",
-
-      siteName: "Event Zeka",
-      url: SITE_ORIGIN,
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${title} | Event Zeka`,
-      description: SITE_DESCRIPTION,
-    },
-    robots: {
-      index: !hasSearchParams,
-      follow: true,
-      googleBot: {
-        index: !hasSearchParams,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  const hasSearchParams = Object.values(resolvedSearchParams ?? {}).some(value => Array.isArray(value) ? value.length > 0 : Boolean(value));
+  const copy = SITE_COPY[locale];
+  return localizedMetadata({ locale, path: "/", title: copy.homeTitle, description: copy.description, index: !hasSearchParams });
 }
 
 export default async function HomePage({ searchParams }: RootPageProps) {

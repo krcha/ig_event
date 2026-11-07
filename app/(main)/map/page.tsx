@@ -1,3 +1,5 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { localizedMetadata, SITE_COPY } from "@/lib/i18n/seo";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { EventCalendarMap } from "@/components/maps/event-calendar-map";
@@ -16,7 +18,6 @@ import {
 } from "@/lib/events/nightlife-date";
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
 import { loadPublicCalendarOverviewWindow } from "@/lib/events/public-calendar-overview";
-import { SITE_ORIGIN } from "@/lib/seo/site";
 import reviewedLocations from "@/data/venue-coordinates-2026-10-15.json";
 
 export const dynamic = "force-dynamic";
@@ -31,41 +32,10 @@ type EventMapPageProps = {
 };
 
 export async function generateMetadata({ searchParams }: EventMapPageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
   const hasDateFilter = Boolean(resolvedSearchParams?.date || resolvedSearchParams?.open);
-  const title = "Belgrade Event Map: Explore Events by Day";
-  const description =
-    "Choose a day and see where Belgrade concerts, club nights, DJ sets, and cultural events are happening. Explore event venues on the map.";
-
-  return {
-    title,
-    description,
-    alternates: { canonical: "/map" },
-    openGraph: {
-      title: `${title} | Event Zeka`,
-      description,
-      type: "website",
-      locale: "en_RS",
-      siteName: "Event Zeka",
-      url: new URL("/map", SITE_ORIGIN).toString(),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${title} | Event Zeka`,
-      description,
-    },
-    robots: {
-      index: !hasDateFilter,
-      follow: true,
-      googleBot: {
-        index: !hasDateFilter,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  return localizedMetadata({ locale, path: "/map", title: SITE_COPY[locale].mapTitle, description: SITE_COPY[locale].mapDescription, index: !hasDateFilter });
 }
 
 export default async function EventMapPage({ searchParams }: EventMapPageProps) {

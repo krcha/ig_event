@@ -1,6 +1,9 @@
 "use client";
+import { LocalizedElement } from "@/components/i18n/public-text";
 
-import { usePathname, useRouter } from "next/navigation";
+
+import { usePathname } from "next/navigation";
+import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { buildCalendarFilterUrl } from "@/lib/events/calendar-filter-url";
 import {
   type FormEvent,
@@ -73,7 +76,7 @@ export function AutoApplyFilterForm({
   }
 
   return (
-    <form
+    <LocalizedElement as="form"
       {...props}
       data-calendar-auto-apply-filter-form="true"
       method="get"
@@ -81,6 +84,6 @@ export function AutoApplyFilterForm({
       onSubmit={handleSubmit}
     >
       {children}
-    </form>
+    </LocalizedElement>
   );
 }

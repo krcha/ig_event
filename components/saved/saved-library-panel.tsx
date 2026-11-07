@@ -1,7 +1,9 @@
 "use client";
+import { PublicText } from "@/components/i18n/public-text";
+
 
 import { Bookmark, CalendarDays, ChevronRight, Heart, Loader2, Sparkles } from "lucide-react";
-import Link from "next/link";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { useMemo, useState } from "react";
 import { EventMetaRow } from "@/components/events/event-meta";
 import { EventSessionLabel } from "@/components/events/event-session-label";
@@ -332,27 +334,19 @@ export function SignInPromptCard({ authEnabled = true, returnPath = "/saved" }: 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(15rem,0.36fr)] lg:items-center">
         <div className="space-y-3">
           <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
-            <Bookmark className="h-3.5 w-3.5" />
-            Saved
-          </span>
+            <Bookmark className="h-3.5 w-3.5" /><PublicText text={"Saved"} /></span>
           <div className="space-y-2">
             <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:whitespace-normal sm:text-4xl">
-              <span className="sm:hidden">Save your plans</span>
-              <span className="hidden sm:inline">Sign in to keep your plans.</span>
+              <span className="sm:hidden"><PublicText text={"Save your plans"} /></span>
+              <span className="hidden sm:inline"><PublicText text={"Sign in to keep your plans."} /></span>
             </h1>
-            <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base">
-              Sign in to sync saved events and favourite places across your devices.
-            </p>
+            <p className="hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block sm:text-base"><PublicText text={"Sign in to sync saved events and favourite places across your devices."} /></p>
           </div>
         </div>
         <div className="rounded-[1.25rem] border border-border/75 bg-white/[0.03] p-3 sm:p-4">
           <div className="grid gap-2">
-            {authEnabled ? <><Link className="button-primary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-in?redirect_url=%2Fsaved" : `/sign-in?redirect_url=${encodeURIComponent(returnPath)}`}>
-              Sign in
-            </Link>
-            <Link className="button-secondary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-up?redirect_url=%2Fsaved" : `/sign-up?redirect_url=${encodeURIComponent(returnPath)}`}>
-              Sign up
-            </Link></> : <p className="text-sm leading-6 text-muted-foreground">Sign in is currently unavailable. You can keep browsing events.</p>}
+            {authEnabled ? <><Link className="button-primary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-in?redirect_url=%2Fsaved" : `/sign-in?redirect_url=${encodeURIComponent(returnPath)}`}><PublicText text={"Sign in"} /></Link>
+            <Link className="button-secondary min-h-11 w-full px-4 py-0" href={returnPath === "/saved" ? "/sign-up?redirect_url=%2Fsaved" : `/sign-up?redirect_url=${encodeURIComponent(returnPath)}`}><PublicText text={"Sign up"} /></Link></> : <p className="text-sm leading-6 text-muted-foreground"><PublicText text={"Sign in is currently unavailable. You can keep browsing events."} /></p>}
           </div>
         </div>
       </div>
@@ -364,7 +358,7 @@ function LoadingCard() {
   return (
     <section className="hero-panel px-4 py-8 text-center sm:px-6">
       <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" />
-      <p className="mt-3 text-sm font-medium text-muted-foreground">Loading saved items...</p>
+      <p className="mt-3 text-sm font-medium text-muted-foreground"><PublicText text={"Loading saved items..."} /></p>
     </section>
   );
 }
@@ -587,33 +581,28 @@ export function SavedLibraryPanel({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <span className="app-chip hidden border-primary/25 bg-primary/[0.1] text-primary sm:inline-flex">
-              <Bookmark className="h-3.5 w-3.5" />
-              Saved
-            </span>
+              <Bookmark className="h-3.5 w-3.5" /><PublicText text={"Saved"} /></span>
             <h1 className="whitespace-nowrap text-2xl font-semibold tracking-[-0.045em] sm:mt-3 sm:whitespace-normal sm:text-4xl">
-              <span className="sm:hidden">Saved</span>
-              <span className="hidden sm:inline">Your kept events and places</span>
+              <span className="sm:hidden"><PublicText text={"Saved"} /></span>
+              <span className="hidden sm:inline"><PublicText text={"Your kept events and places"} /></span>
             </h1>
-            <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block">
-              Compact list of the events you bookmarked and venues you followed.
-            </p>
+            <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-muted-foreground sm:block"><PublicText text={"Compact list of the events you bookmarked and venues you followed."} /></p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-center sm:min-w-56">
             <div className="rounded-[1rem] border border-border/75 bg-white/[0.03] px-3 py-2">
-              <p className="section-kicker">Events</p>
+              <p className="section-kicker"><PublicText text={"Events"} /></p>
               <p className="mt-1 text-xl font-semibold text-foreground">{upcomingSavedEvents.length}</p>
             </div>
             <div className="rounded-[1rem] border border-border/75 bg-white/[0.03] px-3 py-2">
-              <p className="section-kicker">Places</p>
+              <p className="section-kicker"><PublicText text={"Places"} /></p>
               <p className="mt-1 text-xl font-semibold text-foreground">{favoriteVenueItems.length}</p>
             </div>
           </div>
         </div>
       </header>
 
-      {!isSignedIn ? <p className="text-sm leading-6 text-muted-foreground" data-guest-saved-notice="true">
-        Saved on this device. {authEnabled ? <Link className="text-primary underline underline-offset-4" href={`/sign-in?redirect_url=${encodeURIComponent(returnPath ?? "/saved")}`}>Sign in to sync your saved events.</Link> : null}
-      </p> : isSyncing ? <p className="text-sm text-muted-foreground" role="status">Syncing device saves...</p> : null}
+      {!isSignedIn ? <p className="text-sm leading-6 text-muted-foreground" data-guest-saved-notice="true"><PublicText text={"Saved on this device. "} />{authEnabled ? <Link className="text-primary underline underline-offset-4" href={`/sign-in?redirect_url=${encodeURIComponent(returnPath ?? "/saved")}`}><PublicText text={"Sign in to sync your saved events."} /></Link> : null}
+      </p> : isSyncing ? <p className="text-sm text-muted-foreground" role="status"><PublicText text={"Syncing device saves..."} /></p> : null}
 
       <div className="rounded-[1.25rem] border border-border/75 bg-card/90 p-1.5">
         <div className="grid grid-cols-2 gap-1.5">
@@ -635,7 +624,7 @@ export function SavedLibraryPanel({
                 type="button"
               >
                 <Icon className={cn("h-4 w-4", active && "fill-current")} />
-                {label}
+                <PublicText text={label} />
                 <span
                   className={cn(
                     "rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
@@ -652,7 +641,7 @@ export function SavedLibraryPanel({
 
       {error ? (
         <div className="rounded-[1rem] border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
-          {error} <button className="underline underline-offset-4" onClick={() => void refreshLibrary()} type="button">Try again</button>
+          <PublicText text={error} /> <button className="underline underline-offset-4" onClick={() => void refreshLibrary()} type="button"><PublicText text={"Try again"} /></button>
         </div>
       ) : null}
 
@@ -675,7 +664,7 @@ export function SavedLibraryPanel({
                     )}
                   >
                     <CalendarDays className="h-4 w-4" />
-                    {group.label}
+                    <PublicText text={group.label} />
                   </h2>
                   <span className="app-chip bg-card/80">{group.events.length}</span>
                 </div>

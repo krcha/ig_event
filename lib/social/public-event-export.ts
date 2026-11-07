@@ -1,4 +1,5 @@
 import { isPlausibleConvexPublicId } from "../convex/public-id.ts";
+import { isLocale, LOCALE_LANGUAGE_TAGS, type Locale } from "../../i18n/config.ts";
 import type { PublicEventImageSource } from "../images/public-event-raster.ts";
 import {
   EVENT_EXPORT_DESIGN_VERSION,
@@ -13,7 +14,7 @@ type ExportDependencies = {
   loadImageSource: (id: string) => Promise<PublicEventImageSource>;
   fetchRaster: (source: RasterSource) => Promise<{ bytes: Buffer }>;
   cachedJpeg: (key: unknown, render: () => Promise<Buffer>) => Promise<Buffer>;
-  render: (event: ExportablePublicEvent, poster?: Buffer) => Promise<Buffer>;
+  render: (event: ExportablePublicEvent, poster?: Buffer, locale?: Locale) => Promise<Buffer>;
   runWork: <T>(work: () => Promise<T>) => Promise<T>;
 };
 
@@ -46,12 +47,15 @@ export function eventExportError(message: string, status: number): Response {
 export function createPublicEventExportHandler(dependencies: ExportDependencies) {
   return async (request: Request, eventId: string): Promise<Response> => {
     if (!isPlausibleConvexPublicId(eventId)) return eventExportError("Invalid event ID.", 400);
+    const requestedLocales = new URL(request.url).searchParams.getAll("locale");
+    const locale = requestedLocales[0] ?? "en";
+    if (requestedLocales.length > 1 || !isLocale(locale)) return eventExportError("Unsupported image language.", 400);
     try {
       const event = await dependencies.loadEvent(eventId);
       if (!event || event._id !== eventId || event.status !== "approved") {
         return eventExportError("This event is no longer public.", 404);
       }
-      const facts = getEventExportFacts(event);
+      const facts = getEventExportFacts(event, locale);
       const source = await dependencies.loadImageSource(eventId);
       // Publication can change between reads; neither a cached image nor a
       // source URL may bypass the second current public-event check.
@@ -65,19 +69,21 @@ export function createPublicEventExportHandler(dependencies: ExportDependencies)
         const image = await dependencies.cachedJpeg({
           kind: "public-event-export",
           design: EVENT_EXPORT_DESIGN_VERSION,
+          locale,
           format: "jpeg-1080x1920",
           eventId,
           revision: event.updatedAt ?? null,
           facts,
           source: source.kind === "none" ? "none" : source,
           sourceChecksum: eventExportSourceChecksum(poster),
-        }, () => dependencies.render(event, poster));
+        }, () => dependencies.render(event, poster, locale));
         const attachment = new URL(request.url).searchParams.get("download") === "1";
         return new Response(request.method === "HEAD" ? null : new Uint8Array(image), {
           headers: {
             // Always recheck publication on a new GET. Disk cache saves render CPU.
             "cache-control": "no-store",
             "content-type": "image/jpeg",
+            "content-language": LOCALE_LANGUAGE_TAGS[locale],
             "content-length": String(image.length),
             "content-disposition": `${attachment ? "attachment" : "inline"}; filename="eventzeka-${event.date}-${eventId}.jpg"`,
             "x-content-type-options": "nosniff",

@@ -1,6 +1,10 @@
 "use client";
+import { PublicText, LocalizedElement, PublicDate } from "@/components/i18n/public-text";
+import { useLocale } from "@/i18n/client";
+import { eventNoun } from "@/lib/i18n/display";
 
-import Link from "next/link";
+
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
 import {
@@ -95,29 +99,6 @@ function getResolvedTime(event: DiscoverFeedEvent): {
   };
 }
 
-function formatEventDate(value: string): string {
-  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!parts) {
-    return value;
-  }
-
-  const date = new Date(
-    Date.UTC(
-      Number.parseInt(parts[1], 10),
-      Number.parseInt(parts[2], 10) - 1,
-      Number.parseInt(parts[3], 10),
-      12,
-    ),
-  );
-
-  return new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "Europe/Belgrade",
-    weekday: "short",
-  }).format(date);
-}
-
 function getInstagramHandleLabel(event: DiscoverFeedEvent): string {
   const handle = event.instagramHandle?.replace(/^@/, "").trim();
   if (handle) {
@@ -157,21 +138,21 @@ function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   return (
     <article className={styles.post} data-discover-post="true" aria-label={event.title}>
       <Link aria-label={`Open details for ${event.title}`} className={styles.posterLink} href={`/events/${event._id}`} prefetch={false}>
-        {imageUrl && !imageFailed ? <ResponsiveEventImage alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} version={getDiscoverImageVersion(event)} /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span>{imageFailed ? "Poster unavailable." : "Image pending for this post."}</span></span>}
+        {imageUrl && !imageFailed ? <ResponsiveEventImage alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} version={getDiscoverImageVersion(event)} /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span><PublicText text={imageFailed ? "Poster unavailable." : "Image pending for this post."} /></span></span>}
         <div className={styles.overlay} data-discover-hover-details="true">
           <div className={styles.eventInfo}>
-            <span className={styles.eventTime}>{formatEventDate(event.date)} · {time.label}</span>
+            <span className={styles.eventTime}><PublicDate value={event.date} options={{ day: "numeric", month: "short", weekday: "short" }} /> · <PublicText text={time.label} /></span>
             <h2>{event.title}</h2>
             {sessionLabel ? <p className={styles.sessionLabel}>{sessionLabel}</p> : null}
             <p className={styles.eventVenue}>{event.venue}</p>
             <EventMetaChips event={event} />
-            {instagramCaption ? <p className={styles.caption} data-discover-caption-source="instagram">{instagramCaption}</p> : <p className={styles.caption} data-discover-caption-source="missing">{handleLabel} · caption unavailable from Instagram</p>}
-            <span className={styles.openDetails}>Event details <ExternalLink aria-hidden="true" size={14} /></span>
+            {instagramCaption ? <p className={styles.caption} data-discover-caption-source="instagram" lang="und">{instagramCaption}</p> : <p className={styles.caption} data-discover-caption-source="missing">{handleLabel}<PublicText text={" · caption unavailable from Instagram"} /></p>}
+            <span className={styles.openDetails}><PublicText text={"Event details "} /><ExternalLink aria-hidden="true" size={14} /></span>
           </div>
         </div>
       </Link>
       <div className={styles.saveAction} data-discover-save-action="true"><SaveEventButton eventId={event._id} event={event} eventTitle={event.title} variant="icon" /></div>
-      {event.instagramPostUrl ? <a aria-label={`Open ${event.title} on Instagram`} className={styles.sourceAction} href={event.instagramPostUrl} rel="noreferrer" target="_blank"><Instagram aria-hidden="true" size={16} /></a> : null}
+      {event.instagramPostUrl ? <LocalizedElement as="a" aria-label={`Open ${event.title} on Instagram`} className={styles.sourceAction} href={event.instagramPostUrl} rel="noreferrer" target="_blank"><Instagram aria-hidden="true" size={16} /></LocalizedElement> : null}
     </article>
   );
 }
@@ -183,7 +164,7 @@ function EmptyDiscoverState({ error }: { error?: string }) {
         <Sparkles className="h-6 w-6" />
       </div>
       <h2 className="mt-4 text-lg font-semibold text-foreground">
-        {error ? "Events could not load" : "No events for this date"}
+        <PublicText text={error ? "Events could not load" : "No events for this date"} />
       </h2>
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
         {error ?? "Try another date or browse the calendar."}
@@ -214,6 +195,7 @@ function DesktopDiscoverFeed({
   selectedDate,
   subline,
 }: DiscoverFeedProps) {
+  const locale = useLocale();
   const [visibleEvents, setVisibleEvents] = useState(events);
   const [nextCursor, setNextCursor] = useState<string | null>(events.at(-1)?._id ?? null);
   const [hasMore, setHasMore] = useState(Boolean(pagination.nextHref && events.length > 0));
@@ -298,15 +280,15 @@ function DesktopDiscoverFeed({
           <div className={styles.profile}>
             <div className={styles.avatar}><EventZekaMark /></div>
             <div className={styles.profileCopy}>
-              <div className={styles.profileTitle}><h1>Discover Belgrade</h1><span className={styles.count}><strong>{pagination.totalEvents}</strong> events</span></div>
+              <div className={styles.profileTitle}><h1><PublicText text={"Discover Belgrade"} /></h1><span className={styles.count}><strong>{pagination.totalEvents}</strong>{" "}{eventNoun(locale, pagination.totalEvents)}</span></div>
               <p className={styles.subline}>{subline}</p>
               <p className={styles.intro}>{introduction}</p>
             </div>
             <Link aria-label="Search events" className={styles.search} href="/"><Search aria-hidden="true" size={18} /></Link>
           </div>
-          <nav aria-label="Discover dates" className={styles.dates}>
-            {dateTabs.map(tab => <a aria-current={tab.active ? "date" : undefined} className={styles.date} href={tab.href} key={tab.href}><strong>{tab.label}</strong><span>{tab.sublabel}</span></a>)}
-          </nav>
+          <LocalizedElement as="nav" aria-label="Discover dates" className={styles.dates}>
+            {dateTabs.map(tab => <LocalizedElement as="a" aria-current={tab.active ? "date" : undefined} className={styles.date} href={tab.href} key={tab.href}><strong><PublicText text={tab.label} /></strong><span><PublicText text={tab.sublabel} /></span></LocalizedElement>)}
+          </LocalizedElement>
         </header>
 
         <section
@@ -324,30 +306,26 @@ function DesktopDiscoverFeed({
             ref={sentinelRef}
           >
             {loading ? (
-              <p aria-live="polite" className="text-xs text-muted-foreground">Loading more posts…</p>
+              <p aria-live="polite" className="text-xs text-muted-foreground"><PublicText text={"Loading more posts…"} /></p>
             ) : loadError ? (
               <div className="flex flex-col items-center gap-2 text-center">
-                <p aria-live="polite" className="text-xs text-muted-foreground">{loadError.message}</p>
+                <p aria-live="polite" className="text-xs text-muted-foreground"><PublicText text={loadError.message} /></p>
                 {loadError.reload ? (
-                  <a className="button-secondary min-h-10 px-4 py-0" href={reloadHref}>Reload this day</a>
+                  <LocalizedElement as="a" className="button-secondary min-h-10 px-4 py-0" href={reloadHref}><PublicText text={"Reload this day"} /></LocalizedElement>
                 ) : (
                   <>
-                    <button className="button-secondary min-h-10 px-4 py-0" onClick={() => void loadMore()} type="button">
-                      Retry
-                    </button>
-                    <a className="text-xs text-primary underline" href={fallbackHref}>Open next page</a>
+                    <button className="button-secondary min-h-10 px-4 py-0" onClick={() => void loadMore()} type="button"><PublicText text={"Retry"} /></button>
+                    <LocalizedElement as="a" className="text-xs text-primary underline" href={fallbackHref}><PublicText text={"Open next page"} /></LocalizedElement>
                   </>
                 )}
               </div>
             ) : (
-              <a className="button-secondary min-h-10 px-4 py-0" href={fallbackHref}>
-                More picks
-              </a>
+              <LocalizedElement as="a" className="button-secondary min-h-10 px-4 py-0" href={fallbackHref}><PublicText text={"More picks"} /></LocalizedElement>
             )}
           </div>
         ) : null}
         {pagination.previousHref ? (
-          <a className="sr-only focus:not-sr-only" href={pagination.previousHref}>Previous page</a>
+          <LocalizedElement as="a" className="sr-only focus:not-sr-only" href={pagination.previousHref}><PublicText text={"Previous page"} /></LocalizedElement>
         ) : null}
         {!hasEvents || error ? <EmptyDiscoverState error={error} /> : null}
       </div>

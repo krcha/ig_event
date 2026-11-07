@@ -1,6 +1,12 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { LOCALE_LANGUAGE_TAGS, type Locale } from "@/i18n/config";
+import { formatPublicDate } from "@/lib/i18n/display";
+import { localizedMetadata, SITE_COPY } from "@/lib/i18n/seo";
+
+import { PublicText, LocalizedElement } from "@/components/i18n/public-text";
 import type { Metadata } from "next";
 import { cache } from "react";
-import Link from "next/link";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { notFound } from "next/navigation";
 import {
   ArrowLeft,
@@ -29,7 +35,6 @@ import { getPublicEventVenueFilterValue } from "@/lib/events/public-event-venue-
 import { getVenueCoordinates } from "@/lib/venues/coordinates";
 
 import {
-  absoluteUrl,
   buildBreadcrumbStructuredData,
   buildVenueStructuredData,
   clipText,
@@ -54,28 +59,28 @@ type VenueEventPost = PublicVenueEvent & {
   sortDate: string;
 };
 
-function formatCompactNumber(value: number | null | undefined): string {
+function formatCompactNumber(value: number | null | undefined, locale: Locale): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "Not captured";
   }
 
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(LOCALE_LANGUAGE_TAGS[locale], {
     compactDisplay: "short",
     maximumFractionDigits: value >= 1000 ? 1 : 0,
     notation: "compact",
   }).format(value);
 }
 
-function formatPostEventDate(value: string): string {
+function formatPostEventDate(value: string, locale: Locale): string {
   const parsed = new Date(`${value}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  return formatPublicDate(locale, value, {
     month: "short",
     day: "numeric",
-  }).format(parsed);
+  });
 }
 
 function formatVenueCategory(value: string | null | undefined): string {
@@ -187,10 +192,10 @@ function ProfileStat({
   return (
     <div className="min-w-0 text-center">
       <p className="truncate text-lg font-semibold leading-6 text-foreground sm:text-2xl">
-        {value}
+        <PublicText text={value} />
       </p>
       <p className="mt-0.5 truncate text-[11px] font-medium leading-4 text-muted-foreground">
-        {label}
+        <PublicText text={label} />
       </p>
     </div>
   );
@@ -211,32 +216,31 @@ function VenueAvatar({
 function VenueBio({ venue }: { venue: PublicVenue }) {
   return (
     <div className="space-y-1.5 text-sm leading-6 text-muted-foreground">
-      <p className="font-medium text-foreground">{formatVenueCategory(venue.category)}</p>
+      <p className="font-medium text-foreground"><PublicText text={formatVenueCategory(venue.category)} /></p>
       <p className="flex items-center gap-1.5">
         <MapPin className="h-3.5 w-3.5 flex-none text-primary" />
         <span>{getLocationLabel(venue)}</span>
       </p>
-      <a
+      <LocalizedElement as="a"
         className="inline-flex items-center gap-1.5 font-semibold text-primary hover:text-primary/80"
         href={getDirectionsHref(venue)}
         rel="noreferrer"
         target="_blank"
       >
-        <MapPin className="h-3.5 w-3.5" />
-        Open directions
-      </a>
+        <MapPin className="h-3.5 w-3.5" /><PublicText text={"Open directions"} /></LocalizedElement>
     </div>
   );
 }
 
 function getProfileStats(options: {
+  locale: Locale;
   appFollowerCount: number;
   instagramFollowerCount?: number | null;
 }): Array<{ label: string; value: string }> {
   const stats: Array<{ label: string; value: string }> = [];
 
   if (options.appFollowerCount > 0) {
-    stats.push({ label: "saved by", value: formatCompactNumber(options.appFollowerCount) });
+    stats.push({ label: "saved by", value: formatCompactNumber(options.appFollowerCount, options.locale) });
   }
 
   if (
@@ -245,7 +249,7 @@ function getProfileStats(options: {
   ) {
     stats.push({
       label: "IG followers",
-      value: formatCompactNumber(options.instagramFollowerCount),
+      value: formatCompactNumber(options.instagramFollowerCount, options.locale),
     });
   }
 
@@ -271,15 +275,13 @@ function ProfileActions({
           variant="full"
         />
       ) : null}
-      <a
+      <LocalizedElement as="a"
         className="button-secondary min-h-9 gap-2 px-4 py-0"
         href={instagramHref}
         rel="noreferrer"
         target="_blank"
       >
-        <Instagram className="h-4 w-4" />
-        Instagram
-      </a>
+        <Instagram className="h-4 w-4" /><PublicText text={"Instagram"} /></LocalizedElement>
     </div>
   );
 }
@@ -290,9 +292,11 @@ function getEventPostImageSrc(event: VenueEventPost): string | null {
 
 function EventPostTile({
   event,
+  locale,
   priority = false,
 }: {
   event: VenueEventPost;
+  locale: Locale;
   priority?: boolean;
 }) {
   const eventTime = event.displayTimeLabel ?? getDisplayEventTime(event.time);
@@ -300,14 +304,14 @@ function EventPostTile({
 
   return (
     <Link
-      aria-label={`${event.title} at ${formatPostEventDate(event.date)}`}
+      aria-label={`${event.title} · ${formatPostEventDate(event.date, locale)}`}
       className="group relative aspect-square min-w-0 overflow-hidden bg-card"
       href={`/events/${event._id}`}
       prefetch={false}
     >
       {imageSrc ? (
         <PublicImage
-          alt={`${event.title} at ${event.venue} — ${formatPostEventDate(event.date)}`}
+          alt={`${event.title} · ${event.venue} — ${formatPostEventDate(event.date, locale)}`}
           className="object-cover transition duration-300 group-hover:scale-105"
           priority={priority}
           sizes="(max-width: 640px) 33vw, (max-width: 1024px) 30vw, 256px"
@@ -323,7 +327,7 @@ function EventPostTile({
           <span className="flex max-w-full items-center gap-1 truncate text-[9px] font-medium leading-3 text-muted-foreground sm:text-[11px]">
             <CalendarDays className="h-3 w-3 flex-none" />
             <span className="truncate">
-              {formatPostEventDate(event.date)}
+              {formatPostEventDate(event.date, locale)}
               {eventTime ? ` - ${eventTime}` : ""}
             </span>
           </span>
@@ -334,71 +338,24 @@ function EventPostTile({
 }
 
 export async function generateMetadata({ params }: VenuePageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const { venueId } = await params;
-  if (!isPlausibleConvexPublicId(venueId)) {
-    notFound();
-  }
-
+  if (!isPlausibleConvexPublicId(venueId)) notFound();
   const { error, historyEvents, upcomingEvents, venue } = await loadVenuePage(venueId);
-
-  if (error) {
-    throw new Error(`Failed to load public venue metadata: ${error}`);
-  }
-  if (!venue) {
-    notFound();
-  }
-
-  const canonicalPath = `/venues/${venue._id}`;
+  if (error) throw new Error(`Failed to load public venue metadata: ${error}`);
+  if (!venue) notFound();
   const location = getLocationLabel(venue);
-  const description = clipText(
-    upcomingEvents.length > 0
-      ? `Upcoming events at ${venue.name} in ${location}, with venue details and the official Instagram profile.`
-      : `${venue.name} in ${location}: venue details, the official Instagram profile, and past event posts.`,
-    160,
-  );
-  const imageEvent = [...upcomingEvents, ...historyEvents].find((event) =>
-    hasDiscoverImageSource(event),
-  );
-  const image = imageEvent ? buildDiscoverImageUrl(imageEvent) : null;
-  const socialTitle = `${venue.name} — Belgrade venue events`;
-
-  return {
-    title: clipText(`${venue.name} — Belgrade venue events`, 62),
-    description,
-    alternates: {
-      canonical: canonicalPath,
-    },
-    openGraph: {
-      title: socialTitle,
-      description,
-      ...(image ? { images: [{ url: absoluteUrl(image), alt: `${venue.name} in Belgrade` }] } : {}),
-      type: "website",
-      locale: "en_RS",
-
-      siteName: "Event Zeka",
-      url: absoluteUrl(canonicalPath),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: socialTitle,
-      description,
-      ...(image ? { images: [absoluteUrl(image)] } : {}),
-    },
-    robots: {
-      index: true,
-      follow: true,
-      googleBot: {
-        index: true,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  const description = {
+    sr: `${venue.name} — ${location}. Događaji, informacije o mestu i zvanični Instagram profil.`,
+    en: `${venue.name} in ${location}: events, venue information and the official Instagram profile.`,
+    ru: `${venue.name} — ${location}. События, информация о месте и официальный профиль Instagram.`,
+  }[locale];
+  const imageEvent = [...upcomingEvents, ...historyEvents].find(event => hasDiscoverImageSource(event));
+  return localizedMetadata({ locale, path: `/venues/${venue._id}`, title: `${venue.name} — ${SITE_COPY[locale].venueTitle}`, description: clipText(description, 180), image: imageEvent ? buildDiscoverImageUrl(imageEvent) : null });
 }
 
 export default async function VenuePage({ params }: VenuePageProps) {
+  const locale = await getMetadataLocale();
   const { venueId } = await params;
   if (!isPlausibleConvexPublicId(venueId)) {
     notFound();
@@ -424,6 +381,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
     : null;
   const profileStats = venue
     ? getProfileStats({
+        locale,
         appFollowerCount: stats?.appFollowerCount ?? 0,
         instagramFollowerCount: venue.instagramFollowerCount,
       })
@@ -433,31 +391,29 @@ export default async function VenuePage({ params }: VenuePageProps) {
     <main className="app-page pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-9">
       {venue ? (
         <>
-          <JsonLd data={buildVenueStructuredData(venue)} />
+          <JsonLd data={buildVenueStructuredData(venue, locale)} />
           <JsonLd
             data={buildBreadcrumbStructuredData([
               { name: "Belgrade events", path: "/" },
               { name: "Belgrade venues", path: "/venues/directory" },
               { name: venue.name, path: `/venues/${venue._id}` },
-            ])}
+            ], locale)}
           />
         </>
       ) : null}
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
         {venue ? (
-          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <Link className="hover:text-primary" href="/">Belgrade events</Link>
+          <LocalizedElement as="nav" aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Link className="hover:text-primary" href="/"><PublicText text={"Belgrade events"} /></Link>
             <span aria-hidden="true">/</span>
-            <Link className="hover:text-primary" href="/venues/directory">Venues</Link>
+            <Link className="hover:text-primary" href="/venues/directory"><PublicText text={"Venues"} /></Link>
             <span aria-hidden="true">/</span>
             <span aria-current="page" className="min-w-0 truncate text-foreground">{venue.name}</span>
-          </nav>
+          </LocalizedElement>
         ) : null}
         <div className="flex items-center justify-between gap-3">
           <Link className="button-secondary min-h-10 gap-2 px-4 py-0" href={calendarHref}>
-            <ArrowLeft className="h-4 w-4" />
-            Calendar
-          </Link>
+            <ArrowLeft className="h-4 w-4" /><PublicText text={"Calendar"} /></Link>
         </div>
 
         {venue ? (
@@ -472,7 +428,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
                       <h1 className="truncate text-2xl font-semibold leading-tight text-foreground sm:text-4xl">
                         {venue.name}
                       </h1>
-                      <a
+                      <LocalizedElement as="a"
                         className="mt-1 inline-flex max-w-full items-center gap-1.5 truncate text-sm font-semibold text-muted-foreground hover:text-primary"
                         href={instagramHref}
                         rel="noreferrer"
@@ -480,7 +436,7 @@ export default async function VenuePage({ params }: VenuePageProps) {
                       >
                         <Instagram className="h-4 w-4 flex-none" />
                         <span className="truncate">@{venue.instagramHandle}</span>
-                      </a>
+                      </LocalizedElement>
                     </div>
 
                     <ProfileActions
@@ -510,18 +466,17 @@ export default async function VenuePage({ params }: VenuePageProps) {
 
             <VenueWeeklyHours className="max-w-xl" hoursJson={venue.hoursJson} hoursSource={venue.hoursSource} />
 
-            <section aria-label={`${venue.name} event posts`} id="posts">
+            <LocalizedElement as="section" aria-label={`${venue.name} event posts`} id="posts">
               <div className="flex items-center justify-center border-b border-border/75">
                 <span className="inline-flex border-t border-primary px-4 py-3 text-xs font-semibold uppercase leading-4 tracking-[0.12em] text-foreground">
-                  <Grid3X3 className="mr-2 h-4 w-4" />
-                  Posts
-                </span>
+                  <Grid3X3 className="mr-2 h-4 w-4" /><PublicText text={"Posts"} /></span>
               </div>
 
               {eventPosts.length > 0 ? (
                 <div className="grid grid-cols-3 gap-px pt-1 sm:gap-1.5">
                   {eventPosts.map((event) => (
                     <EventPostTile
+                      locale={locale}
                       event={event}
                       key={event._id}
                       priority={event._id === priorityEventId}
@@ -531,22 +486,16 @@ export default async function VenuePage({ params }: VenuePageProps) {
               ) : (
                 <div className="px-4 py-16 text-center">
                   <Grid3X3 className="mx-auto h-8 w-8 text-primary" />
-                  <p className="mt-3 text-sm font-semibold text-foreground">
-                    No event posts yet.
-                  </p>
+                  <p className="mt-3 text-sm font-semibold text-foreground"><PublicText text={"No event posts yet."} /></p>
                 </div>
               )}
-            </section>
+            </LocalizedElement>
           </>
         ) : (
           <div className="glass-panel px-6 py-10 text-center">
-            <p className="text-base font-semibold text-foreground">Venue not found.</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              It may have been removed from the public venue list.
-            </p>
-            <Link className="button-primary mt-5" href="/">
-              Back to calendar
-            </Link>
+            <p className="text-base font-semibold text-foreground"><PublicText text={"Venue not found."} /></p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground"><PublicText text={"It may have been removed from the public venue list."} /></p>
+            <Link className="button-primary mt-5" href="/"><PublicText text={"Back to calendar"} /></Link>
           </div>
         )}
       </div>

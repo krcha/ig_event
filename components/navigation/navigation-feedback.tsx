@@ -2,6 +2,8 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useLocale } from "@/i18n/client";
+import { accountText } from "@/lib/i18n/account-messages";
 
 const NAVIGATION_FEEDBACK_TIMEOUT_MS = 10_000;
 
@@ -55,6 +57,7 @@ function isGetFormNavigation(target: EventTarget | null): boolean {
 }
 
 export function NavigationFeedback() {
+  const locale = useLocale();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const routeKey = `${pathname}?${searchParams.toString()}`;
@@ -147,7 +150,7 @@ export function NavigationFeedback() {
         <div className="h-full w-1/2 animate-[navigation-feedback_1s_ease-in-out_infinite] rounded-full bg-primary motion-reduce:animate-none" />
       </div>
       <span className="sr-only" role="status">
-        {isPending ? "Loading" : ""}
+        {isPending ? accountText(locale, "common.loading") : ""}
       </span>
     </div>
   );

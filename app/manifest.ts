@@ -4,7 +4,10 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Event Zeka",
     short_name: "Event Zeka",
-    description: "Belgrade events today: nightlife, concerts, DJ nights, exhibitions, theatre, film, festivals, and culture for locals and visitors.",
+    id: "/",
+    scope: "/",
+    lang: "sr-Latn-RS",
+    description: "Događaji u Beogradu: žurke, koncerti, izložbe, pozorište i kultura.",
     start_url: "/",
     display: "standalone",
     background_color: "#10141F",

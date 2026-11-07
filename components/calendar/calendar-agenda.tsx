@@ -1,6 +1,8 @@
 "use client";
+import { PublicText, LocalizedElement, PublicEventCount } from "@/components/i18n/public-text";
 
-import Link from "next/link";
+
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { useEffect, useMemo, useState } from "react";
 import { VirtualAgendaList } from "./virtual-agenda-list";
 import { CalendarEventPreviews, CalendarEventPreviewRow } from "./calendar-event-preview";
@@ -43,7 +45,7 @@ function renderEventRow({ event, openNowActive }: { event: CalendarAgendaEvent; 
     data-calendar-mobile-event-row="true" data-event-title={event.title} data-event-venue={event.venue}
     data-event-time={event.displayTimeLabel ?? event.time} data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}>
     <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}>
-      <span className={styles.eventTime} title={timeDescription} aria-label={timeDescription}
+      <LocalizedElement as="span" className={styles.eventTime} title={timeDescription} aria-label={timeDescription}
         data-time-source={venueHours ? "venue_hours" : known ? "event" : "unknown"}>
         {venueHours ? <>
           {event.presentation.label.split(", ").map(window => {
@@ -57,13 +59,13 @@ function renderEventRow({ event, openNowActive }: { event: CalendarAgendaEvent; 
           <span>{known ? event.timeParts.startLabel || "—" : "—"}</span>
           {known && event.timeParts.endLabel ? <small data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}>{event.timeParts.endLabel}</small> : null}
         </>}
-      </span>
+      </LocalizedElement>
       <div className={styles.eventInfo}>
         <h3 className={styles.eventTitle}>{event.title}</h3>
         {event.venueId ? <Link className={styles.venueName} href={`/venues/${event.venueId}`} prefetch={false}>{event.venue}</Link> : <p className={styles.venueName}>{event.venue}</p>}
-        {event.sessionLabel ? <span className={styles.session} data-event-session="true">{event.sessionLabel}</span> : null}
+        {event.sessionLabel ? <span className={styles.session} data-event-session="true"><PublicText text={event.sessionLabel} /></span> : null}
         <div className={styles.rowMeta}>
-          <span className={styles.categoryLabel} data-category-tone={event.category}><span aria-hidden="true" />{labels[event.category]}</span>
+          <span className={styles.categoryLabel} data-category-tone={event.category}><span aria-hidden="true" /><PublicText text={labels[event.category]} /></span>
           <EventMetaRow event={event} presentation={event} />
         </div>
         <OpenNowStatus eventId={event._id} state={event.openNowState} />
@@ -94,17 +96,17 @@ export function CalendarAgenda({ events, hiddenDayCategories, openNowActive, sor
     <div className={styles.stickyFilters} data-calendar-mobile-sticky-filters="true">
       <EventKindToggleChips appearance="tabs" singleSelection initialHiddenCategories={hiddenDayCategories} onHiddenCategoriesChange={setActiveHiddenCategories} />
     </div>
-    <p className={styles.resultCount} role="status"><span data-calendar-visible-event-count="true">{visible.length} {visible.length === 1 ? "događaj" : "događaja"}</span> · {sortLabel}</p>
+    <p className={styles.resultCount} role="status"><span data-calendar-visible-event-count="true"><PublicEventCount count={visible.length} /></span> · <PublicText text={sortLabel} /></p>
     <div className={styles.contentGrid}>
       <div>{groups.map(group => <section className={styles.band} id={`agenda-${group.key}`} key={group.key}
         data-calendar-time-band={alphabetical ? undefined : group.key} data-calendar-time-band-event-count={group.events.length}
         aria-labelledby={`heading-${group.key}`}>
-        <header className={styles.bandHeader}><h2 id={`heading-${group.key}`}>{group.label}</h2>{group.description ? <span>{group.description}</span> : null}<span data-calendar-time-band-visible-count="true">{group.events.length}</span></header>
+        <header className={styles.bandHeader}><h2 id={`heading-${group.key}`}><PublicText text={group.label} /></h2>{group.description ? <span>{group.description}</span> : null}<span data-calendar-time-band-visible-count="true">{group.events.length}</span></header>
         <VirtualAgendaList items={group.events} getKey={event => event._id} estimateSize={108}>{event => renderEventRow({ event, openNowActive })}</VirtualAgendaList>
       </section>)}
-      {!visible.length ? <div className={styles.empty} data-calendar-empty-state="true"><h2>Nema događaja za ovaj izbor.</h2><p>Probaj drugu pretragu, kategoriju ili datum.</p>{hasActiveFilters ? <Link className="button-secondary" href={clearFiltersHref} prefetch={false} scroll={false}>Poništi filtere</Link> : null}</div> : null}
+      {!visible.length ? <div className={styles.empty} data-calendar-empty-state="true"><h2><PublicText text={"Nema događaja za ovaj izbor."} /></h2><p><PublicText text={"Probaj drugu pretragu, kategoriju ili datum."} /></p>{hasActiveFilters ? <Link className="button-secondary" href={clearFiltersHref} prefetch={false} scroll={false}><PublicText text={"Poništi filtere"} /></Link> : null}</div> : null}
       </div>
-      <aside className={styles.side} aria-label="Pregled dana"><h2>{alphabetical ? "Abecedni pregled" : "Po satima"}</h2><nav>{groups.map(group => <a key={group.key} href={`#agenda-${group.key}`}><span>{group.label}</span><span>{group.events.length}</span></a>)}</nav><p><strong>Vreme i izvor.</strong><br />Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa.</p></aside>
+      <LocalizedElement as="aside" className={styles.side} aria-label="Pregled dana"><h2><PublicText text={alphabetical ? "Abecedni pregled" : "Po satima"} /></h2><nav>{groups.map(group => <LocalizedElement as="a" key={group.key} href={`#agenda-${group.key}`}><span><PublicText text={group.label} /></span><span>{group.events.length}</span></LocalizedElement>)}</nav><p><strong><PublicText text={"Vreme i izvor."} /></strong><br /><PublicText text={"Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa."} /></p></LocalizedElement>
     </div>
   </section></CalendarEventPreviews>;
 }

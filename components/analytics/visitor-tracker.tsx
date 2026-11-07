@@ -3,6 +3,7 @@
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { cleanLabel, isPublicAnalyticsPath } from "@/lib/analytics/model";
+import { stripLocalePrefix } from "@/i18n/config";
 
 const VISITOR_KEY = "eventzeka.analytics.visitor";
 const SESSION_KEY = "eventzeka.analytics.session";
@@ -40,7 +41,10 @@ function identity(search: URLSearchParams) {
 }
 
 export function VisitorTracker() {
-  const path = usePathname();
+  const visiblePath = usePathname();
+  // The existing collector stores canonical public routes. Language prefixes
+  // are presentation state and do not require a backend analytics migration.
+  const path = stripLocalePrefix(visiblePath);
   const search = useSearchParams();
   const lastPage = useRef("");
   useEffect(() => {
@@ -63,8 +67,9 @@ export function VisitorTracker() {
         try {
           const url = new URL(element.href);
           if (!["http:", "https:"].includes(url.protocol)) return;
-          if (url.origin === location.origin && !isPublicAnalyticsPath(url.pathname)) return;
-          target = url.origin === location.origin ? url.pathname : url.hostname + url.pathname;
+          const canonicalPath = stripLocalePrefix(url.pathname);
+          if (url.origin === location.origin && !isPublicAnalyticsPath(canonicalPath)) return;
+          target = url.origin === location.origin ? canonicalPath : url.hostname + url.pathname;
         } catch { return; }
       } else {
         target = cleanLabel(element.getAttribute("data-analytics") || element.getAttribute("aria-label") || element.textContent, 100);

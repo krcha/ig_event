@@ -1,4 +1,6 @@
 "use client";
+import { PublicText } from "@/components/i18n/public-text";
+
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
@@ -67,7 +69,7 @@ export function CalendarOverviewProvider({ options, selectedDay, openNow, childr
   const value = useMemo(() => ({ ready: Boolean(data), refreshing: refreshingKey === key, openNow, selectedDate: selectedDay.date, presentation, venues: data?.venues ?? [] }), [data, refreshingKey, key, openNow, selectedDay.date, presentation]);
   return <OverviewContext.Provider value={value}>
     {children}
-    {failedKey === key ? <p className="px-1 text-xs text-muted-foreground" role="status">Calendar counts are temporarily unavailable. Events are still available.</p> : null}
+    {failedKey === key ? <p className="px-1 text-xs text-muted-foreground" role="status"><PublicText text={"Calendar counts are temporarily unavailable. Events are still available."} /></p> : null}
   </OverviewContext.Provider>;
 }
 
@@ -96,8 +98,8 @@ export function CalendarVenueSelect({ className, selected, selectedLabel, fallba
   const overview = useContext(OverviewContext);
   const venues = overview?.ready && !overview.openNow ? overview.venues : fallback;
   return <select className={className} defaultValue={selected ?? ""} key={selected ?? ""} name="venue">
-    <option value="">All venues</option>
+    <option value=""><PublicText text={"All venues"} /></option>
     {selected && !venues.some(venue => venue.value === selected) ? <option value={selected}>{selectedLabel}</option> : null}
-    {venues.map(venue => <option key={venue.value} value={venue.value}>{venue.label}</option>)}
+    {venues.map(venue => <option key={venue.value} value={venue.value}><PublicText text={venue.label} /></option>)}
   </select>;
 }

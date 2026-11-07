@@ -233,7 +233,7 @@ const eventJsonLd = buildEventStructuredData({
 assert.equal(eventJsonLd["@context"], "https://schema.org");
 assert.equal(eventJsonLd["@type"], "Event");
 assert.equal(eventJsonLd["@id"], `${SITE_ORIGIN}/events/event-1#event`);
-assert.equal(eventJsonLd.url, `${SITE_ORIGIN}/events/event-1`);
+assert.equal(eventJsonLd.url, `${SITE_ORIGIN}/en/events/event-1`);
 assert.equal(eventJsonLd.startDate, "2026-12-18T22:30:00+01:00");
 assert.equal(eventJsonLd.eventAttendanceMode, "https://schema.org/OfflineEventAttendanceMode");
 assert.equal(eventJsonLd.eventStatus, "https://schema.org/EventScheduled");
@@ -244,7 +244,7 @@ assert.equal("isAccessibleForFree" in eventJsonLd, false);
 assert.deepEqual(eventJsonLd.location, {
   "@type": "Place",
   "@id": `${SITE_ORIGIN}/venues/venue-test-club#place`,
-  url: `${SITE_ORIGIN}/venues/venue-test-club`,
+  url: `${SITE_ORIGIN}/en/venues/venue-test-club`,
   address: {
     "@type": "PostalAddress",
     addressCountry: "RS",
@@ -340,7 +340,7 @@ const venueJsonLd = buildVenueStructuredData({
 });
 assert.equal(venueJsonLd["@type"], "LocalBusiness");
 assert.equal(venueJsonLd["@id"], `${SITE_ORIGIN}/venues/venue-1#place`);
-assert.equal(venueJsonLd.url, `${SITE_ORIGIN}/venues/venue-1`);
+assert.equal(venueJsonLd.url, `${SITE_ORIGIN}/en/venues/venue-1`);
 assert.equal(venueJsonLd.hasMap, "https://www.google.com/maps/search/?api=1&query=44.81,20.46");
 assert.deepEqual(venueJsonLd.sameAs, ["https://www.instagram.com/testgallery/"]);
 assert.deepEqual(venueJsonLd.address, {
@@ -551,15 +551,17 @@ assert.doesNotMatch(
   "Venue directory SEO must not depend on an incomplete, query-heavy upcoming count.",
 );
 
-assert.ok(layout.includes('lang="en-RS"'));
+assert.ok(layout.includes('lang={LOCALE_LANGUAGE_TAGS[locale]}'));
+assert.ok(layout.includes("await getLocale()"), "Document language is selected on the server for the visible URL.");
 assert.equal(layout.includes('alternateLocale: "sr_RS"'), false);
 assert.ok(rootPage.includes("generateMetadata"));
-assert.ok(rootPage.includes('canonical: "/"'));
+assert.ok(rootPage.includes('path: "/"'));
+assert.ok(rootPage.includes("localizedMetadata("));
 assert.ok(rootPage.includes("index: !hasSearchParams"));
-assert.ok(browsePage.includes("getMobileDayHeading(selectedDayKey, todayKey)"), "The approved dynamic date heading remains the calendar H1.");
+assert.ok(browsePage.includes("publicDayHeading(locale, selectedDayKey, todayKey)"), "The calendar H1 retains the selected date and localized relative-day semantics.");
 assert.equal((browsePage.match(/<h1/g) ?? []).length, 1, "The calendar should expose one H1.");
 assert.ok(browsePage.includes("Događaji u Beogradu"));
-assert.ok(browsePage.includes("HOME_FAQ_ITEMS.map"), "The date-led redesign preserves the public event FAQ content.");
+assert.ok(browsePage.includes("getHomeFaqItems(locale).map"), "The date-led redesign preserves the complete FAQ in the selected language.");
 assert.ok(!browsePage.includes("Događaji u Beogradu za sve"));
 assert.ok(!browsePage.includes("Događaji u Beogradu za lokalce i posetioce"));
 assert.ok(!browsePage.includes("Tonight&apos;s picks"));
@@ -573,7 +575,7 @@ for (const [label, source] of [
   ["venue detail", venuePage],
   ["discover", discoverPage],
 ]) {
-  assert.ok(source.includes("canonical"), `${label} should expose a canonical URL.`);
+  assert.ok(source.includes("localizedMetadata("), `${label} should expose a self-canonical and ready reciprocal language URLs.`);
 }
 assert.ok(eventPage.includes("buildEventStructuredData"));
 assert.ok(eventPage.includes("generateMetadata"));
@@ -583,8 +585,8 @@ assert.ok(venuePage.includes("const loadVenuePage = cache("));
 assert.match(eventPage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.match(venuePage, /generateMetadata[\s\S]*notFound\(\)/);
 assert.ok(venueDirectory.includes("buildVenueDirectoryStructuredData"));
-assert.ok(eventMap.includes('canonical: "/map"'));
-assert.ok(eventMap.includes('new URL("/map", SITE_ORIGIN)'));
+assert.ok(eventMap.includes('path: "/map"'));
+assert.ok(eventMap.includes("getMetadataLocale"));
 assert.ok(eventMap.includes("index: !hasDateFilter"));
 assert.ok(discoverPage.includes("index: !hasDateFilter"));
 

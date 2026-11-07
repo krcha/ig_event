@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,8 @@ import { GET } from "../app/api/events/[eventId]/export/route.ts";
 import { createCarouselJpegCache } from "../lib/social/carousel-jpeg-cache.ts";
 import {
   EVENT_EXPORT_MAX_BYTES,
+  EVENT_EXPORT_DESIGN_VERSION,
+  getEventExportCopy,
   getEventExportFacts,
   renderEventExportImage,
 } from "../lib/social/event-export-image.ts";
@@ -16,6 +19,16 @@ import {
   createPublicEventExportHandler,
   EventExportBusyError,
 } from "../lib/social/public-event-export.ts";
+import {
+  createLocalizedOgRenderer,
+  createOgImageHandler,
+  getOgImageCopy,
+  OG_IMAGE_MAX_BYTES,
+  renderOgImage,
+} from "../lib/seo/og-image.ts";
+import { GET as GET_OG } from "../app/api/og/route.ts";
+import { GET as GET_COMPAT_OG } from "../app/opengraph-image/route.ts";
+import { LOCALE_LANGUAGE_TAGS } from "../i18n/config.ts";
 
 const id = "k17d3v0ks6wv7jaf99m2rrrxcs8b0yhr";
 const event = {
@@ -36,8 +49,23 @@ for (const timeStatus of ["unknown", "inferred"]) {
 for (const time of [undefined, "TBD", "", "2026-11-06"]) {
   assert.equal(getEventExportFacts({ ...event, time }).time, "Time not announced");
 }
-assert.equal(getEventExportFacts(event).url, `https://eventzeka.com/events/${id}`);
+assert.equal(getEventExportFacts(event).url, `https://eventzeka.com/en/events/${id}`);
 assert.throws(() => getEventExportFacts({ ...event, date: "2026-02-29" }), /calendar date/);
+for (const [locale, unknownTime, timeZone] of [
+  ["sr", "Satnica nije najavljena", "vreme u Beogradu"],
+  ["en", "Time not announced", "Belgrade time"],
+  ["ru", "Время не объявлено", "время в Белграде"],
+]) {
+  const facts = getEventExportFacts(event, locale);
+  assert.equal(facts.title, event.title);
+  assert.equal(facts.venue, event.venue);
+  assert.equal(facts.time, `21:00 / ${timeZone}`);
+  assert.equal(getEventExportFacts({ ...event, timeStatus: "inferred" }, locale).time, unknownTime);
+  assert.equal(getEventExportFacts({ ...event, time: "TBD" }, locale).time, unknownTime);
+  assert.equal(getEventExportCopy(locale).unknownTime, unknownTime);
+  assert.equal(getEventExportFacts({ ...event, time: "23:00-06:00" }, locale).time, `23:00–06:00 / ${timeZone}`);
+  assert.equal(facts.url, `https://eventzeka.com${locale === "sr" ? "" : `/${locale}`}/events/${id}`);
+}
 
 const fixturePoster = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200">
   <rect width="900" height="1200" fill="#A99BFF"/><circle cx="450" cy="500" r="280" fill="#D5F56B"/>
@@ -68,6 +96,8 @@ try {
   let renderCount = 0;
   let eventReads = 0;
   let posterUnavailable = false;
+  const cacheKeys = [];
+  const jpegCache = createCarouselJpegCache({ directory, maxEntries: 4, maxBytes: 8_000_000 });
   const handler = createPublicEventExportHandler({
     loadEvent: async () => { eventReads += 1; return current; },
     loadImageSource: async () => publicSource,
@@ -75,8 +105,8 @@ try {
       if (posterUnavailable) throw new Error("Source expired");
       return { bytes: sourceBytes };
     },
-    cachedJpeg: createCarouselJpegCache({ directory, maxEntries: 4, maxBytes: 8_000_000 }),
-    render: async (snapshot, poster) => { renderCount += 1; return renderEventExportImage(snapshot, poster); },
+    cachedJpeg: (key, render) => { cacheKeys.push(key); return jpegCache(key, render); },
+    render: async (snapshot, poster, locale) => { renderCount += 1; return renderEventExportImage(snapshot, poster, locale); },
     runWork: createEventExportGate(2),
   });
   const request = () => new Request(`https://eventzeka.com/api/events/${id}/export`);
@@ -117,6 +147,40 @@ try {
   const head = await handler(new Request(request().url, { method: "HEAD" }), id);
   assert.equal(head.status, 200);
   assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const beforeLocalized = renderCount;
+  const localizedImages = [];
+  posterUnavailable = false;
+  current = event;
+  for (const locale of ["sr", "en", "ru"]) {
+    const localizedRequest = () => new Request(`${request().url}?locale=${locale}`, { headers: { "x-eventzeka-locale": "ru" } });
+    const response = await handler(localizedRequest(), id);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-language"), LOCALE_LANGUAGE_TAGS[locale]);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal((await sharp(bytes).metadata()).height, 1920);
+    localizedImages.push(createHash("sha256").update(bytes).digest("hex"));
+    assert.equal((await handler(localizedRequest(), id)).status, 200);
+    const key = cacheKeys.at(-1);
+    assert.equal(key.locale, locale);
+    assert.equal(key.design, EVENT_EXPORT_DESIGN_VERSION);
+    assert.equal(key.eventId, id);
+    if (process.env.EVENT_EXPORT_QA_OUTPUT_DIR) {
+      await mkdir(process.env.EVENT_EXPORT_QA_OUTPUT_DIR, { recursive: true });
+      await writeFile(path.join(process.env.EVENT_EXPORT_QA_OUTPUT_DIR, `event-export-${locale}.jpg`), bytes);
+    }
+  }
+  assert.equal(new Set(localizedImages).size, 3, "All three locales produce distinct actual rendered images.");
+  assert.equal(renderCount - beforeLocalized, 3, "Each locale renders once and never reuses a different language's cache entry.");
+  const beforeInvalidLanguage = eventReads;
+  for (const query of ["locale=xx", "locale=sr&locale=ru", "locale="]) {
+    assert.equal((await handler(new Request(`${request().url}?${query}`), id)).status, 400);
+  }
+  assert.equal(eventReads, beforeInvalidLanguage, "Invalid languages are rejected before event/media reads.");
+  current = null;
+  for (const locale of ["sr", "en", "ru"]) {
+    assert.equal((await handler(new Request(`${request().url}?locale=${locale}`), id)).status, 404);
+  }
+  assert.equal(renderCount - beforeLocalized, 3, "Cached localized bytes cannot bypass revoked public eligibility.");
 } finally { await rm(directory, { recursive: true, force: true }); }
 
 const gate = createEventExportGate(1);
@@ -183,4 +247,48 @@ if (process.env.EVENT_EXPORT_QA_OUTPUT_DIR) {
   await writeFile(path.join(process.env.EVENT_EXPORT_QA_OUTPUT_DIR, "event-export-unicode-unknown-time.jpg"), unicodeImage);
   await writeFile(path.join(process.env.EVENT_EXPORT_QA_OUTPUT_DIR, "event-export-long-title.jpg"), longImage);
 }
+
+const ogHashes = [];
+for (const [locale, expectedHeadline] of [["sr", "Dešavanja"], ["en", "Belgrade events,"], ["ru", "События"]]) {
+  assert.equal(getOgImageCopy(locale).headline[0], expectedHeadline);
+  const response = await GET_OG(new Request(`https://eventzeka.com/api/og?locale=${locale}`, {
+    headers: { "x-eventzeka-locale": "sr" },
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.equal(response.headers.get("content-language"), LOCALE_LANGUAGE_TAGS[locale]);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const meta = await sharp(bytes).metadata();
+  assert.equal(meta.width, 1200);
+  assert.equal(meta.height, 630);
+  assert.ok(bytes.length < OG_IMAGE_MAX_BYTES);
+  ogHashes.push(createHash("sha256").update(bytes).digest("hex"));
+  const head = await GET_OG(new Request(`https://eventzeka.com/api/og?locale=${locale}`, { method: "HEAD" }));
+  assert.equal(head.status, 200);
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const unchanged = await GET_OG(new Request(`https://eventzeka.com/api/og?locale=${locale}`, {
+    headers: { "if-none-match": response.headers.get("etag") },
+  }));
+  assert.equal(unchanged.status, 304);
+  if (process.env.EVENT_EXPORT_QA_OUTPUT_DIR) await writeFile(path.join(process.env.EVENT_EXPORT_QA_OUTPUT_DIR, `og-${locale}.png`), bytes);
+}
+assert.equal(new Set(ogHashes).size, 3);
+for (const query of ["locale=xx", "locale=sr&locale=ru", "locale="]) {
+  assert.equal((await GET_OG(new Request(`https://eventzeka.com/api/og?${query}`))).status, 400);
+}
+const compatibleOg = await GET_COMPAT_OG(new Request("https://eventzeka.com/opengraph-image?legacy=old&locale=en"));
+assert.equal(compatibleOg.headers.get("content-language"), "sr-Latn-RS");
+assert.equal(createHash("sha256").update(Buffer.from(await compatibleOg.arrayBuffer())).digest("hex"), ogHashes[0]);
+
+let ogRenders = 0;
+const renderer = createLocalizedOgRenderer(async (locale) => { ogRenders += 1; return renderOgImage(locale); });
+await Promise.all(["sr", "en", "ru"].flatMap((locale) => [renderer(locale), renderer(locale)]));
+assert.equal(ogRenders, 3, "The bounded three-locale OG cache coalesces concurrent work.");
+await assert.rejects(renderer("invalid"), /Unsupported/);
+assert.equal(ogRenders, 3);
+const failedRenderer = createLocalizedOgRenderer(async () => { throw new Error("render failed"); });
+const unavailableOg = await createOgImageHandler({ render: failedRenderer })(new Request("https://eventzeka.com/api/og?locale=sr"));
+assert.equal(unavailableOg.status, 503);
+assert.equal(unavailableOg.headers.get("cache-control"), "no-store");
 console.log(`Event export QA passed: publication, cache/coalescing, source checksum, dates/time, routing and 1080x1920 JPEG (${image.length} bytes).`);
+console.log("Localized media QA passed: three 1200x630 PNG languages, branded fonts, explicit locale/cache isolation, conditional/HEAD responses, legacy compatibility and no source-event writes.");

@@ -13,6 +13,9 @@ import {
   shouldShowInstallPrompt,
 } from "@/lib/install/prompt-policy";
 import styles from "./install-prompt.module.css";
+import { useLocale } from "@/i18n/client";
+import { localizeHref, stripLocalePrefix, LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
+import { accountText } from "@/lib/i18n/account-messages";
 
 function readLastShownDay(): string | null {
   try { return window.localStorage.getItem(INSTALL_PROMPT_STORAGE_KEY); }
@@ -35,7 +38,9 @@ function hasProtectedInteraction(): boolean {
 }
 
 export function InstallPrompt() {
-  const pathname = usePathname();
+  const locale = useLocale();
+  const t = useCallback((key: Parameters<typeof accountText>[1]) => accountText(locale, key), [locale]);
+  const pathname = stripLocalePrefix(usePathname());
   const { filtersOpen } = useEventsUi();
   const [isOpen, setIsOpen] = useState(false);
   const [bottomOffset, setBottomOffset] = useState<number | null>(null);
@@ -105,7 +110,7 @@ export function InstallPrompt() {
       catch { /* The current document still remembers the display. */ }
       previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setIsOpen(true);
-      setAnnouncement("Instaliraj EventZeka App. Predlog se zatvara za 10 sekundi. Uputstvo je uvek dostupno na stranici profila.");
+      setAnnouncement(t("install.announcement"));
       stopTimer();
     }
 
@@ -172,7 +177,7 @@ export function InstallPrompt() {
       document.removeEventListener("visibilitychange", visibilityChanged);
       window.removeEventListener("storage", storageChanged);
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -227,23 +232,23 @@ export function InstallPrompt() {
 
   return (
     <>
-      <span className="sr-only" lang="sr-Latn" role="status" aria-live="polite">{announcement}</span>
+      <span className="sr-only" lang={LOCALE_LANGUAGE_TAGS[locale]} role="status" aria-live="polite">{announcement}</span>
       {showPanel ? (
-        <aside className={styles.prompt} style={position} ref={prompt} lang="sr-Latn" aria-labelledby="install-prompt-title" data-install-prompt>
-          <button className={styles.close} type="button" onClick={dismiss} aria-label="Zatvori predlog za instalaciju" data-analytics="install-prompt-dismiss">
+        <aside className={styles.prompt} style={position} ref={prompt} lang={LOCALE_LANGUAGE_TAGS[locale]} aria-labelledby="install-prompt-title" data-install-prompt>
+          <button className={styles.close} type="button" onClick={dismiss} aria-label={t("install.promptA11y")} data-analytics="install-prompt-dismiss">
             <X aria-hidden="true" size={18} />
           </button>
           <div className={styles.intro}>
             <Image className={styles.icon} src="/event-zeka-icon-192.png" alt="" width={64} height={64} />
             <div className={styles.copy}>
               <h2 id="install-prompt-title" className={styles.title}>EventZeka <span>App</span></h2>
-              <p className={styles.description}>App za događaje u Beogradu</p>
+              <p className={styles.description}>{t("install.description")}</p>
             </div>
           </div>
-          <a className={styles.install} href="/install#install-guide-title" data-analytics="install-prompt-guide" onClick={dismiss}>
-            Instaliraj EventZeka App <Download aria-hidden="true" size={19} />
+          <a className={styles.install} href={localizeHref("/install#install-guide-title", locale)} data-analytics="install-prompt-guide" onClick={dismiss}>
+            {t("install.installApp")} <Download aria-hidden="true" size={19} />
           </a>
-          <button className={styles.later} type="button" onClick={dismiss} data-analytics="install-prompt-later">Ne sada</button>
+          <button className={styles.later} type="button" onClick={dismiss} data-analytics="install-prompt-later">{t("install.notNow")}</button>
           <div aria-hidden="true" className={styles.countdown} data-install-countdown><span /></div>
         </aside>
       ) : null}

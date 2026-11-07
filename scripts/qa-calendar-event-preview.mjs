@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { loadPublicTextFixture } from "./qa-support/public-text-fixture.mjs";
 
 // Execute the shipped components with deterministic hooks, layout and HTTP.
 // Browser QA separately verifies hit testing and the actual responsive CSS.
-function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
+function createHarness({ fetchPost, ids = ["event-a", "event-b"], locale = "en" } = {}) {
   let currentScope;
   let now = 1_000;
   let lazyMounts = 0;
@@ -21,9 +22,10 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
     getBoundingClientRect() { return { top: this.top }; },
     focus(options) { this.focusCalls.push(options); },
   }]));
-  const jsx = (type, props) => ({ type, props: props ?? {} });
+  const jsx = (type, props) => typeof type === "function" ? type(props ?? {}) : { type, props: props ?? {} };
   const sameDeps = (a, b) => Boolean(a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index])));
   const react = {
+    createElement: jsx,
     createContext: (value) => {
       const context = { current: value };
       context.Provider = { context };
@@ -56,6 +58,7 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
     useLayoutEffect: (callback, deps) => scheduleEffect("layout", callback, deps),
     useEffect: (callback, deps) => scheduleEffect("effect", callback, deps),
   };
+  const publicTextComponents = loadPublicTextFixture({ react, jsx, getLocale: () => locale });
   function scheduleEffect(kind, callback, deps) {
     const scope = currentScope;
     const index = scope.cursor++;
@@ -109,6 +112,7 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"] } = {}) {
       require: (name) => {
         if (name === "react") return react;
         if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
+        if (name === "@/components/i18n/public-text") return publicTextComponents;
         if (name === "lucide-react") return Object.fromEntries(["ChevronDown", "ExternalLink", "ImageOff", "Instagram", "LoaderCircle", "X"].map((key) => [key, key]));
         if (name === "next/image") return { default: "next-image" };
         if (name === "@/components/events/responsive-event-image") return { ResponsiveEventImage: "next-image" };
@@ -401,6 +405,24 @@ function deferred() { let resolve; const promise = new Promise((finish) => { res
   assert.ok(find(h.panel(), (node) => node.type === "next-image"), "Image-only failures have a direct retry action.");
   await tick(); h.render();
   assert.equal(h.calls.length, 1, "Retrying the image can retain the already loaded caption metadata.");
+  h.unmount();
+}
+
+for (const [locale, showLabel, closeLabel, prefix] of [
+  ["sr", "Prikaži Instagram objavu: Title event-a", "Zatvori Instagram objavu", ""],
+  ["en", "Show Instagram post for Title event-a", "Close Instagram post", "/en"],
+  ["ru", "Показать публикацию Instagram: Title event-a", "Закрыть публикацию Instagram", "/ru"],
+]) {
+  const h = createHarness({ locale });
+  const trigger = find(h.row("event-a"), (node) => node.props["data-calendar-event-preview-toggle"] === "event-a");
+  assert.equal(trigger.props["aria-label"], showLabel, `${locale}: the event title remains intact inside the localized trigger.`);
+  h.click("event-a");
+  await tick(); h.render();
+  assert.equal(find(h.panel(), (node) => node.props["data-calendar-event-post-close"] === "overlay").props["aria-label"], closeLabel);
+  assert.equal(find(h.panel(), (node) => node.type === "next-link").props.href, `${prefix}/events/event-a`);
+  assert.equal(find(h.panel(), (node) => node.type === "read-more-text").props.text, "Original caption event-a");
+  assert.equal(find(h.panel(), (node) => node.type === "next-image").props.src, "/api/discover/images/event-a");
+  assert.equal(h.calls[0].url, "/api/events/event-a/post", `${locale}: locale changes must not rewrite source/media API identities.`);
   h.unmount();
 }
 

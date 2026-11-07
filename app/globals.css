@@ -324,5 +324,5 @@ input,textarea { caret-color: var(--primary); }
 .mobile-nav-shell [data-navigation-selected=true] { color:var(--primary); }
 .mobile-nav-shell [data-navigation-selected=true]::before { content:"";position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:28px;height:3px;background:var(--primary); }
 @media(max-width:900px) { .app-desktop-panel nav { gap:14px; }.app-desktop-panel nav a { font-size:12px; } }
-@media(max-width:350px) { .app-mobile-header a[title^="Follow"] span { display:none; }.app-mobile-header a[title^="Follow"] { min-width:40px;justify-content:center; } }
+@media(max-width:350px) { .app-mobile-header [data-instagram-follow] { padding-inline:4px; } }
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }

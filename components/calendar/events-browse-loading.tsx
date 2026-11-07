@@ -1,7 +1,9 @@
+
+import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 export default function EventsLoading({ day }: { day?: string } = {}) {
   return (
-    <main aria-busy="true" aria-label="Učitavanje događaja" className="app-page app-page-wide gap-4" data-calendar-loading-day={day ?? "today"} role="status">
-      <span className="sr-only">Učitavanje događaja</span>
+    <LocalizedElement as="main" aria-busy="true" aria-label="Učitavanje događaja" className="app-page app-page-wide gap-4" data-calendar-loading-day={day ?? "today"} role="status">
+      <span className="sr-only"><PublicText text={"Učitavanje događaja"} /></span>
       <div aria-hidden="true" className="space-y-4 motion-safe:animate-pulse">
         <div className="h-10 w-52 rounded-xl bg-muted" />
         <div className="h-12 rounded-2xl border border-border bg-card" />
@@ -15,6 +17,6 @@ export default function EventsLoading({ day }: { day?: string } = {}) {
           {Array.from({ length: 5 }, (_, index) => <div className="h-[76px] rounded-2xl border border-border bg-card" key={index} />)}
         </div>
       </div>
-    </main>
+    </LocalizedElement>
   );
 }

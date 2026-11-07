@@ -1,3 +1,5 @@
+
+import { PublicText } from "@/components/i18n/public-text";
 import type { CSSProperties } from "react";
 import type { EventDayPeriod } from "@/lib/events/event-time";
 import {
@@ -179,7 +181,7 @@ export function EventCategoryPill({
       data-event-category={category}
       style={{ backgroundColor: tone.backgroundColor, color: tone.color, ...style }}
     >
-      <span className="truncate">{tone.label}</span>
+      <span className="truncate"><PublicText text={tone.label} /></span>
     </span>
   );
 }
@@ -208,7 +210,7 @@ export function EventSecondaryTags({
       data-event-tag={tag}
       key={tag}
     >
-      <span className="truncate">{tag}</span>
+      <span className="truncate"><PublicText text={tag} /></span>
     </span>
   ));
 }
@@ -234,7 +236,7 @@ export function EventPriceChip({
       )}
       data-event-price={price.isFree ? "free" : "paid"}
     >
-      <span className="truncate">{price.label}</span>
+      <span className="truncate"><PublicText text={price.label} /></span>
     </span>
   );
 }
@@ -260,7 +262,7 @@ export function EventDayPeriodChip({
       data-event-day-period={value}
       style={{ backgroundColor: tone.backgroundColor, color: tone.color }}
     >
-      <span className="truncate">{tone.label}</span>
+      <span className="truncate"><PublicText text={tone.label} /></span>
     </span>
   );
 }
@@ -292,7 +294,7 @@ export function EventMetaRow({
       {goingCount ? (
         <>
           <span className="flex-none text-muted-foreground/60">·</span>
-          <span className="min-w-0 truncate text-muted-foreground">{goingCount} going</span>
+          <span className="min-w-0 truncate text-muted-foreground">{goingCount}<PublicText text={" going"} /></span>
         </>
       ) : null}
     </div>

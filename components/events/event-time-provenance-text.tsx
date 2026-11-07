@@ -1,3 +1,5 @@
+
+import { LocalizedElement } from "@/components/i18n/public-text";
 import {
   UNKNOWN_EVENT_TIME_LABEL,
   getDisplayEventTime,
@@ -6,6 +8,7 @@ import {
   type EventTimeProvenanceFields,
 } from "@/lib/events/event-time";
 import { cn } from "@/lib/utils";
+import { PublicText } from "@/components/i18n/public-text";
 
 type EventTimeProvenanceTextProps = EventTimeProvenanceFields & {
   className?: string;
@@ -34,7 +37,7 @@ export function EventTimeProvenanceText({
         className={cn("text-xs leading-4 text-muted-foreground", className)}
         data-event-time-provenance="unknown"
       >
-        {UNKNOWN_EVENT_TIME_LABEL}
+        <PublicText text={UNKNOWN_EVENT_TIME_LABEL} />
       </p>
     );
   }
@@ -46,7 +49,7 @@ export function EventTimeProvenanceText({
       : null;
 
   return (
-    <p
+    <LocalizedElement as="p"
       className={cn("min-w-0 truncate text-xs leading-4 text-muted-foreground", className)}
       data-event-time-provenance={provenance.status}
       title={
@@ -59,14 +62,14 @@ export function EventTimeProvenanceText({
           .join(" · ")
       }
     >
-      <span>{provenanceLabel}</span>
+      <span><PublicText text={provenanceLabel} /></span>
       {confidenceLabel ? <span> · {confidenceLabel}</span> : null}
       {provenance.evidenceText ? (
         <span>
-          {" · Evidence: "}
+          <PublicText text={" · Evidence: "} />
           <q>{provenance.evidenceText}</q>
         </span>
       ) : null}
-    </p>
+    </LocalizedElement>
   );
 }

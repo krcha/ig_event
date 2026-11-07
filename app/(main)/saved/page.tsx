@@ -1,3 +1,5 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import { SITE_COPY } from "@/lib/i18n/seo";
 import type { Metadata } from "next";
 import { auth } from "@clerk/nextjs/server";
 import type { FunctionReference } from "convex/server";
@@ -13,10 +15,10 @@ import { hasClerkEnv } from "@/lib/utils/env";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-export const metadata: Metadata = {
-  title: "Saved events and venues",
-  robots: { index: false, follow: false },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMetadataLocale();
+  return { title: SITE_COPY[locale].savedTitle, robots: { index: false, follow: false } };
+}
 
 type LibraryResult = {
   favoriteVenueIds: string[];

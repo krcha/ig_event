@@ -66,6 +66,8 @@ runInNewContext(code, {
     if (name === "react") return react;
     if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
     if (name === "next/navigation") return { usePathname: () => new URL(href).pathname, useSearchParams: () => new URL(href).searchParams };
+    if (name === "@/i18n/client") return { useLocale: () => "sr" };
+    if (name === "@/lib/i18n/account-messages") return { accountText: () => "Učitavanje…" };
     throw new Error(`Unexpected dependency ${name}`);
   },
 });

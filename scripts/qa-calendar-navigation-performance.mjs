@@ -27,10 +27,25 @@ import * as compressedJson from "../lib/http/compressed-json.ts";
 
 import * as agendaSort from "../lib/events/agenda-sort.ts";
 import * as agendaOptions from "../lib/events/agenda-sort-options.ts";
+import * as localeConfig from "../i18n/config.ts";
+import * as publicDisplay from "../lib/i18n/display.ts";
+import * as localizedSeo from "../lib/i18n/seo.ts";
+import { publicText } from "../lib/i18n/public-messages.ts";
 
 const require = createRequire(import.meta.url);
 const jsx = (type, props, key) => type?.qaRender ? type(props) : ({ type, props: props ?? {}, key });
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
+let pageLocale = "sr";
+const localizedComponents = new Proxy({
+  PublicText: Object.assign(({ text }) => publicText(pageLocale, text), { qaRender: true }),
+  LocalizedLink: Object.assign(({ href, ...props }) => jsx("link", { ...props, href: localeConfig.localizeHref(href, pageLocale) }), { qaRender: true }),
+  LocalizedElement: Object.assign(({ as = "span", ...props }) => {
+    for (const attribute of ["aria-label", "title", "placeholder", "alt"]) {
+      if (typeof props[attribute] === "string") props[attribute] = publicText(pageLocale, props[attribute]);
+    }
+    return jsx(as, props);
+  }, { qaRender: true }),
+}, { get: (target, name) => name in target ? target[name] : components[name] });
 function compile(file, mocks) {
   const output = ts.transpileModule(readFileSync(file, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
@@ -39,6 +54,11 @@ function compile(file, mocks) {
   new Function("require", "exports", "module", output)(name => {
     if (name in mocks) return mocks[name];
     if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
+    if (name === "@/i18n/server") return { getLocale: async () => pageLocale };
+    if (name === "@/i18n/config") return localeConfig;
+    if (name === "@/lib/i18n/display") return publicDisplay;
+    if (name === "@/lib/i18n/seo") return localizedSeo;
+    if (name === "@/components/i18n/public-text") return localizedComponents;
     if (name === "lucide-react" || name.startsWith("@/components/") || name.startsWith("./calendar-") || name === "./event-kind-toggle-chips" || name === "./open-now-filter") return components;
     if (name === "next/image") return { __esModule: true, default: "image" };
     if (name.endsWith(".png")) return { __esModule: true, default: {src:"/skyline.png",width:2170,height:725} };
@@ -190,9 +210,10 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
 }
 
 let dayReads = 0;
+const dayReadWindows = [];
 let pageEvents = events;
 const page = compile("app/(main)/events-browse-page.tsx", {
-  "@/lib/events/public-events": { loadPublicCalendarEventsWindow: async () => { dayReads++; return { events: pageEvents }; }, parseNormalizedEventDate: nightlife.parseDateKeyToUtcNoon },
+  "@/lib/events/public-events": { loadPublicCalendarEventsWindow: async window => { dayReads++; dayReadWindows.push(window); return { events: pageEvents }; }, parseNormalizedEventDate: nightlife.parseDateKeyToUtcNoon },
   "@/components/events/event-meta": { getEventCategoryKind: categories.getEventPrimaryCategory },
   "@/lib/events/calendar-agenda-projection": projection,
   "@/lib/events/calendar-venue-selection": { resolveCalendarVenueSelection: async requested => ({ value: requested }) },
@@ -212,6 +233,25 @@ const agendas = nodes(tree, node => node.type === "CalendarAgenda");
 assert.equal(agendas.length, 1);
 assert.equal(agendas[0].props.events.length, 8);
 assert.ok(!JSON.stringify(agendas[0].props.events).includes("private-sized-hours-data"));
+const canonicalAgenda = JSON.stringify(agendas[0].props.events);
+for (const locale of localeConfig.LOCALES) {
+  pageLocale = locale;
+  const readsBefore = dayReads;
+  const localizedTree = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31" }) });
+  assert.equal(dayReads - readsBefore, 1, "Each locale must render with the same single bounded day read, without month reads or translation fetches.");
+  assert.deepEqual(dayReadWindows.at(-1), { fromDate: "2026-10-31", beforeDate: "2026-11-01" }, "Locale must not alter the exclusive selected-day backend window.");
+  const heading = nodes(localizedTree, node => node.props?.id === "events-heading")[0];
+  assert.equal(heading.props.lang, localeConfig.LOCALE_LANGUAGE_TAGS[locale]);
+  assert.equal(heading.props.children, publicDisplay.publicDayHeading(locale, "2026-10-31", nightlife.getNightlifeDefaultDateKey(new Date())));
+  const agenda = nodes(localizedTree, node => node.type === "CalendarAgenda")[0];
+  assert.equal(JSON.stringify(agenda.props.events), canonicalAgenda, "Language projection must leave event identity, source metadata, timing, categories and payload size unchanged.");
+  assert.equal(agenda.props.dayLabel, publicDisplay.formatPublicDate(locale, "2026-10-31", { weekday: "short", month: "short", day: "numeric" }));
+  assert.equal(localeConfig.getLocaleFromPath(agenda.props.openNowHref), locale);
+  assert.ok(!JSON.stringify(localizedTree).includes("private-sized-hours-data"));
+  const discover = nodes(localizedTree, node => node.type === "link" && node.props.href === localeConfig.localizeHref("/discover", locale));
+  assert.equal(discover.length, 1, "The locale fixture must execute localized links rather than silently rendering inert component placeholders.");
+}
+pageLocale = "sr";
 for (const link of nodes(tree, node => node.type === "link" && node.props.href?.startsWith("/?"))) {
   assert.equal(link.props["data-calendar-client-navigation"], "true", "Calendar date/filter links must opt out of the global document-reload handler.");
 }
@@ -294,6 +334,16 @@ const home = compile("app/page.tsx", {
   react: { Suspense: "suspense" }, "./(main)/events-browse-page": { __esModule: true, default: "DayPage" },
   "@/lib/seo/site": seo,
 });
+for (const locale of localeConfig.LOCALES) {
+  pageLocale = locale;
+  const metadata = await home.generateMetadata({ searchParams: Promise.resolve({}) });
+  assert.equal(metadata.alternates.canonical, localizedSeo.localizedAbsoluteUrl("/", locale));
+  assert.equal(metadata.title.absolute, `${localizedSeo.SITE_COPY[locale].homeTitle} | Event Zeka`);
+  assert.equal(metadata.robots.index, true);
+  const filteredMetadata = await home.generateMetadata({ searchParams: Promise.resolve({ day: "2026-10-31" }) });
+  assert.equal(filteredMetadata.robots.index, false, "Filtered calendar pages must remain noindex in every language.");
+}
+pageLocale = "sr";
 const firstDay = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-30" }) });
 const secondDay = await home.default({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31" }) });
 assert.notEqual(firstDay.key, secondDay.key, "Transitions must show the new day's loading boundary instead of retaining a stale list.");

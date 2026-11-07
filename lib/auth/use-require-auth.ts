@@ -2,12 +2,15 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback } from "react";
+import { useLocale } from "@/i18n/client";
+import { localizeHref } from "@/i18n/config";
 
 type RunAuthenticatedActionOptions = {
   action: () => void | Promise<void>;
 };
 
 export function useRequireAuth() {
+  const locale = useLocale();
   const { isLoaded, isSignedIn, userId } = useAuth();
 
   const redirectToSignIn = useCallback(() => {
@@ -15,8 +18,8 @@ export function useRequireAuth() {
       typeof window === "undefined"
         ? "/"
         : `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    window.location.assign(`/sign-in?redirect_url=${encodeURIComponent(currentPath)}`);
-  }, []);
+    window.location.assign(`${localizeHref("/sign-in", locale)}?redirect_url=${encodeURIComponent(currentPath)}`);
+  }, [locale]);
 
   const requireAuth = useCallback(
     () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import nextConfig from "../next.config.mjs";
+import ts from "typescript";
 import "./qa-mobile-navigation.mjs";
 import "./qa-navigation-feedback.mjs";
 
@@ -18,6 +19,12 @@ const profileAvatarSource = readFileSync(
   "utf8",
 );
 const redirects = await nextConfig.redirects();
+const accountMessageModule = { exports: {} };
+new Function("exports", ts.transpileModule(
+  readFileSync("lib/i18n/account-messages.ts", "utf8"),
+  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+).outputText)(accountMessageModule.exports);
+const { accountText } = accountMessageModule.exports;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -61,7 +68,7 @@ assert.ok(
   "Desktop header should render the Event Zeka lockup and tagline.",
 );
 assert.equal(
-  [...source.matchAll(/aria-label="Event Zeka home"/g)].length,
+  [...source.matchAll(/aria-label=\{accountText\(locale, "nav\.homeA11y"\)\}/g)].length,
   2,
   "Mobile and desktop brand links should have an accessible Event Zeka home label.",
 );
@@ -72,17 +79,17 @@ assert.ok(
 );
 
 assert.ok(
-  profileAvatarSource.includes('aria-label="Your profile"'),
+  profileAvatarSource.includes('aria-label={accountText(locale, "nav.profile")}'),
   "Mobile top header should include a profile avatar link.",
 );
 
 assert.ok(
-  profileAvatarSource.includes('href="/you"'),
+  profileAvatarSource.includes('href={localizeHref("/you", locale)}'),
   "Shared profile avatar should link to /you.",
 );
 
 assert.ok(
-  profileAvatarSource.includes('title="Your profile"'),
+  profileAvatarSource.includes('title={accountText(locale, "nav.profile")}'),
   "Shared profile avatar should expose a title for desktop hover context.",
 );
 
@@ -142,7 +149,7 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
   ["Events", "Discover", "Map", "Saved"],
-  "Public navigation tabs should remain exactly Events, Discover, Map, Saved.",
+  "Internal navigation keys retain Events, Discover, Map, Saved before localized presentation.",
 );
 
 for (const { href, label } of [
@@ -183,9 +190,28 @@ assert.match(
   "Venue directory and detail pages should retain the active Map navigation tab.",
 );
 assert.ok(
-  source.includes('aria-label="Global"') && source.includes('aria-label="Mobile navigation"'),
+  source.includes('aria-label={accountText(locale, "nav.global")}') &&
+    source.includes('aria-label={accountText(locale, "nav.mobile")}'),
   "Desktop and mobile primary navigation should retain accessible names.",
 );
+assert.match(source, /const pathname = stripLocalePrefix\(visiblePathname\)/u,
+  "Active tabs must compare canonical route kinds in all three locale URLs.");
+assert.equal([...source.matchAll(/<LanguageSwitcher \/>/gu)].length, 2,
+  "Both headers must offer language selection.");
+assert.ok(mobileTopbarSource.includes("<InstagramFollowLink compact />") &&
+  desktopHeaderSource.includes("<InstagramFollowLink />"),
+  "Language selection must retain the existing Instagram Follow link in both headers.");
+assert.ok(source.includes("href={SITE_INSTAGRAM_URL}") && source.includes('target="_blank"') &&
+  source.includes('rel="noopener noreferrer"') && source.includes("<span>Follow</span>"),
+  "Instagram remains an explicit Follow action to the unchanged official profile.");
+for (const locale of ["sr", "en", "ru"]) {
+  for (const key of ["nav.events", "nav.discover", "nav.map", "nav.saved", "nav.profile", "nav.homeA11y", "nav.global", "nav.mobile", "nav.instagramA11y"]) {
+    assert.ok(accountText(locale, key).trim(), `${locale} navigation must translate ${key}.`);
+  }
+}
+assert.equal(accountText("en", "nav.profile"), "Your profile");
+assert.equal(accountText("sr", "nav.profile"), "Tvoj profil");
+assert.equal(accountText("ru", "nav.profile"), "Ваш профиль");
 assert.ok(
   source.includes('aria-current={active ? "page" : undefined}'),
   "Primary navigation links should expose the active destination with aria-current.",

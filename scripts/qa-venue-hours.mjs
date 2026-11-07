@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import ts from "typescript";
+import { loadPublicTextFixture } from "./qa-support/public-text-fixture.mjs";
 
 import {
   TBD_EVENT_TIME,
@@ -90,6 +92,8 @@ function createHoursJson(day) {
     "A verified closure does not require fabricated opening hours or a provider schedule.");
 
   // Render the shipped hours component with a fixed clock and real React markup.
+  let locale = "en";
+  const publicTextComponents = loadPublicTextFixture({ react: React, jsx: jsxRuntime.jsx, getLocale: () => locale });
   const componentModule = { exports: {} };
   const compiled = ts.transpileModule(readFileSync("components/venues/venue-weekly-hours.tsx", "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
@@ -98,6 +102,7 @@ function createHoursJson(day) {
     exports: componentModule.exports,
     require: (name) => {
       if (name === "react/jsx-runtime") return jsxRuntime;
+      if (name === "@/components/i18n/public-text") return publicTextComponents;
       if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
       if (name === "@/lib/venues/venue-hours-cache") return {
         BELGRADE_TIMEZONE, parseVenueHoursJson, formatVenueHoursWindow,
@@ -125,6 +130,25 @@ function createHoursJson(day) {
     "Closure-only records must not display seven invented closed/unknown weekdays.");
   assert.doesNotMatch(render(withProof({ ...proof, verified: false })), /Temporarily closed|Status source/,
     "Disputed Google closures must not be presented as verified closures.");
+  const localizedSchedule = {
+    ...regular,
+    weekly: [...regular.weekly, { closed: true, day: 1, windows: [] }],
+    raw: { operatingStatus: proof, sourceUrls: ["https://www.instagram.com/venue/hours/"] },
+  };
+  for (const [language, heading, status, source, schedule, unknown, closed, hoursSource] of [
+    ["sr", "Radno vreme", "Privremeno zatvoreno", "Izvor statusa", "Redovno nedeljno radno vreme", "Nije dostupno", "Zatvoreno", "Izvor radnog vremena"],
+    ["en", "Hours", "Temporarily closed", "Status source", "Regular weekly schedule", "Not available", "Closed", "Hours source"],
+    ["ru", "Часы работы", "Временно закрыто", "Источник статуса", "Обычное расписание на неделю", "Недоступно", "Закрыто", "Источник часов работы"],
+  ]) {
+    locale = language;
+    const markup = render(localizedSchedule);
+    assert.ok(markup.includes(`>${heading}</h3>`), `${language}: hours heading is localized.`);
+    for (const label of [status, source, schedule, unknown, closed, hoursSource]) assert.ok(markup.includes(label), `${language}: ${label}`);
+    assert.match(markup, /10:00–22:00/u, `${language}: source opening hours remain unchanged.`);
+    assert.match(markup, /href="https:\/\/www\.instagram\.com\/venue\/"/u, `${language}: source URL remains unchanged.`);
+    assert.equal((markup.match(/<dt /gu) ?? []).length, 7, `${language}: the same seven weekdays remain visible.`);
+    assert.doesNotMatch(render(noSchedule), /<dl/u, `${language}: closure-only evidence must not invent a schedule.`);
+  }
 }
 
 function jsonResponse(value) {

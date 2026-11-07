@@ -8,6 +8,7 @@ import {
 } from "../lib/venues/public-venue-directory-pagination.ts";
 import { loadPublicEventDetailData } from "../lib/events/public-event-detail-data.ts";
 import { getPublicReviewedSourceUpdate } from "../lib/events/reviewed-source-update.ts";
+import { getLocalizedEventDescription } from "../lib/i18n/event-content.ts";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -119,9 +120,36 @@ assert.match(
 );
 assert.match(
   eventDetailSource,
-  /const whatToKnowText = event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\) \|\| "";/,
+  /const preferredText = event\.sourceCaption\?\.trim\(\) \|\| event\.description\?\.trim\(\) \|\| "";/,
   "Event detail What to know text should prefer the exact scraped Instagram caption over generated descriptions.",
 );
+assert.match(
+  eventDetailSource,
+  /const localizedDescription = getLocalizedEventDescription\(\{ \.\.\.event, description: preferredText \}, locale\);\s*const whatToKnowText = localizedDescription\.text;/,
+  "Locale projection must operate on an event copy after source selection, leaving canonical description and classification inputs intact.",
+);
+const preferredExpression = eventDetailSource.match(/const preferredText = ([^;]+);/)[1];
+const selectPreferredText = new Function("event", `return ${preferredExpression};`);
+const eventIdentity = { title: "Source-bound event", venue: "Original venue", artists: Object.freeze(["Original Artist"]), eventType: "club" };
+for (const locale of ["sr", "en", "ru"]) {
+  for (const [sourceCaption, description, expected] of [
+    ["  Exact original Instagram caption.  ", "Generated event summary.", "Exact original Instagram caption."],
+    [" \n ", "  Original detailed event description.  ", "Original detailed event description."],
+  ]) {
+    const source = Object.freeze({ ...eventIdentity, sourceCaption, description });
+    const snapshot = JSON.stringify(source);
+    const preferred = selectPreferredText(source);
+    assert.equal(preferred, expected, "The actual page selection must preserve caption precedence, trim only whitespace, and fall back to description.");
+    assert.deepEqual(getLocalizedEventDescription({ ...source, description: preferred }, locale), { text: expected, original: true }, "Unique original source prose must remain exact in every language.");
+    assert.equal(JSON.stringify(source), snapshot, "Display projection must not mutate source data.");
+  }
+  const generated = Object.freeze({ ...eventIdentity, description: "Event with Original Artist at Original venue." });
+  const snapshot = JSON.stringify(generated);
+  const projected = getLocalizedEventDescription({ ...generated, description: selectPreferredText(generated) }, locale);
+  assert.equal(projected.original, false, "Recognized generated identity summaries may receive display-only translations.");
+  for (const identity of [generated.venue, ...generated.artists]) assert.ok(projected.text.includes(identity));
+  assert.equal(JSON.stringify(generated), snapshot, "A translated summary must not alter canonical ingestion or search data.");
+}
 
 const originalInstagramPostUrl = "https://www.instagram.com/p/Ddi7AbOtCTO/";
 const directInstagramPostUrl = "https://www.instagram.com/p/Ddo4DGsNlYf/";
@@ -463,13 +491,18 @@ assertDoesNotInclude(
 );
 assert.match(
   middlewareSource,
-  /matcher:\s*\["\/admin\/:path\*", "\/api\/admin\/:path\*", "\/saved\/:path\*", "\/api\/user\/:path\*"\]/,
-  "Clerk middleware should stay scoped to auth-backed routes so public browsing avoids auth overhead.",
+  /if \(isAdminRoute\(req\)\) \{\s*await auth\.protect\(\);\s*\}\s*return localizedPageResponse\(req\);/,
+  "Public locale headers must not require protected authentication; only admin routes invoke Clerk protection.",
 );
-assertDoesNotInclude(
+assert.match(
   middlewareSource,
-  '/((?!.*\\\\..*|_next).*)',
-  "Clerk middleware should not match every public page.",
+  /if \(!hasClerkConfig\) \{[\s\S]*?return localizedPageResponse\(req\);/,
+  "Unconfigured public browsing must apply URL locale headers without dispatching Clerk middleware.",
+);
+assert.match(
+  middlewareSource,
+  /"\/\(\(\?!api\|_next\|fonts\|images\|\.\*\\\\\.\.\*\)\.\*\)"/,
+  "The general locale matcher must exclude operational API, framework and asset requests.",
 );
 assert.match(
   nextConfigSource,

@@ -1,6 +1,13 @@
 "use client";
+import { LocalizedElement } from "@/components/i18n/public-text";
 
-import { usePathname, useRouter } from "next/navigation";
+import { PublicText } from "@/components/i18n/public-text";
+import { getLocaleFromPath } from "@/i18n/config";
+import { formatEventCount } from "@/lib/i18n/display";
+
+
+import { usePathname } from "next/navigation";
+import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { EVENT_CATEGORY_TONES, type EventCategoryKind } from "@/components/events/event-meta";
 import {
@@ -42,7 +49,7 @@ function formatHiddenCategories(categories: readonly EventCategoryKind[]): strin
 }
 
 function pluralize(value: number): string {
-  return `${value} ${value === 1 ? "event" : "events"}`;
+  return formatEventCount(getLocaleFromPath(window.location.pathname), value);
 }
 
 function getCurrentRelativeUrl(): string {
@@ -352,7 +359,7 @@ export function EventKindToggleChips({
 
   return (
     <div className="mt-1.5 flex items-center gap-1.5" data-calendar-mobile-filter-chips="true" data-calendar-category-selection={singleSelection ? "single" : "multiple"}>
-      <nav
+      <LocalizedElement as="nav"
         aria-label={afterAll ? "Selected day filters" : "Selected day categories"}
         className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
@@ -376,7 +383,7 @@ export function EventKindToggleChips({
                 onClick={() => setHiddenCategoriesAndUrl([])}
                 type="button"
               >
-                {appearance === "tabs" ? "Sve" : chip.label}
+                <PublicText text={appearance === "tabs" ? "Sve" : chip.label} />
               </button>
             );
             return afterAll ? [allChip, <span className="contents" key="after-all">{afterAll}</span>] : [allChip];
@@ -405,16 +412,14 @@ export function EventKindToggleChips({
               type="button"
             >
               {singleSelection ? <span aria-hidden="true" className="mr-1.5 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: isActive ? "currentColor" : tone.color }} /> : null}
-              <span className={!singleSelection && isHidden ? "line-through" : undefined}>{appearance === "tabs" ? ({club:"Žurke",live:"Live/Svirke",culture:"Kultura",event:"Ostalo"}[category]) : chip.label}</span>
+              <span className={!singleSelection && isHidden ? "line-through" : undefined}><PublicText text={appearance === "tabs" ? ({club:"Žurke",live:"Live/Svirke",culture:"Kultura",event:"Ostalo"}[category]) : chip.label} /></span>
               {!singleSelection && isHidden ? (
-                <span aria-hidden="true" className="ml-1 text-[10px] opacity-80">
-                  off
-                </span>
+                <span aria-hidden="true" className="ml-1 text-[10px] opacity-80"><PublicText text={"off"} /></span>
               ) : null}
             </button>
           );
         })}
-      </nav>
+      </LocalizedElement>
       {children}
     </div>
   );

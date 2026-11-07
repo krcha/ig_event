@@ -1,8 +1,9 @@
 "use client";
 
-import Link from "next/link";
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
+import { stripLocalePrefix } from "@/i18n/config";
 import { useEffect, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 const CALENDAR_SCROLL_KEY_PREFIX = "ig-event:calendar-scroll:";
 const CALENDAR_RETURN_URL_STORAGE_KEY = "ig-event:calendar-return-url";
@@ -69,7 +70,8 @@ function normalizeCalendarHref(value: string | null | undefined): string | null 
     return null;
   }
 
-  if (url.pathname !== "/" && url.pathname !== "/calendar" && url.pathname !== "/events") {
+  const pathname = stripLocalePrefix(url.pathname);
+  if (pathname !== "/" && pathname !== "/calendar" && pathname !== "/events") {
     return null;
   }
 
@@ -78,7 +80,7 @@ function normalizeCalendarHref(value: string | null | undefined): string | null 
 
 function normalizeEventPath(value: string | null | undefined): string | null {
   const url = normalizeSameOriginUrl(value);
-  if (!url || !url.pathname.startsWith("/events/")) {
+  if (!url || !stripLocalePrefix(url.pathname).startsWith("/events/")) {
     return null;
   }
 
@@ -298,7 +300,7 @@ export function EventCalendarBackLink({ children, className, href }: EventCalend
     setResolvedHref(storedHref);
   }, [href]);
 
-  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+  function handleClick() {
     const storage = getSessionStorage();
     if (!storage) {
       return;

@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { EventZekaBrand } from "@/components/brand/event-zeka-brand";
 import { ProfileAvatarLink } from "@/components/navigation/profile-avatar-link";
+import { LanguageSwitcher } from "@/components/navigation/language-switcher";
+import { useLocale } from "@/i18n/client";
+import { isPublicPagePath, localizeHref, stripLocalePrefix } from "@/i18n/config";
+import { accountText } from "@/lib/i18n/account-messages";
 import { useUserLibrary } from "@/components/providers/user-library-provider";
 import { SITE_INSTAGRAM_URL } from "@/lib/seo/site";
 import { canPrefetchMobileNavigation, getMobileNavigationHref } from "@/lib/navigation/mobile-navigation";
@@ -113,14 +117,16 @@ type AppToolbarProps = {
 };
 
 function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
+  const locale = useLocale();
   return (
     <a
-      aria-label="Follow @eventzeka on Instagram (opens in a new tab)"
+      aria-label={accountText(locale, "nav.instagramA11y")}
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-md text-xs font-medium text-foreground/80 hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
-        compact ? "min-h-9 px-1.5" : "min-h-10 px-2",
+        compact ? "min-h-11 px-0.5" : "min-h-11 px-2",
       )}
       href={SITE_INSTAGRAM_URL}
+      data-instagram-follow
       rel="noopener noreferrer"
       target="_blank"
       title="Follow @eventzeka on Instagram"
@@ -132,7 +138,10 @@ function InstagramFollowLink({ compact = false }: { compact?: boolean }) {
 }
 
 export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
-  const pathname = usePathname();
+  const locale = useLocale();
+  const visiblePathname = usePathname();
+  const pathname = stripLocalePrefix(visiblePathname);
+  const showLocaleSwitcher = isPublicPagePath(pathname);
   const router = useRouter();
   const searchParams = useSearchParams();
   const { upcomingSavedEventCount } = useUserLibrary();
@@ -141,7 +150,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const intentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetched = useRef(new Map<string, number>());
-  const routeKey = `${pathname}?${searchParams.toString()}`;
+  const routeKey = `${visiblePathname}?${searchParams.toString()}`;
   const desktopToolbarItems = showAdminNavigation
     ? [...PUBLIC_TOOLBAR_ITEMS, ...ADMIN_TOOLBAR_ITEMS]
     : PUBLIC_TOOLBAR_ITEMS;
@@ -152,7 +161,11 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     pathname === "/events" || pathname === "/discover";
   const selectedDate = searchParams.get("day") || searchParams.get("date");
   function mobileHref(item: ToolbarItem): string {
-    return getMobileNavigationHref(item.href, selectedDate);
+    return localizeHref(getMobileNavigationHref(item.href, selectedDate), locale);
+  }
+  function itemLabel(item: ToolbarItem): string {
+    const key = ({ Events: "nav.events", Discover: "nav.discover", Map: "nav.map", Saved: "nav.saved" } as const)[item.label as "Events" | "Discover" | "Map" | "Saved"];
+    return key ? accountText(locale, key) : item.label;
   }
   function cancelIntent() {
     if (intentTimer.current) clearTimeout(intentTimer.current);
@@ -173,7 +186,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     cancelIntent();
-    if (href === `${pathname}${searchParams.size ? `?${searchParams}` : ""}`) return;
+    if (href === `${visiblePathname}${searchParams.size ? `?${searchParams}` : ""}`) return;
     setPendingHref(href);
     startNavigation(() => router.push(href));
   }
@@ -214,11 +227,12 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
       <div className={cn("mobile-topbar", mobileHeaderScrolls && "mobile-topbar-scrolling")}>
         <div className="app-mobile-header">
           <div className="flex items-center justify-between gap-3">
-            <Link aria-label="Event Zeka home" className="inline-flex min-w-0" href="/">
+            <Link aria-label={accountText(locale, "nav.homeA11y")} className="inline-flex min-w-0" href={localizeHref("/", locale)}>
               <EventZekaBrand compact />
             </Link>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1">
               <InstagramFollowLink compact />
+              {showLocaleSwitcher ? <LanguageSwitcher /> : null}
               <ProfileAvatarLink />
             </div>
           </div>
@@ -234,12 +248,12 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
         <div className="app-header-width">
           <div className="app-desktop-panel">
             <div className="app-header-row">
-              <Link aria-label="Event Zeka home" className="inline-flex w-fit" href="/">
+              <Link aria-label={accountText(locale, "nav.homeA11y")} className="inline-flex w-fit" href={localizeHref("/", locale)}>
                 <EventZekaBrand showTagline />
               </Link>
               <div className="app-header-controls">
                 <nav
-                  aria-label="Global"
+                  aria-label={accountText(locale, "nav.global")}
                   className="flex flex-wrap items-center gap-1.5"
                 >
                   {desktopToolbarItems.map((item) => {
@@ -256,7 +270,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                             ? "border-primary/30 bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                             : "border-border/75 bg-background/86 text-foreground hover:border-primary/35 hover:bg-card",
                         )}
-                        href={item.href}
+                        href={localizeHref(item.href, locale)}
                         key={item.href}
                         data-global-navigation="document"
                       >
@@ -268,7 +282,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                             </span>
                           ) : null}
                         </span>
-                        <span>{item.label}</span>
+                        <span>{itemLabel(item)}</span>
                       </a>
                     );
                   })}
@@ -276,6 +290,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                 <div className="ml-1 border-l border-border pl-2">
                   <InstagramFollowLink />
                 </div>
+                {showLocaleSwitcher ? <LanguageSwitcher /> : null}
                 <ProfileAvatarLink isActive={pathname === "/you"} variant="desktop" />
               </div>
             </div>
@@ -283,7 +298,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
         </div>
       </header>
 
-      <nav className="mobile-nav-shell" aria-label="Mobile navigation">
+      <nav className="mobile-nav-shell" aria-label={accountText(locale, "nav.mobile")}>
         <div className="glass-panel bg-card/95 px-2 py-2 shadow-[0_-18px_48px_-34px_rgba(15,23,42,0.45)]">
           <div className="flex w-full items-center gap-1 overflow-hidden">
             {mobileToolbarItems.map((item) => {
@@ -291,7 +306,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
               const active = isActivePath(pathname, item);
               const href = mobileHref(item);
               const pending = pendingHref === href;
-              const selected = pendingHref ? isActivePath(pendingHref.split("?")[0], item) : active;
+              const selected = pendingHref ? isActivePath(stripLocalePrefix(pendingHref.split("?")[0]), item) : active;
               const badgeCount = getBadgeCount(item);
 
               return (
@@ -299,7 +314,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   aria-current={active ? "page" : undefined}
                   aria-busy={pending || undefined}
                   className={cn(
-                    "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-2 py-2 text-[11px] font-semibold",
+                    "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-0.5 py-2 text-[11px] font-semibold",
                     selected
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
@@ -331,14 +346,14 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       </span>
                     ) : null}
                   </span>
-                  <span className="max-w-full truncate">{item.label}</span>
+                  <span className="max-w-full truncate">{itemLabel(item)}</span>
                 </Link>
               );
             })}
           </div>
         </div>
       </nav>
-      <span className="sr-only" role="status" aria-live="polite">{pendingHref ? `Loading ${mobileToolbarItems.find(item => mobileHref(item) === pendingHref)?.label ?? "page"}` : ""}</span>
+      <span className="sr-only" role="status" aria-live="polite">{pendingHref ? accountText(locale, "nav.loading", { page: itemLabel(mobileToolbarItems.find(item => mobileHref(item) === pendingHref) ?? PUBLIC_TOOLBAR_ITEMS[0]) }) : ""}</span>
     </>
   );
 }

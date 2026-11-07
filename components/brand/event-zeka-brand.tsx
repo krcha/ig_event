@@ -1,4 +1,7 @@
+"use client";
+
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/i18n/client";
 
 export function EventZekaMark({ className }: { className?: string }) {
   return (
@@ -25,6 +28,7 @@ export function EventZekaBrand({
   compact?: boolean;
   showTagline?: boolean;
 }) {
+  const locale = useLocale();
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <span
@@ -38,7 +42,7 @@ export function EventZekaBrand({
       </span>
       {showTagline ? (
         <span className="brand-tagline hidden text-sm font-medium text-muted-foreground lg:inline">
-          Belgrade, happening now
+          {{ sr: "Beograd, upravo sada", en: "Belgrade, happening now", ru: "Белград, прямо сейчас" }[locale]}
         </span>
       ) : null}
     </span>

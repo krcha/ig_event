@@ -122,6 +122,12 @@ assert.match(
   /authorizedParties/,
   "Clerk middleware should verify configured authorized parties.",
 );
+assert.match(middlewareSource, /requestHeaders\.delete\(LOCALE_HEADER\)/u,
+  "Middleware must discard externally supplied locale headers before URL-bound SSR.");
+assert.match(middlewareSource, /requestHeaders\.set\(LOCALE_HEADER, resolution\.locale\)/u,
+  "Request locale must be validated from the visible URL, not environment or cookies.");
+assert.ok(!read("i18n/server.ts").includes("process.env"),
+  "Page language must not become a process-global environment setting.");
 assert.match(
   envUtilsSource,
   /Missing required production environment variable/,

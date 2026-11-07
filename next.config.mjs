@@ -92,7 +92,32 @@ const nextConfig = {
         destination: "/",
         permanent: true,
       },
+      ...["en", "ru"].flatMap((locale) => [
+        { source: `/${locale}/calendar`, destination: `/${locale}`, permanent: true },
+        { source: `/${locale}/events`, destination: `/${locale}`, permanent: true },
+        {
+          source: `/${locale}/venues`,
+          destination: `/${locale}/map?view=calendar`,
+          permanent: true,
+        },
+      ]),
     ];
+  },
+  async rewrites() {
+    return {
+      beforeFiles: ["en", "ru"].flatMap((locale) => [
+        { source: `/${locale}`, destination: "/" },
+        ...["discover", "map", "saved", "you", "install", "venues/directory"].map((page) => ({
+          source: `/${locale}/${page}`, destination: `/${page}`,
+        })),
+        { source: `/${locale}/events/:eventId`, destination: "/events/:eventId" },
+        { source: `/${locale}/venues/:venueId`, destination: "/venues/:venueId" },
+        { source: `/${locale}/sign-in/:path*`, destination: "/sign-in/:path*" },
+        { source: `/${locale}/sign-up/:path*`, destination: "/sign-up/:path*" },
+      ]),
+      afterFiles: [],
+      fallback: [],
+    };
   },
   images: {
     remotePatterns: [

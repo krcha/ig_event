@@ -1,4 +1,8 @@
 "use client";
+import { PublicText } from "@/components/i18n/public-text";
+
+import { LocalizedElement } from "@/components/i18n/public-text";
+
 
 import { Bookmark } from "lucide-react";
 import { useState } from "react";
@@ -49,7 +53,7 @@ export function SaveEventButton({
 
   return (
     <span className={cn("inline-flex flex-col items-stretch gap-1", className)}>
-      <button
+      <LocalizedElement as="button"
         aria-label={label}
         aria-pressed={isSaved}
         className={cn(
@@ -73,9 +77,9 @@ export function SaveEventButton({
       >
         <Bookmark className={cn("h-4 w-4", isSaved ? "fill-[#D5F56B] text-[#D5F56B]" : "fill-transparent")} />
         {variant === "full" ? <span>{displayLabel}</span> : null}
-      </button>
+      </LocalizedElement>
       {error ? (
-        <span role="status" className={variant === "icon" ? "sr-only" : "text-xs leading-5 text-destructive"}>{error}</span>
+        <span role="status" className={variant === "icon" ? "sr-only" : "text-xs leading-5 text-destructive"}><PublicText text={error} /></span>
       ) : null}
     </span>
   );

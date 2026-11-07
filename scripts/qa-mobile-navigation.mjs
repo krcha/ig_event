@@ -4,10 +4,10 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 function load(path, imports) {
-  const module = {exports:{}};
+  const vmModule = {exports:{}};
   const code = ts.transpileModule(readFileSync(path,"utf8"), {compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
-  runInNewContext(code, {exports:module.exports,require(name) {if(name in imports)return imports[name];throw Error(`Unexpected dependency: ${name}`);}, URL, Set, Date, Promise});
-  return module.exports;
+  runInNewContext(code, {exports:vmModule.exports,require(name) {if(name in imports)return imports[name];throw Error(`Unexpected dependency: ${name}`);}, URL, Set, Date, Promise});
+  return vmModule.exports;
 }
 const nav=load("lib/navigation/mobile-navigation.ts",{});
 for(const [href,expected] of [["/","/?month=2026-10&day=2026-10-31"],["/discover","/discover?date=2026-10-31"],["/map","/map"],["/saved","/saved?date=2026-10-31"]]) {
@@ -18,12 +18,24 @@ assert.equal(nav.getMobileNavigationHref("/saved","not-a-date"),"/saved");
 assert.equal(nav.getMobileNavigationHref("/admin","2026-10-31"),"/admin");
 for(const href of ["/","/discover?date=2026-10-31","/map?date=2026-10-31"]) assert.equal(nav.canPrefetchMobileNavigation(href),true);
 for(const href of ["/saved","/saved?date=2026-10-31","/admin","/you"]) assert.equal(nav.canPrefetchMobileNavigation(href),false,"Private routes must not be prefetched across account changes.");
+for (const prefix of ["/en", "/ru"]) {
+  assert.equal(nav.getMobileNavigationHref(prefix, "2026-10-31"), `${prefix}?month=2026-10&day=2026-10-31`);
+  assert.equal(nav.getMobileNavigationHref(`${prefix}/discover`, "2026-10-31"), `${prefix}/discover?date=2026-10-31`);
+  assert.equal(nav.getMobileNavigationHref(`${prefix}/saved`, "2026-10-31"), `${prefix}/saved?date=2026-10-31`);
+  assert.equal(nav.getMobileNavigationHref(`${prefix}/map`, "2026-10-31"), `${prefix}/map`);
+  for (const page of ["", "/discover", "/map"]) assert.equal(nav.canPrefetchMobileNavigation(`${prefix}${page}`), true);
+  for (const page of ["/saved", "/admin", "/you"]) assert.equal(nav.canPrefetchMobileNavigation(`${prefix}${page}`), false);
+}
 
 let configured=true, identity=null, privateReads=0, venueReads=0, active=0, peak=0, failVenue=false;
 let library={savedEventIds:[],savedEvents:[],favoriteVenueIds:[],favoriteVenues:[]};
 const SavedLibraryPanel="saved-library", SignInPromptCard="sign-in-prompt";
 const jsx=(type,props)=>({type,props});
-const page=load("app/(main)/saved/page.tsx",{
+let metadataLocale = "sr";
+const metadataCopy = { sr: { savedTitle: "Sačuvano" }, en: { savedTitle: "Saved" }, ru: { savedTitle: "Сохранённое" } };
+const pageModule=load("app/(main)/saved/page.tsx",{
+  "@/i18n/server": { getLocale: async () => metadataLocale },
+  "@/lib/i18n/seo": { SITE_COPY: metadataCopy },
   "react/jsx-runtime":{jsx,jsxs:jsx},
   "@clerk/nextjs/server":{auth:async()=>({userId:identity})},
   "@/components/saved/saved-library-panel":{SavedLibraryPanel,SignInPromptCard},
@@ -37,7 +49,15 @@ const page=load("app/(main)/saved/page.tsx",{
     if(failVenue)throw Error("venue unavailable");
     return {upcomingEvents:[{_id:`next-${args.id}`,title:"Next event",date:"2026-11-01",time:"20:00",venue:"Venue",eventType:"live"}]};
   }})},
-}).default;
+});
+const page = pageModule.default;
+for (const locale of ["sr", "en", "ru"]) {
+  metadataLocale = locale;
+  const metadata = await pageModule.generateMetadata();
+  assert.equal(metadata.title, metadataCopy[locale].savedTitle);
+  assert.equal(metadata.robots.index, false);
+  assert.equal(metadata.robots.follow, false);
+}
 const guest=await page({searchParams:Promise.resolve({date:"2026-10-31"})});
 assert.equal(guest.props.children.type,SavedLibraryPanel,"Guests must receive the local Saved library without any private server read.");
 assert.equal(guest.props.children.props.returnPath,"/saved?date=2026-10-31");assert.equal(privateReads,0);assert.equal(venueReads,0);

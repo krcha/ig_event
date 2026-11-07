@@ -34,14 +34,15 @@ const youProfilePath = "components/auth/you-profile-panel.tsx";
 const layoutPath = "app/layout.tsx";
 const layout = requireFile(layoutPath);
 requireIncludes(layoutPath, layout, 'clerkJSVariant="headless"', "headless Clerk core for the custom auth UI");
-requireIncludes(layoutPath, layout, "<AppDocument authEnabled>", "global authenticated provider context");
+requireIncludes(layoutPath, layout, "<AppDocument authEnabled locale={locale}>", "global authenticated provider context with its request locale");
+requireIncludes(layoutPath, layout, "<LocaleProvider locale={locale}>", "the same server-rendered locale for public client components");
 
 const authCard = requireFile(authCardPath);
-requireIncludes(authCardPath, authCard, 'title: "Prijavi se"', "public sign-in heading");
-requireIncludes(authCardPath, authCard, 'title: "Napravi nalog"', "public sign-up heading");
+requireIncludes(authCardPath, authCard, 't(mode === "sign-in" ? "auth.signIn" : "auth.signUp")', "localized public sign-in and sign-up headings");
 requireExcludes(authCardPath, authCard, "Admin access", "admin-only public sign-in wording");
 requireExcludes(authCardPath, authCard, "Clerk account", "auth provider jargon");
-requireIncludes(authCardPath, authCard, "Nazad na događaje", "return to public browsing");
+requireIncludes(authCardPath, authCard, 't("install.backEvents")', "localized return to public browsing");
+requireIncludes(authCardPath, authCard, 'href={localizeHref("/", locale)}', "return to public browsing in the selected language");
 requireIncludes(authCardPath, authCard, 'AUTH_COMPLETE_REDIRECT_PATH = "/"', "root fallback redirect");
 requireIncludes(authCardPath, authCard, "window.location.assign(authCompleteRedirectPath)", "post-auth redirect");
 requireIncludes(authCardPath, authCard, "getSafeRedirectPath", "same-origin post-auth redirect guard");
@@ -62,7 +63,7 @@ requireIncludes(
   "signOutOfOtherSessions: true",
   "password reset session revocation",
 );
-requireIncludes(authCardPath, authCard, "Zaboravljena lozinka?", "password recovery entry point");
+requireIncludes(authCardPath, authCard, 't("auth.forgotPassword")', "localized password recovery entry point");
 requireIncludes(authCardPath, authCard, 'name="email"', "manual email input");
 requireIncludes(authCardPath, authCard, 'type="email"', "email input type");
 requireIncludes(authCardPath, authCard, 'type="password"', "manual password input");
@@ -82,7 +83,8 @@ requireExcludes(authCardPath, authCard, "<SignUp", "Clerk prebuilt sign-up fallb
 requireExcludes(authCardPath, authCard, "<SignIn", "Clerk prebuilt sign-in fallback that can call unsupported social strategies");
 
 const requireAuthHook = requireFile(requireAuthHookPath);
-requireIncludes(requireAuthHookPath, requireAuthHook, "/sign-in?redirect_url=", "custom sign-in redirect");
+requireIncludes(requireAuthHookPath, requireAuthHook, 'localizeHref("/sign-in", locale)', "locale-aware custom sign-in redirect");
+requireIncludes(requireAuthHookPath, requireAuthHook, "encodeURIComponent(currentPath)", "safe retention of the current route, query and fragment after sign-in");
 requireExcludes(requireAuthHookPath, requireAuthHook, "openSignIn", "generic Clerk modal");
 
 const savedLibrary = requireFile(savedLibraryPath);
@@ -104,8 +106,9 @@ const callbackPage = requireFile(callbackPath);
 requireIncludes(callbackPath, callbackPage, "AuthenticateWithRedirectCallback", "Clerk SSO callback component");
 
 const youProfile = requireFile(youProfilePath);
-requireIncludes(youProfilePath, youProfile, 'href="/sign-in?redirect_url=%2Fyou"', "profile custom sign-in link");
-requireIncludes(youProfilePath, youProfile, 'href="/sign-up?redirect_url=%2Fyou"', "profile custom sign-up link");
+requireIncludes(youProfilePath, youProfile, 'localizeHref("/sign-in", locale)', "localized profile custom sign-in link");
+requireIncludes(youProfilePath, youProfile, 'localizeHref("/sign-up", locale)', "localized profile custom sign-up link");
+requireIncludes(youProfilePath, youProfile, 'encodeURIComponent(localizeHref("/you", locale))', "profile authentication returns to the same locale");
 requireExcludes(youProfilePath, youProfile, "SignInButton", "generic Clerk sign-in modal");
 requireExcludes(youProfilePath, youProfile, "SignUpButton", "generic Clerk sign-up modal");
 

@@ -1,7 +1,9 @@
 "use client";
+import { PublicText } from "@/components/i18n/public-text";
+
 
 import { GitMerge, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { useState, useTransition } from "react";
 
 type ApprovedEventsDedupeButtonProps = {
@@ -109,18 +111,15 @@ export function ApprovedEventsDedupeButton({
         type="button"
       >
         {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitMerge className="h-4 w-4" />}
-        {isPending ? "Merging duplicates..." : "Merge duplicates"}
+        <PublicText text={isPending ? "Merging duplicates..." : "Merge duplicates"} />
       </button>
 
       {error ? (
-        <p className="text-sm text-destructive sm:text-right">{error}</p>
+        <p className="text-sm text-destructive sm:text-right"><PublicText text={error} /></p>
       ) : message ? (
-        <p className="text-sm text-muted-foreground sm:text-right">{message}</p>
+        <p className="text-sm text-muted-foreground sm:text-right"><PublicText text={message} /></p>
       ) : (
-        <p className="text-xs leading-5 text-muted-foreground sm:text-right">
-          Conservative merge: same date, same or similar venue, and matching title,
-          description, or Instagram source.
-        </p>
+        <p className="text-xs leading-5 text-muted-foreground sm:text-right"><PublicText text={"Conservative merge: same date, same or similar venue, and matching title, description, or Instagram source."} /></p>
       )}
     </div>
   );

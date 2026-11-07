@@ -1,5 +1,8 @@
 import { getVenueCoordinates } from "../venues/coordinates.ts";
 import { getEventAgeRange } from "../events/event-session.ts";
+import { LOCALE_LANGUAGE_TAGS, localizeHref, type Locale } from "../../i18n/config.ts";
+import { getHomeFaqItems, SITE_COPY } from "../i18n/seo.ts";
+import { getLocalizedEventDescription } from "../i18n/event-content.ts";
 import {
   parseVenueHoursJson,
   type VenueHoursCacheFields,
@@ -76,7 +79,7 @@ type EventStructuredData = {
   eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode";
   eventStatus: "https://schema.org/EventScheduled";
   image?: string[];
-  inLanguage: string[];
+  inLanguage?: string[];
   isAccessibleForFree?: true;
   keywords: string;
   location: {
@@ -146,8 +149,8 @@ type VenueDirectoryStructuredItem = {
   name: string;
 };
 
-export function absoluteUrl(path = "/"): string {
-  return new URL(path, SITE_ORIGIN).toString();
+export function absoluteUrl(path = "/", locale?: Locale): string {
+  return new URL(locale ? localizeHref(path, locale) : path, SITE_ORIGIN).toString();
 }
 
 export function clipText(value: string | null | undefined, maxLength: number): string {
@@ -372,6 +375,7 @@ function getStreetAddress(location: string | null | undefined): string | null {
 
 export function buildEventStructuredData(
   event: EventStructuredDataInput,
+  locale: Locale = "en",
 ): EventStructuredData | null {
   // A display fallback (venue hours or assumed venue closing) is not an
   // announcement of this event's start/end. Legacy untagged times stay usable.
@@ -380,14 +384,16 @@ export function buildEventStructuredData(
     : event.time;
   const startDate = buildEventStartDate(event.date, announcedTime);
   if (!startDate) return null;
-  const url = absoluteUrl(`/events/${event._id}`);
+  const url = absoluteUrl(`/events/${event._id}`, locale);
+  const identityUrl = absoluteUrl(`/events/${event._id}`);
   const streetAddress = getStreetAddress(event.venueLocation);
   const coordinates = getVenueCoordinates(event.venueLatitude, event.venueLongitude);
-  const venueUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`) : null;
+  const venueUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`, locale) : null;
+  const venueIdentityUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`) : null;
   const openingHoursSpecification = buildVenueOpeningHoursSpecification(event.venueHours);
   const location: EventStructuredData["location"] = {
     "@type": "Place",
-    ...(venueUrl ? { "@id": `${venueUrl}#place`, url: venueUrl } : {}),
+    ...(venueUrl ? { "@id": `${venueIdentityUrl}#place`, url: venueUrl } : {}),
     address: {
       "@type": "PostalAddress",
       addressCountry: "RS",
@@ -407,22 +413,19 @@ export function buildEventStructuredData(
     name: event.venue,
     ...(openingHoursSpecification.length ? { openingHoursSpecification } : {}),
   };
-  const description =
-    clipText(event.description, 400) ||
-    `${event.title} at ${event.venue} in Belgrade on ${event.date}.`;
+  const description = clipText(getLocalizedEventDescription(event, locale).text, 400);
   const accessibleForFree = isExplicitlyFree(event.ticketPrice);
   const ageRange = getEventAgeRange(event);
   const endDate = buildEventEndDate(event.date, announcedTime);
 
   return {
     "@context": "https://schema.org",
-    "@id": `${url}#event`,
+    "@id": `${identityUrl}#event`,
     "@type": "Event",
     description,
     eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
     eventStatus: "https://schema.org/EventScheduled",
     ...(event.imageUrl ? { image: [absoluteUrl(event.imageUrl)] } : {}),
-    inLanguage: ["en-RS", "sr-Latn-RS"],
     ...(accessibleForFree ? { isAccessibleForFree: true as const } : {}),
     keywords: [event.eventType, ...event.artists, "Belgrade events"].filter(Boolean).join(", "),
     location,
@@ -444,12 +447,14 @@ export function buildEventStructuredData(
 
 export function buildVenueStructuredData(
   venue: VenueStructuredDataInput,
+  locale: Locale = "en",
 ): VenueStructuredData {
   const locationLabel = venue.location?.trim() || "Belgrade";
   const streetAddress = getStreetAddress(venue.location);
   const mapsQuery = [venue.name, locationLabel].filter(Boolean).join(" ");
   const coordinates = getVenueCoordinates(venue.latitude, venue.longitude);
-  const url = absoluteUrl(`/venues/${venue._id}`);
+  const url = absoluteUrl(`/venues/${venue._id}`, locale);
+  const identityUrl = absoluteUrl(`/venues/${venue._id}`);
   const openingHoursSpecification = buildVenueOpeningHoursSpecification(venue);
   const instagramUrl =
     venue.instagramProfileUrl?.trim() ||
@@ -459,7 +464,7 @@ export function buildVenueStructuredData(
 
   return {
     "@context": "https://schema.org",
-    "@id": `${url}#place`,
+    "@id": `${identityUrl}#place`,
     "@type": "LocalBusiness",
     address: {
       "@type": "PostalAddress",
@@ -472,7 +477,11 @@ export function buildVenueStructuredData(
       "@type": "City",
       name: "Belgrade",
     },
-    description: `${venue.name} is ${venue.category ? `a ${venue.category.toLowerCase()} venue` : "an event venue"} in Belgrade. Find upcoming events, location details, and the official Instagram profile on Event Zeka.`,
+    description: {
+      sr: `${venue.name} u Beogradu. Događaji, lokacija i zvanični Instagram profil na Event Zeka.`,
+      en: `${venue.name} is ${venue.category ? `a ${venue.category.toLowerCase()} venue` : "an event venue"} in Belgrade. Find upcoming events, location details, and the official Instagram profile on Event Zeka.`,
+      ru: `${venue.name}, Белград. События, адрес и официальный профиль Instagram на Event Zeka.`,
+    }[locale],
     ...(coordinates
       ? {
           geo: {
@@ -494,6 +503,7 @@ export function buildVenueStructuredData(
 
 export function buildBreadcrumbStructuredData(
   items: Array<{ name: string; path: string }>,
+  locale: Locale = "en",
 ) {
   return {
     "@context": "https://schema.org",
@@ -502,12 +512,14 @@ export function buildBreadcrumbStructuredData(
       "@type": "ListItem",
       position: index + 1,
       name: item.name,
-      item: absoluteUrl(item.path),
+      item: absoluteUrl(item.path, locale),
     })),
   };
 }
 
-export function buildHomePageStructuredData(events: HomeStructuredEvent[] = []) {
+export function buildHomePageStructuredData(events: HomeStructuredEvent[] = [], locale: Locale = "en") {
+  const copy = SITE_COPY[locale];
+  const pageUrl = absoluteUrl("/", locale);
   return {
     "@context": "https://schema.org",
     "@graph": [
@@ -516,35 +528,37 @@ export function buildHomePageStructuredData(events: HomeStructuredEvent[] = []) 
         "@id": `${SITE_ORIGIN}/#website`,
         name: SITE_NAME,
         url: SITE_ORIGIN,
-        description: SITE_DESCRIPTION,
-        inLanguage: ["en-RS", "sr-Latn-RS"],
+        description: copy.description,
+        inLanguage: ["sr-Latn-RS", "en-RS", "ru-RS"],
         sameAs: [SITE_INSTAGRAM_URL],
         potentialAction: {
           "@type": "SearchAction",
-          target: `${SITE_ORIGIN}/?q={search_term_string}`,
+          target: `${pageUrl}?q={search_term_string}`,
           "query-input": "required name=search_term_string",
         },
       },
       {
         "@type": "CollectionPage",
-        "@id": `${SITE_ORIGIN}/#calendar`,
-        name: "Belgrade events, nightlife & culture",
-        description: SITE_DESCRIPTION,
+        "@id": `${pageUrl}#calendar`,
+        name: copy.calendarTitle,
+        description: copy.description,
+        inLanguage: LOCALE_LANGUAGE_TAGS[locale],
         isPartOf: { "@id": `${SITE_ORIGIN}/#website` },
         mainEntity: {
           "@type": "ItemList",
           itemListElement: events.map((event, index) => ({
             "@type": "ListItem",
             position: index + 1,
-            name: `${event.title} at ${event.venue} — ${event.date}`,
-            url: absoluteUrl(`/events/${event._id}`),
+            name: `${event.title} — ${event.venue} — ${event.date}`,
+            url: absoluteUrl(`/events/${event._id}`, locale),
           })),
         },
-        url: SITE_ORIGIN,
+        url: pageUrl,
       },
       {
         "@type": "FAQPage",
-        mainEntity: HOME_FAQ_ITEMS.map((item) => ({
+        inLanguage: LOCALE_LANGUAGE_TAGS[locale],
+        mainEntity: getHomeFaqItems(locale).map((item) => ({
           "@type": "Question",
           name: item.question,
           acceptedAnswer: {
@@ -561,16 +575,17 @@ export function buildVenueDirectoryStructuredData(
   venues: VenueDirectoryStructuredItem[],
   page = 1,
   firstPosition = 1,
+  locale: Locale = "en",
 ) {
   return {
     "@context": "https://schema.org",
     "@type": "ItemList",
-    name: page > 1 ? `Belgrade venue guide — page ${page}` : "Belgrade venue guide",
+    name: page > 1 ? `${SITE_COPY[locale].directoryTitle} — ${SITE_COPY[locale].page} ${page}` : SITE_COPY[locale].directoryTitle,
     itemListElement: venues.map((venue, index) => ({
       "@type": "ListItem",
       position: firstPosition + index,
       name: venue.name,
-      url: absoluteUrl(`/venues/${venue._id}`),
+      url: absoluteUrl(`/venues/${venue._id}`, locale),
     })),
   };
 }

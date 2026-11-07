@@ -1,3 +1,7 @@
+
+import { LocalizedElement } from "@/components/i18n/public-text";
+
+import { PublicText, PublicWeekday } from "@/components/i18n/public-text";
 import {
   BELGRADE_TIMEZONE,
   formatVenueHoursWindow,
@@ -7,7 +11,6 @@ import {
 } from "@/lib/venues/venue-hours-cache";
 import { cn } from "@/lib/utils";
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // Venue-friendly order, Monday first. Underlying weekly array is 0 = Sunday.
 const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
@@ -47,28 +50,28 @@ export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWee
 
   return (
     <section className={cn("rounded-xl border border-border/70 bg-white/[0.02] p-4", className)}>
-      <h3 className="text-sm font-medium text-foreground">Hours</h3>
+      <h3 className="text-sm font-medium text-foreground"><PublicText text={"Hours"} /></h3>
       {operatingStatus ? (
         <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
           <p className="text-sm font-medium text-amber-200">
-            {operatingStatus === "needs_review"
+            <PublicText text={operatingStatus === "needs_review"
               ? "Hours need confirmation"
               : operatingStatus === "temporarily_closed"
                 ? "Temporarily closed"
-                : "Permanently closed"}
+                : "Permanently closed"} />
           </p>
           <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {proofSourceUrls.map((url, index) => (
-              <a className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
-                {proofSourceUrls.length === 1 ? "Status source" : `Status source ${index + 1}`}
-              </a>
+              <LocalizedElement as="a" className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
+                <PublicText text={proofSourceUrls.length === 1 ? "Status source" : `Status source ${index + 1}`} />
+              </LocalizedElement>
             ))}
           </p>
         </div>
       ) : null}
       {hasWeeklySchedule ? (
         <>
-          {operatingStatus ? <h4 className="mt-4 text-xs font-medium text-muted-foreground">Regular weekly schedule</h4> : null}
+          {operatingStatus ? <h4 className="mt-4 text-xs font-medium text-muted-foreground"><PublicText text={"Regular weekly schedule"} /></h4> : null}
           <dl className={cn(operatingStatus ? "mt-2" : "mt-3", "space-y-1.5")}>
             {DISPLAY_ORDER.map((dayIndex) => {
               const day = byDay.get(dayIndex);
@@ -76,13 +79,13 @@ export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWee
               const isUnknown = !day || (!isClosed && day.windows.length === 0);
               return (
                 <div key={dayIndex} className="flex items-baseline justify-between gap-4 text-sm">
-                  <dt className="text-muted-foreground">{DAY_LABELS[dayIndex]}</dt>
+                  <dt className="text-muted-foreground"><PublicWeekday day={dayIndex} /></dt>
                   <dd className={cn("text-right tabular-nums", (isClosed || isUnknown) && "text-muted-foreground/70")}>
-                    {isClosed
+                    <PublicText text={isClosed
                       ? "Closed"
                       : isUnknown
                         ? "Not available"
-                        : day.windows.map((window) => formatVenueHoursWindow(window)).join(", ")}
+                        : day.windows.map((window) => formatVenueHoursWindow(window)).join(", ")} />
                   </dd>
                 </div>
               );
@@ -91,12 +94,12 @@ export function VenueWeeklyHours({ className, hoursJson, hoursSource }: VenueWee
           {sourceUrls.length > 0 ? (
             <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground/80">
               {sourceUrls.map((url, index) => (
-                <a className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
-                  {sourceUrls.length === 1 ? "Hours source" : `Hours source ${index + 1}`}
-                </a>
+                <LocalizedElement as="a" className="underline underline-offset-2 hover:text-foreground" href={url} key={url} rel="noopener noreferrer" target="_blank">
+                  <PublicText text={sourceUrls.length === 1 ? "Hours source" : `Hours source ${index + 1}`} />
+                </LocalizedElement>
               ))}
             </p>
-          ) : attribution ? <p className="mt-3 text-xs text-muted-foreground/80">{attribution}</p> : null}
+          ) : attribution ? <p className="mt-3 text-xs text-muted-foreground/80"><PublicText text={attribution} /></p> : null}
         </>
       ) : null}
     </section>

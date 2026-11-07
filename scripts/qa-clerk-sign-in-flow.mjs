@@ -10,12 +10,15 @@ function compile(file, mocks) {
   const source = ts.transpileModule(readFileSync(file, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText;
-  const module = { exports: {} };
-  new Function("require", "exports", "module", source)((name) => mocks[name] ?? require(name), module.exports, module);
-  return module.exports;
+  const vmModule = { exports: {} };
+  new Function("require", "exports", "module", source)((name) => mocks[name] ?? require(name), vmModule.exports, vmModule);
+  return vmModule.exports;
 }
 
 const flow = compile("lib/auth/email-sign-in.ts", {});
+const localeConfig = compile("i18n/config.ts", {});
+const accountMessages = compile("lib/i18n/account-messages.ts", {});
+const safeRedirect = compile("lib/auth/safe-redirect.ts", { "@/i18n/config": localeConfig });
 const emailFactor = { strategy: "email_code", emailAddressId: "email_qa", safeIdentifier: "o***@example.invalid" };
 const state = (status, extra = {}) => ({ status, createdSessionId: null, supportedSecondFactors: [emailFactor], ...extra });
 assert.deepEqual(flow.getEmailSignInStep(state("needs_second_factor")), { kind: "email-code", emailAddressId: "email_qa", destination: emailFactor.safeIdentifier });
@@ -37,6 +40,7 @@ let hookIndex = 0;
 let signIn;
 let calls;
 let settings;
+let currentLocale = "sr";
 const navigation = [];
 const savedWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { assign: (path) => navigation.push(path), search: "" } } });
@@ -47,6 +51,10 @@ const { EmailAuthCard } = compile("components/auth/email-auth-card.tsx", {
     useSignUp: () => ({ isLoaded: true, signUp: null, setActive: null }),
   },
   "@/lib/auth/email-sign-in": flow,
+  "@/lib/auth/safe-redirect": safeRedirect,
+  "@/i18n/client": { useLocale: () => currentLocale },
+  "@/i18n/config": localeConfig,
+  "@/lib/i18n/account-messages": accountMessages,
   "next/link": { __esModule: true, default: ({ children, ...props }) => createElement("a", props, children) },
   react: {
     useEffect: () => {},
@@ -73,7 +81,7 @@ function reset(options = {}) {
     },
     async attemptSecondFactor(args) {
       calls.verify.push(args);
-      if (settings.verification === "invalid") throw { errors: [{ longMessage: "That verification code has expired." }] };
+      if (settings.verification === "invalid") throw { errors: [{ code: "verification_expired", longMessage: "That verification code has expired." }] };
       signIn.status = settings.verification;
       signIn.createdSessionId = settings.verification === "complete" ? "session_qa" : null;
       return signIn;
@@ -132,7 +140,7 @@ try {
   input("sign-in-code", "000000");
   await submit();
   assert.equal(calls.active.length, 0);
-  assert.match(text(render()), /That verification code has expired/);
+  assert.match(text(render()), /Kod je istekao/);
   assert.equal(calls.create.length, 1, "code retries must preserve the password-verified attempt");
 
   settings.verification = "needs_second_factor";
@@ -150,7 +158,9 @@ try {
   reset({ failSend: true });
   await passwordSignIn();
   assert.match(text(render()), /Potvrdi prijavu/);
-  assert.match(text(render()), /code could not be sent/);
+  assert.ok(text(render()).includes(accountMessages.accountText("sr", "auth.errorSignIn")),
+    "Unknown provider failures must use the localized safe fallback.");
+  assert.equal(text(render()).includes("The code could not be sent"), false);
   settings.failSend = false;
   await button("Pošalji kod za potvrdu").props.onClick();
   assert.equal(calls.prepare.length, 2);
@@ -178,6 +188,37 @@ try {
   assert.deepEqual(calls.reset, [{ password: "qa-new-password-not-real", signOutOfOtherSessions: true }]);
   assert.equal(calls.active.length, 0, "password recovery must still respect required second-factor verification");
   assert.match(text(render()), /Potvrdi prijavu/);
+
+  // The same actual Clerk state machine must retain its second-factor guard
+  // and transport calls in every interface language, including its final URL.
+  for (const [locale, heading, expired, target] of [
+    ["sr", "Potvrdi prijavu", "Kod je istekao", "/"],
+    ["en", "Verify sign-in", "The code has expired", "/en"],
+    ["ru", "Подтвердить вход", "Срок действия кода истёк", "/ru"],
+  ]) {
+    currentLocale = locale;
+    reset();
+    await passwordSignIn();
+    assert.ok(text(render()).includes(heading));
+    assert.equal(calls.active.length, 0);
+    assert.equal(calls.create.length, 1);
+    assert.equal(calls.prepare.length, 1);
+    settings.verification = "invalid";
+    input("sign-in-code", "000000");
+    await submit();
+    assert.ok(text(render()).includes(expired));
+    assert.equal(calls.active.length, 0);
+    settings.verification = "complete";
+    input("sign-in-code", "123456");
+    await submit();
+    assert.deepEqual(calls.active, [{ session: "session_qa" }]);
+    assert.deepEqual(navigation, [target]);
+    assert.equal(calls.create.length, 1, "A locale must not recreate the password attempt during verification.");
+    assert.equal(flow.getEmailSignInError({ errors: [{ code: "unknown_qa", longMessage: "provider internals" }] }, "safe fallback", locale), "safe fallback");
+    assert.equal(safeRedirect.getSafeRedirectPath(`/${locale}/sign-in?redirect_url=/you`, locale), null);
+    assert.equal(safeRedirect.getSafeRedirectPath(`/${locale}/sign-up`, locale), null);
+    assert.equal(safeRedirect.getSafeRedirectPath("//attacker.example", locale), null);
+  }
 
   // Optional local visual fixture: this inert markup never contacts Clerk.
   if (process.env.AUTH_QA_MARKUP_PATH) writeFileSync(process.env.AUTH_QA_MARKUP_PATH, renderToStaticMarkup(render()));

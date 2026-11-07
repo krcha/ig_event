@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import { publicText } from "../lib/i18n/public-messages.ts";
+import { formatEventCount, formatVenueCount } from "../lib/i18n/display.ts";
+import { localizeHref } from "../i18n/config.ts";
 
 // Run the actual map component's Leaflet lifecycle and reset handler. A Novi Sad
 // marker stays present, but cannot decide the initial or reset viewport.
@@ -53,6 +56,7 @@ for (const desktop of [false, true]) for (const pins of [[], locations]) {
     popup: () => ({ setContent() { return this; }, setLatLng() { return this; }, openOn() { return this; } }),
   };
   const jsx = (type, props) => {
+    if (typeof type === "function") return type(props);
     if (props?.ref && !props.ref.current) props.ref.current = element();
     return { type, props };
   };
@@ -69,6 +73,11 @@ for (const desktop of [false, true]) for (const pins of [[], locations]) {
     "@/lib/events/event-time-presentation": { resolveEventTimePresentation: () => ({ label: "Unknown" }) },
     "@/components/events/open-now-status": { OPEN_NOW_POSSIBLE_LABEL: "Possible" },
     "@/lib/utils": { cn: (...values) => values.filter(Boolean).join(" ") },
+    "@/components/i18n/public-text": { LocalizedElement: "localized-element", PublicText: ({ text }) => text ? publicText("en", text) : "" },
+    "@/i18n/client": { useLocale: () => "en" },
+    "@/i18n/config": { localizeHref },
+    "@/lib/i18n/public-messages": { publicText },
+    "@/lib/i18n/display": { formatEventCount, formatVenueCount },
     "leaflet/dist/leaflet.css": {}, "./event-map.css": {},
   };
   const compiled = { exports: {} };

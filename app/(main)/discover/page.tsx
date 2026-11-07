@@ -1,3 +1,8 @@
+import { getLocale as getMetadataLocale } from "@/i18n/server";
+import type { Locale } from "@/i18n/config";
+import { formatPublicDate } from "@/lib/i18n/display";
+import { publicText } from "@/lib/i18n/public-messages";
+import { localizedMetadata } from "@/lib/i18n/seo";
 import type { Metadata } from "next";
 import {
   type DiscoverDateTab,
@@ -10,7 +15,6 @@ import {
   getNightlifeDefaultDateKey,
   parseDateKeyToUtcNoon,
 } from "@/lib/events/nightlife-date";
-import { SITE_ORIGIN } from "@/lib/seo/site";
 
 export const revalidate = 60;
 
@@ -22,64 +26,29 @@ type DiscoverPageProps = {
 };
 
 export async function generateMetadata({ searchParams }: DiscoverPageProps): Promise<Metadata> {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
-  const hasDateFilter = Boolean(
-    Array.isArray(resolvedSearchParams?.date)
-      ? resolvedSearchParams.date[0]
-      : resolvedSearchParams?.date,
-  );
+  const hasDateFilter = Boolean(Array.isArray(resolvedSearchParams?.date) ? resolvedSearchParams.date[0] : resolvedSearchParams?.date);
   const hasPageFilter = normalizeRequestedPage(resolvedSearchParams?.page) > 1;
   const today = getNightlifeDefaultDateKey();
   const selectedDate = normalizeRequestedDate(resolvedSearchParams?.date, today);
-  const { title, description } = getDiscoverPageCopy(selectedDate, today);
-
-  return {
-    title,
-    description,
-    alternates: {
-      canonical: "/discover",
-    },
-    openGraph: {
-      title: `${title} | Event Zeka`,
-      description,
-      type: "website",
-      locale: "en_RS",
-
-      siteName: "Event Zeka",
-      url: `${SITE_ORIGIN}/discover`,
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${title} | Event Zeka`,
-      description,
-    },
-    robots: {
-      index: !hasDateFilter && !hasPageFilter,
-      follow: true,
-      googleBot: {
-        index: !hasDateFilter && !hasPageFilter,
-        follow: true,
-        "max-image-preview": "large",
-        "max-snippet": -1,
-        "max-video-preview": -1,
-      },
-    },
-  };
+  const { title, description } = getDiscoverPageCopy(selectedDate, today, locale);
+  return localizedMetadata({ locale, path: "/discover", title, description, index: !hasDateFilter && !hasPageFilter });
 }
 
-function formatDiscoverSubline(dateKey: string): string {
+function formatDiscoverSubline(dateKey: string, locale: Locale): string {
   const date = parseDateKeyToUtcNoon(dateKey);
   if (!date) {
-    return `${dateKey} · Belgrade`;
+    return `${dateKey} · ${publicText(locale, "Belgrade")}`;
   }
 
-  const label = new Intl.DateTimeFormat("en-US", {
+  const label = formatPublicDate(locale, dateKey, {
     day: "numeric",
     month: "long",
     timeZone: "Europe/Belgrade",
     weekday: "long",
-  }).format(date);
-  return `${label} · Belgrade`;
+  });
+  return `${label} · ${publicText(locale, "Belgrade")}`;
 }
 
 function getDateTabDates(today: string): string[] {
@@ -122,7 +91,7 @@ function buildDiscoverPageHref(options: {
   return serialized ? `/discover?${serialized}` : "/discover";
 }
 
-function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
+function buildDateTabs(today: string, selectedDate: string, locale: Locale): DiscoverDateTab[] {
   const [yesterday, current, tomorrow] = getDateTabDates(today);
   const tabs = selectedDate === addDaysToDateKey(today, -2)
     ? [
@@ -139,25 +108,13 @@ function buildDateTabs(today: string, selectedDate: string): DiscoverDateTab[] {
   return tabs.map((tab) => ({
     active: tab.date === selectedDate,
     href: tab.date === today ? "/discover" : `/discover?date=${tab.date}`,
-    label: tab.label,
-    sublabel: formatEventDateShort(tab.date),
+    label: publicText(locale, tab.label),
+    sublabel: formatPublicDate(locale, tab.date, { day: "numeric", month: "short" }),
   }));
 }
 
-function formatEventDateShort(dateKey: string): string {
-  const date = parseDateKeyToUtcNoon(dateKey);
-  if (!date) {
-    return dateKey;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "Europe/Belgrade",
-  }).format(date);
-}
-
 export default async function DiscoverPage({ searchParams }: DiscoverPageProps) {
+  const locale = await getMetadataLocale();
   const resolvedSearchParams = await searchParams;
   const today = getNightlifeDefaultDateKey();
   const selectedDate = normalizeRequestedDate(resolvedSearchParams?.date, today);
@@ -178,7 +135,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
   return (
     <DiscoverFeed
       authEnabled={authEnabled}
-      dateTabs={buildDateTabs(today, selectedDate)}
+      dateTabs={buildDateTabs(today, selectedDate, locale)}
       error={error}
       events={events}
       mobileEvents={mobileEvents}
@@ -186,7 +143,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       key={`${selectedDate}:${currentPage}:${revision}`}
       revision={revision}
       selectedDate={selectedDate}
-      introduction={getDiscoverPageCopy(selectedDate, today).introduction}
+      introduction={getDiscoverPageCopy(selectedDate, today, locale).introduction}
       pagination={{
         currentPage,
         firstEventNumber,
@@ -212,7 +169,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
         totalEvents,
         totalPages,
       }}
-      subline={formatDiscoverSubline(selectedDate)}
+      subline={formatDiscoverSubline(selectedDate, locale)}
     />
   );
 }

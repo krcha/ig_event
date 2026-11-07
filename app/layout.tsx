@@ -6,39 +6,48 @@ import { NavigationFeedback } from "@/components/navigation/navigation-feedback"
 import { VisitorTracker } from "@/components/analytics/visitor-tracker";
 import { AuthUserProvider } from "@/components/providers/auth-user-provider";
 import { UserLibraryProvider } from "@/components/providers/user-library-provider";
-import { SITE_DESCRIPTION, SITE_ORIGIN } from "@/lib/seo/site";
+import { SITE_ORIGIN } from "@/lib/seo/site";
+import { SITE_COPY, OG_LOCALES, localizedAbsoluteUrl } from "@/lib/i18n/seo";
 import { EventsUiProvider } from "@/components/calendar/events-ui-provider";
 import { InstallPrompt } from "@/components/install/install-prompt";
+import { LocaleProvider } from "@/i18n/client";
+import { LOCALE_LANGUAGE_TAGS, type Locale } from "@/i18n/config";
+import { getLocale } from "@/i18n/server";
 import "./globals.css";
 
-export const metadata: Metadata = {
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getLocale();
+  const copy = SITE_COPY[locale];
+  return {
   metadataBase: new URL(SITE_ORIGIN),
   applicationName: "Event Zeka",
   title: {
-    default: "Event Zeka — Belgrade events",
+    default: `${copy.calendarTitle} | Event Zeka`,
     template: "%s | Event Zeka",
   },
-  description: SITE_DESCRIPTION,
+  description: copy.description,
   category: "events",
   formatDetection: {
     address: false,
     email: false,
     telephone: false,
   },
-  manifest: "/manifest.webmanifest",
+  manifest: `/api/manifest?locale=${locale}`,
   openGraph: {
     type: "website",
-    locale: "en_RS",
+    locale: OG_LOCALES[locale],
 
     siteName: "Event Zeka",
-    title: "Event Zeka — Belgrade events",
-    description: SITE_DESCRIPTION,
-    url: SITE_ORIGIN,
+    title: `${copy.calendarTitle} | Event Zeka`,
+    description: copy.description,
+    url: localizedAbsoluteUrl("/", locale),
+    images: [{ url: `${SITE_ORIGIN}/api/og?locale=${locale}`, width: 1200, height: 630, alt: copy.calendarTitle }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Event Zeka — Belgrade events",
-    description: SITE_DESCRIPTION,
+    title: `${copy.calendarTitle} | Event Zeka`,
+    description: copy.description,
+    images: [`${SITE_ORIGIN}/api/og?locale=${locale}`],
   },
   robots: {
     index: true,
@@ -52,6 +61,8 @@ export const metadata: Metadata = {
     },
   },
 };
+}
+
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -83,9 +94,11 @@ const clerkAppearance = {
 
 function AppDocument({
   authEnabled = false,
+  locale,
   children,
 }: {
   authEnabled?: boolean;
+  locale: Locale;
   children: React.ReactNode;
 }) {
   const appContent = (
@@ -107,33 +120,36 @@ function AppDocument({
   );
 
   return (
-    <html className="dark" lang="en-RS">
+    <html className="dark" lang={LOCALE_LANGUAGE_TAGS[locale]}>
       <head><link rel="preload" href="/fonts/space-grotesk-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" /><link rel="preload" href="/fonts/space-grotesk-700.woff2" as="font" type="font/woff2" crossOrigin="anonymous" /></head>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        {authEnabled ? (
-          <AuthUserProvider>
-            <UserLibraryProvider>{appContent}</UserLibraryProvider>
-          </AuthUserProvider>
-        ) : (
-          <UserLibraryProvider authEnabled={false}>{appContent}</UserLibraryProvider>
-        )}
+        <LocaleProvider locale={locale}>
+          {authEnabled ? (
+            <AuthUserProvider>
+              <UserLibraryProvider>{appContent}</UserLibraryProvider>
+            </AuthUserProvider>
+          ) : (
+            <UserLibraryProvider authEnabled={false}>{appContent}</UserLibraryProvider>
+          )}
+        </LocaleProvider>
       </body>
     </html>
   );
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getLocale();
   if (!clerkPublishableKey) {
-    return <AppDocument>{children}</AppDocument>;
+    return <AppDocument locale={locale}>{children}</AppDocument>;
   }
 
   return (
     <ClerkProvider appearance={clerkAppearance} clerkJSVariant="headless" publishableKey={clerkPublishableKey}>
-      <AppDocument authEnabled>{children}</AppDocument>
+      <AppDocument authEnabled locale={locale}>{children}</AppDocument>
     </ClerkProvider>
   );
 }

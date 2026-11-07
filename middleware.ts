@@ -5,6 +5,13 @@ import {
   hasClerkEnv,
   shouldFailClosedForAdminRoutes,
 } from "@/lib/utils/env";
+import {
+  getLocaleFromPath,
+  localizeHref,
+  LOCALE_HEADER,
+  LOCALE_LANGUAGE_TAGS,
+  resolveLocaleRequestPath,
+} from "@/i18n/config";
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)", "/api/admin(.*)"]);
 const isAdminApiRoute = createRouteMatcher(["/api/admin(.*)"]);
@@ -47,9 +54,37 @@ function malformedClerkCookieResponse(req: NextRequest): NextResponse {
     );
   }
 
-  const signInUrl = new URL("/sign-in", req.url);
+  const signInUrl = new URL(localizeHref("/sign-in", getLocaleFromPath(req.nextUrl.pathname)), req.url);
   signInUrl.searchParams.set("redirect_url", `${req.nextUrl.pathname}${req.nextUrl.search}`);
   return clearClerkCookies(NextResponse.redirect(signInUrl), req);
+}
+
+function localizedPageResponse(req: NextRequest): NextResponse {
+  const resolution = resolveLocaleRequestPath(req.nextUrl.pathname);
+  if (resolution.kind === "not_found") {
+    return new NextResponse("Not found.", {
+      status: 404,
+      headers: { "content-type": "text/plain; charset=utf-8", "x-robots-tag": "noindex" },
+    });
+  }
+  if (resolution.kind === "redirect") {
+    const destination = req.nextUrl.clone();
+    destination.pathname = resolution.pathname;
+    return NextResponse.redirect(destination, 308);
+  }
+  // Locale is URL-bound. Never trust an externally supplied locale header,
+  // browser language or preference cookie for server-rendered page identity.
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.delete(LOCALE_HEADER);
+  requestHeaders.set(LOCALE_HEADER, resolution.locale);
+  // The public-only beforeFiles rewrites in next.config route these URLs to
+  // the existing pages. A middleware rewrite would proxy into middleware a
+  // second time on the self-hosted server and lose the original URL locale.
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  if (!req.nextUrl.pathname.startsWith("/api/")) {
+    response.headers.set("content-language", LOCALE_LANGUAGE_TAGS[resolution.locale]);
+  }
+  return response;
 }
 
 const clerkAdminMiddleware = clerkMiddleware(
@@ -57,6 +92,7 @@ const clerkAdminMiddleware = clerkMiddleware(
     if (isAdminRoute(req)) {
       await auth.protect();
     }
+    return localizedPageResponse(req);
   },
   clerkAuthorizedParties ? { authorizedParties: clerkAuthorizedParties } : undefined,
 );
@@ -67,7 +103,7 @@ export default async function middleware(req: NextRequest, event: NextFetchEvent
       return adminAuthNotConfiguredResponse(req);
     }
 
-    return NextResponse.next();
+    return localizedPageResponse(req);
   }
 
   try {
@@ -82,5 +118,17 @@ export default async function middleware(req: NextRequest, event: NextFetchEvent
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/api/admin/:path*", "/saved/:path*", "/api/user/:path*"],
+  matcher: [
+    "/((?!api|_next|fonts|images|.*\\..*).*)",
+    "/en/:path*",
+    "/ru/:path*",
+    "/sr/:path*",
+    "/sign-in/:path*",
+    "/sign-up/:path*",
+    "/events/:path*",
+    "/venues/:path*",
+    "/admin/:path*",
+    "/api/admin/:path*",
+    "/api/user/:path*",
+  ],
 };

@@ -1,13 +1,17 @@
 "use client";
+import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 
-import Link from "next/link";
+
+import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { CalendarDays } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { lazy, Suspense, useEffect, useRef, useState, useTransition, type CSSProperties, type MouseEvent } from "react";
 import { getMobileWeekFill } from "@/lib/events/mobile-week";
 import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
 import styles from "./mobile-week-calendar.module.css";
 import { useCalendarOverviewDays } from "./calendar-overview";
+import { useLocale } from "@/i18n/client";
+import { formatEventCount } from "@/lib/i18n/display";
 
 const MobileCalendarDialog = lazy(() => import("./mobile-calendar-dialog"));
 
@@ -29,6 +33,7 @@ type Props = {
 };
 
 export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthDays, selectedDayKey, todayKey }: Props) {
+  const locale = useLocale();
   const days = useCalendarOverviewDays(initialDays);
   const monthDays = useCalendarOverviewDays(initialMonthDays);
   const router = useRouter();
@@ -73,11 +78,11 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
 
   return (
     <div className={styles.weekWrap}>
-      <nav aria-label="Izaberi dan" className={styles.week} data-calendar-week="true">
+      <LocalizedElement as="nav" aria-label="Izaberi dan" className={styles.week} data-calendar-week="true">
         {days.map((day) => (
           <Link
             aria-current={day.dayKey === selectedDayKey ? "date" : undefined}
-            aria-label={`${day.label}, ${Number(day.dayKey.slice(8))}, ${day.eventCount} događaja`}
+            aria-label={`${day.label}, ${Number(day.dayKey.slice(8))}, ${formatEventCount(locale, day.eventCount)}`}
             className={styles.day}
             data-calendar-date={day.dayKey}
             data-calendar-client-navigation="true"
@@ -95,21 +100,21 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
             scroll={false}
           >
             <span aria-hidden="true" className={styles.water} data-calendar-week-water="true" style={{ "--week-fill": `${getMobileWeekFill(day.eventCount, maxCount)}%` } as CSSProperties} />
-            <span className={styles.label}>{day.label}</span>
+            <span className={styles.label}><PublicText text={day.label} /></span>
             <span className={styles.date}>{Number(day.dayKey.slice(8))}</span>
             <span aria-busy={day.countsPending || undefined} className={styles.count} data-calendar-date-visible-event-count="true">{day.countsPending ? "\u00b7" : day.eventCount}</span>
           </Link>
         ))}
-      </nav>
-      <button
+      </LocalizedElement>
+      <LocalizedElement as="button"
         aria-haspopup="dialog"
         aria-label="Otvori mesečni kalendar"
         className={styles.calendarTrigger}
         onClick={() => setIsOpen(true)}
         ref={triggerRef}
         type="button"
-      ><CalendarDays className="h-[17px] w-[17px]" /></button>
-      {isOpen ? <Suspense fallback={<p className="text-xs text-muted-foreground" role="status">Učitavanje kalendara...</p>}>
+      ><CalendarDays className="h-[17px] w-[17px]" /></LocalizedElement>
+      {isOpen ? <Suspense fallback={<p className="text-xs text-muted-foreground" role="status"><PublicText text={"Učitavanje kalendara..."} /></p>}>
         <MobileCalendarDialog month={month} selectedDayKey={selectedDayKey} todayKey={todayKey}
           counts={[...monthDays, ...days]} onMonthChange={setMonth}
           onSelect={day => navigate(hrefForDate(day))} onClose={closeCalendar} />

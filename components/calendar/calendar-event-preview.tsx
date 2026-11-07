@@ -1,4 +1,8 @@
 "use client";
+import { LocalizedElement } from "@/components/i18n/public-text";
+
+import { PublicText } from "@/components/i18n/public-text";
+
 
 import {
   createContext,
@@ -118,7 +122,7 @@ export function CalendarEventPreviewRow({
         className={cn("relative rounded-[inherit] transition-colors", open && "bg-primary/[0.05]")}
         data-calendar-event-preview-header="true"
       >
-        <button
+        <LocalizedElement as="button"
           aria-controls={panelId}
           aria-expanded={open}
           aria-label={`${open ? "Hide" : "Show"} Instagram post for ${title}`}
@@ -158,7 +162,7 @@ function CalendarPostLoading() {
   return (
     <div className="border-t border-border/75 bg-[#10141F] p-3" role="status">
       <div className="h-[min(38svh,18rem)] min-h-48 rounded-lg bg-white/[0.035] motion-safe:animate-pulse" />
-      <p className="mt-2 text-xs text-muted-foreground">Loading Instagram post...</p>
+      <p className="mt-2 text-xs text-muted-foreground"><PublicText text={"Loading Instagram post..."} /></p>
     </div>
   );
 }

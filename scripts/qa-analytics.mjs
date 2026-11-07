@@ -7,6 +7,7 @@ import { buildAnalyticsReport } from "../lib/analytics/aggregate.ts";
 import { getAnalyticsOwnerId, isAnalyticsOwner } from "../lib/analytics/access.ts";
 import { bucketKey, cleanPath, getAnalyticsRange, localDay, localMidnight } from "../lib/analytics/model.ts";
 import { cleanup, readPage, record, report } from "../convex/analytics.ts";
+import * as localeConfig from "../i18n/config.ts";
 
 const require = createRequire(import.meta.url);
 const savedEnv = { ...process.env };
@@ -23,9 +24,9 @@ function compile(file, mocks, extra = "") {
   const source = ts.transpileModule(readFileSync(file, "utf8") + extra, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText;
-  const module = { exports: {} };
-  new Function("require", "exports", "module", source)((name) => mocks[name] ?? require(name), module.exports, module);
-  return module.exports;
+  const vmModule = { exports: {} };
+  new Function("require", "exports", "module", source)((name) => mocks[name] ?? require(name), vmModule.exports, vmModule);
+  return vmModule.exports;
 }
 
 function database() {
@@ -84,7 +85,7 @@ try {
   assert.equal(cleanPath("/admin"), null);
   assert.equal(cleanPath("/sign-in"), null);
 
-  const savedGlobals = new Map(["localStorage", "sessionStorage", "document", "location"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const savedGlobals = new Map(["localStorage", "sessionStorage", "document", "location", "navigator", "fetch", "Element", "HTMLAnchorElement"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   try {
     const unavailableStorage = { getItem: () => null, setItem: () => { throw new Error("QuotaExceededError"); } };
     for (const [key, value] of Object.entries({ localStorage: unavailableStorage, sessionStorage: unavailableStorage, document: { referrer: "https://instagram.com/profile?private=not-stored" }, location: { origin: "https://eventzeka.com" } })) {
@@ -92,6 +93,7 @@ try {
     }
     const tracker = compile("components/analytics/visitor-tracker.tsx", {
       "next/navigation": {}, "@/lib/analytics/model": await import("../lib/analytics/model.ts"),
+      "@/i18n/config": localeConfig,
     }, "\nexport { identity as qaIdentity };\n");
     const first = tracker.qaIdentity(new URLSearchParams("utm_medium=social"));
     const second = tracker.qaIdentity(new URLSearchParams("utm_source=internal-navigation"));
@@ -103,6 +105,57 @@ try {
     assert.equal(afterIdle.visitorId, first.visitorId);
     assert.notEqual(afterIdle.sessionId, first.sessionId);
     assert.equal(afterIdle.source, "newsletter");
+
+    // Execute the actual tracker effects for each visible locale. The public
+    // collector keeps canonical paths and never receives queries or private URLs.
+    Date.now = () => now;
+    const sent = [];
+    const listeners = new Map();
+    class AnalyticsElement {
+      closest(selector) { return selector === "a[href],button" ? this : null; }
+      hasAttribute() { return false; }
+    }
+    class AnalyticsAnchor extends AnalyticsElement {
+      constructor(href) { super(); this.href = href; }
+    }
+    Object.defineProperty(globalThis, "Element", { configurable: true, value: AnalyticsElement });
+    Object.defineProperty(globalThis, "HTMLAnchorElement", { configurable: true, value: AnalyticsAnchor });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { doNotTrack: "0" } });
+    Object.defineProperty(globalThis, "document", { configurable: true, value: {
+      referrer: "",
+      addEventListener: (name, callback) => listeners.set(name, callback),
+      removeEventListener: (name) => listeners.delete(name),
+    } });
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: (url, options) => {
+      assert.equal(url, "/api/analytics");
+      sent.push(JSON.parse(options.body));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    } });
+    for (const locale of ["sr", "en", "ru"]) {
+      const cleanupCallbacks = [];
+      const prefix = locale === "sr" ? "" : `/${locale}`;
+      const localizedTracker = compile("components/analytics/visitor-tracker.tsx", {
+        "next/navigation": { usePathname: () => `${prefix}/discover`, useSearchParams: () => new URLSearchParams("q=private") },
+        "@/lib/analytics/model": await import("../lib/analytics/model.ts"),
+        "@/i18n/config": localeConfig,
+        react: { useRef: (current) => ({ current }), useEffect: (callback) => { cleanupCallbacks.push(callback()); } },
+      });
+      localizedTracker.VisitorTracker();
+      assert.equal(sent.at(-1).path, "/discover");
+      assert.equal(sent.at(-1).kind, "pageview");
+      const click = listeners.get("click");
+      click({ target: new AnalyticsAnchor(`https://eventzeka.com${prefix}/map?secret=never-store`) });
+      assert.equal(sent.at(-1).target, "/map");
+      const beforePrivate = sent.length;
+      click({ target: new AnalyticsAnchor(`https://eventzeka.com${prefix}/saved`) });
+      click({ target: new AnalyticsAnchor(`https://eventzeka.com${prefix}/admin`) });
+      assert.equal(sent.length, beforePrivate);
+      click({ target: new AnalyticsAnchor("https://www.instagram.com/eventzeka/") });
+      assert.equal(sent.at(-1).target, "www.instagram.com/eventzeka/");
+      cleanupCallbacks.forEach((callback) => callback?.());
+      assert.equal(listeners.size, 0);
+    }
+    assert.equal(sent.some((event) => event.path.includes("?") || event.target.includes("secret=")), false);
   } finally {
     Date.now = () => now;
     for (const [key, descriptor] of savedGlobals) {
