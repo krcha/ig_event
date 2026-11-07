@@ -102,8 +102,8 @@ export function venueLinksFixture(groupKey) {
 }
 
 try {
-  assert.equal(Object.keys(reviews).length, 10);
-  assert.equal(Object.values(reviews).reduce((count, review) => count + review.rows.length, 0), 24);
+  assert.equal(Object.keys(reviews).length, 11);
+  assert.equal(Object.values(reviews).reduce((count, review) => count + review.rows.length, 0), 26);
   // Public URLs and guest saves contain the original event ID; rejected
   // components do not redirect. Keep these existing public cards as primary.
   for (const [groupKey, publicId] of [
@@ -137,6 +137,12 @@ try {
     for (const event of before.protectedEvents) assert.deepEqual(await h.db.get(event._id), event);
     assert.ok(after.saves.slice(1).every((refs) => !refs.canonical.length && !refs.legacy.length));
     if (review.nextTime) { assert.equal(after.events[0].timeSource, "poster"); assert.equal(after.events[0].timeEvidenceText, review.nextTime); assert.equal(after.events[0].timeStatus, "confirmed"); }
+    if (groupKey === "dorcoleta-nov7") {
+      assert.equal(result.primaryId, "j574ydzb0sawky713cewym83n18hheds");
+      assert.equal(after.events[0].timeStatus, "unknown");
+      assert.equal(after.events[0].timeEvidenceKind, "not_stated");
+      assert.deepEqual(after.sources.map(({ handle }) => handle).sort(), ["dorcoleta_", "zalet.beograd"]);
+    }
     const applied = h.snapshot();
     await assert.rejects(() => h.transaction(consolidate._handler, args), /already applied/u);
     await assert.rejects(() => h.transaction(updateEvent._handler, { id: review.rows[0].id, expectedUpdatedAt: after.events[0].updatedAt, patch: { description: "Unsafe generic edit" } }, h.adminCtx), /[Cc]ampaign|[Ll]ineage|re-attestation/u);
@@ -174,7 +180,7 @@ try {
       moderationNote: "Only the frozen independently proved Jura performance can resolve its exact venue ambiguity.", serviceSecret: secret }), /[Dd]uplicate|[Aa]mbiguous|already exists/u,
     "The source-proved Jura exception must never override a proven duplicate or another unreviewed same-date conflict.");
   }
-  console.log("Reviewed venue-links November operator passed:10 fixed cohorts/24 rows, retained multi-source history/pending components, exact time-donor provenance, immutable sources/facts, saved references, independent controls, auth/stale-plan/replay fences and transactional rollback.");
+  console.log("Reviewed venue-links November operator passed: 11 fixed cohorts/26 rows, retained multi-source history/pending components, exact time-donor provenance, immutable sources/facts, saved references, independent controls, auth/stale-plan/replay fences and transactional rollback.");
 } finally {
   Date.now = originalNow;
   if (originalSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = originalSecret;

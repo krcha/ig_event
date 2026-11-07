@@ -289,6 +289,13 @@ and the separately sourced Jura & Film concert at Hangar. Add only reviewed
 aliases to their physical venue; a broad area such as Beton Hala and a combined
 Vinyl/Tavan label are not interchangeable with one catalog venue.
 
+The November 7 Dorcoleta cohort in that operator retains the venue's display
+names and the promoter's original handle-based announcement as evidence for one
+public event. Neither announcement supplies a start time. A future cross-post
+lineup with matching name and handle evidence can be held for review instead
+of automatically publishing a second record. Distinct announced times keep
+their separate occurrences.
+
 The exact Vinyl/Tavan New Year poster has a separate reviewed segmentation
 operator. Preserve its original combined observation as superseded evidence,
 retain existing saved references on the original Vinyl representative, and
