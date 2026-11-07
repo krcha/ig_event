@@ -23,6 +23,7 @@ const recordBatch = "eventDiscovery:recordBatch" as unknown as FunctionReference
 const listGenreResearchInputs = "eventDiscovery:listGenreResearchInputs" as unknown as FunctionReference<"query">;
 const recordGenreResearch = "eventDiscovery:recordGenreResearch" as unknown as FunctionReference<"mutation">;
 const BATCH_SIZE = 12;
+const RESEARCH_EVENT_BATCH_SIZE = 2;
 let processing = false;
 let prioritizeResearch = false;
 let researchCursor: string | null = null;
@@ -59,40 +60,51 @@ async function researchNextBatch(convex: ReturnType<typeof createConvexHttpClien
   const candidates: Candidate[] = [];
   let count = 0;
   for (const candidate of pendingResearch) {
-    if (count + candidate.acts.length > PERFORMER_GENRE_RESEARCH_BATCH_LIMIT) break;
+    if (candidates.length >= RESEARCH_EVENT_BATCH_SIZE ||
+      count + candidate.acts.length > PERFORMER_GENRE_RESEARCH_BATCH_LIMIT) break;
     count += candidate.acts.length;
     candidates.push(candidate);
   }
   if (!candidates.length) return;
 
-  const inputs = candidates.flatMap((candidate, index) =>
-    candidate.acts.map((act, actIndex) => ({
-      ...act, key: `${index}:${actIndex}`, eventTitle: candidate.title, venue: candidate.venue,
+  const researched = await Promise.allSettled(candidates.map(async (candidate) => {
+    const inputs = candidate.acts.map((act, key) => ({
+      ...act, key, eventTitle: candidate.title, venue: candidate.venue,
       date: candidate.date, city: candidate.city, trustedFormat: candidate.format,
-    })),
-  );
-  const { model, results, searchCalls, usage, responseId } = await researchPerformerGenresBatch(inputs);
+    }));
+    const { model, results, searchCalls, usage, responseId } = await researchPerformerGenresBatch(inputs, { thorough: true });
+    const acts = inputs.map(({ key }) => results.get(key));
+    if (acts.some((act) => !act)) throw new Error("Incomplete performer research batch.");
+    const matches: PerformerGenreMatch[] = acts.flatMap((act) => {
+      if (act?.status !== "resolved" || !act.identityEvidence ||
+        !canPublishPerformerGenreSource(act.identityEvidence.url)) return [];
+      const identityUrl = act.identityEvidence.url;
+      return act.genreEvidence
+        .filter(({ url }) => canPublishPerformerGenreSource(url))
+        .map(({ genre, url }) => ({ performer: act.billedName, genre, url, identityUrl }));
+    });
+    return { searchCalls, usage, row: {
+      eventId: candidate.key, expectedUpdatedAt: candidate.expectedUpdatedAt, model, matches,
+      auditJson: JSON.stringify({ responseId, searchCalls, acts }),
+    } };
+  }));
+  const successful = researched.flatMap((item) => item.status === "fulfilled" ? [item.value] : []);
+  if (!successful.length) {
+    pendingResearch = [...pendingResearch.slice(candidates.length), ...candidates];
+    throw new Error("Performer research deferred.");
+  }
   const applied = await convex.mutation(recordGenreResearch, {
     serviceSecret,
-    results: candidates.map((candidate, index) => {
-      const acts = candidate.acts.map((_, actIndex) => results.get(`${index}:${actIndex}`));
-      if (acts.some((act) => !act)) throw new Error("Incomplete performer research batch.");
-      const matches: PerformerGenreMatch[] = acts.flatMap((act) => {
-        if (act?.status !== "resolved" || !act.identityEvidence ||
-          !canPublishPerformerGenreSource(act.identityEvidence.url)) return [];
-        const identityUrl = act.identityEvidence.url;
-        return act.genreEvidence
-          .filter(({ url }) => canPublishPerformerGenreSource(url))
-          .map(({ genre, url }) => ({ performer: act.billedName, genre, url, identityUrl }));
-      });
-      return {
-        eventId: candidate.key, expectedUpdatedAt: candidate.expectedUpdatedAt, model, matches,
-        auditJson: JSON.stringify({ responseId, searchCalls, acts }),
-      };
-    }),
+    results: successful.map(({ row }) => row),
   });
-  pendingResearch = pendingResearch.slice(candidates.length);
-  return { state: "researched", tested: candidates.length, searchCalls, applied, usage };
+  const completed = new Set(successful.map(({ row }) => row.eventId));
+  pendingResearch = [...pendingResearch.slice(candidates.length), ...candidates.filter(({ key }) => !completed.has(key))];
+  const searchCalls = successful.reduce((sum, row) => sum + row.searchCalls, 0);
+  const usage = successful.reduce((sum, { usage }) => ({
+    inputTokens: sum.inputTokens + usage.inputTokens, outputTokens: sum.outputTokens + usage.outputTokens,
+    totalTokens: sum.totalTokens + usage.totalTokens,
+  }), { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+  return { state: "researched", tested: successful.length, deferred: candidates.length - successful.length, searchCalls, applied, usage };
 }
 
 export async function POST(request: Request) {

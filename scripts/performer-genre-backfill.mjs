@@ -15,6 +15,7 @@ import {
 
 const { values } = parseArgs({ options: {
   input: { type: "string" }, output: { type: "string" }, limit: { type: "string" }, concurrency: { type: "string" },
+  thorough: { type: "boolean" },
 } });
 if (!values.input || !values.output || resolve(values.input) === resolve(values.output)) {
   throw new Error("Specify distinct --input candidate-array.json and --output private-research.jsonl files.");
@@ -52,6 +53,7 @@ const revisions = new Map(candidates.map(({ key, expectedUpdatedAt }) => [key, e
 const header = {
   kind: "source", protocol: `performer-genre-research-v${PERFORMER_GENRE_RESEARCH_VERSION}`,
   sourceHash: createHash("sha256").update(snapshot).digest("hex"), candidates: candidates.length,
+  ...(values.thorough ? { thorough: true } : {}),
 };
 const lockPath = `${journal}.lock`;
 const lock = openSync(lockPath, "wx", 0o600);
@@ -86,7 +88,8 @@ function readJournal() {
   const lastNewline = saved.lastIndexOf(10);
   if (lastNewline < 0) throw new Error("Output has no complete source record.");
   const [stored, ...records] = saved.subarray(0, lastNewline + 1).toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
-  if (stored.kind !== header.kind || stored.protocol !== header.protocol || stored.sourceHash !== header.sourceHash || stored.candidates !== header.candidates) {
+  if (stored.kind !== header.kind || stored.protocol !== header.protocol || stored.sourceHash !== header.sourceHash ||
+      stored.candidates !== header.candidates || Boolean(stored.thorough) !== Boolean(values.thorough)) {
     throw new Error("Output belongs to a different candidate snapshot or protocol.");
   }
   for (const record of records) {
@@ -138,11 +141,12 @@ async function run(pending) {
         return key;
       });
       batch.push({ candidate, actKeys });
+      if (values.thorough) break;
     }
     attemptedBatches++;
     let response;
     try {
-      response = await researchPerformerGenresBatch(inputs);
+      response = await researchPerformerGenresBatch(inputs, { thorough: values.thorough });
     } catch (error) {
       errors += batch.length;
       const code = typeof error?.code === "string" && /^[a-z\d _/-]{1,80}$/iu.test(error.code) ? error.code : "research_failed";

@@ -45,6 +45,7 @@ export type PerformerGenreResearchResult = {
 };
 export type PerformerGenreResearchOptions = EventDiscoveryOptions & {
   allowedDomains?: readonly string[];
+  thorough?: boolean;
 };
 export type PerformerGenreResearchBatchResult = {
   results: Map<PerformerGenreResearchInput["key"], PerformerGenreResearchResult>;
@@ -87,6 +88,7 @@ const SYSTEM_PROMPT = [
   "For each genre provide the exact HTTPS source URL visited and a verbatim quote of no more than 20 words that establishes the style and identifies the same artist. Match the fixed genre enum literally, not the genre of a venue, one song, similar artist, label roster, or the style of another performer. The genre URL must be an identity or corroboration source, or tie back to the exact handle or event coordinates. Use at most four independently evidenced styles. General electronic is only for explicitly broad electronic styles.",
   "These are performer-profile estimates. They do not prove what genre was played at the event. Keep empty results when the evidence is unavailable. Never construct or guess a URL, edit a quote, or supply a general search results page as evidence.",
 ].join("\n");
+const THOROUGH_PROMPT = "Use two independent search passes per artist. First search the exact billed act for a profile and explicit style, then independently search the name or handle with the supplied city or venue, including earlier local lineups. If a handle search is sparse, also search the display spelling suggested by the title without treating the title as identity proof. Examine the second pass even if the first results look conclusive.";
 
 type JsonObject = Record<string, unknown>;
 type PreparedRow = Omit<PerformerGenreResearchInput, "key"> & { row: number };
@@ -190,14 +192,37 @@ function hasMatchingSpecialistProfile(source: PerformerWebEvidence, billedName: 
   return Boolean(slug && normalize(slug).replaceAll(" ", "") === normalize(billedName).replaceAll(" ", ""));
 }
 
+function matchesLocalAnchor(source: PerformerWebEvidence, row: PreparedRow): boolean {
+  const city = normalize(row.city);
+  const cities = ["belgrade", "beograd"].includes(city) ? ["belgrade", "beograd", "beograda", "beogradu", "belgrad", "belgrada"] : [city];
+  const text = normalize(source.quote);
+  return cities.some((name) => contains(text, name)) || contains(text, normalize(row.venue)) ||
+    (cities.includes("belgrade") && /\b(?:serbia|serbian|srbija|srbije|srbiji|srpsk\w*)\b/.test(text));
+}
+
 function matchesGenuineProfile(source: PerformerWebEvidence, row: PreparedRow): boolean {
+  const url = new URL(source.url);
+  const artistHost = url.hostname.match(/^([a-z0-9-]+)\.bandcamp\.com$/i)?.[1];
+  const billedSlug = normalize(row.billedName).replaceAll(" ", "");
+  if (artistHost && /^(?:\/|\/album\/[^/]+)$/i.test(url.pathname) &&
+    [normalize(artistHost).replaceAll(" ", ""), normalize(artistHost).replaceAll(" ", "").replace(/\d{1,3}$/, "")].includes(billedSlug) &&
+    matchesName(source.quote, row) && matchesMusicRole(source, row) && matchesLocalAnchor(source, row)) {
+    return true;
+  }
   if (!hasProfilePath(source)) return false;
-  const pathname = new URL(source.url).pathname;
+  const pathname = url.pathname;
   const slug = pathname.match(/\/([^/]+)(?:\/(?:tour-dates|bio|biography))?$/i)?.[1];
   const sameSlug = slug && normalize(slug).replaceAll(" ", "") === normalize(row.billedName).replaceAll(" ", "");
   return Boolean((matchesName(source.title, row) || sameSlug) &&
     (matchesMusicRole(source, row) || hasMatchingSpecialistProfile(source, row.billedName) ||
       /\/(?:dj|musicians?|music\/artists?)\//i.test(pathname)));
+}
+
+function matchesArtistCarrd(source: PerformerWebEvidence, row: PreparedRow): boolean {
+  const url = new URL(source.url);
+  const subdomain = url.hostname.match(/^([a-z0-9-]+)\.carrd\.co$/i)?.[1];
+  return Boolean(subdomain && url.pathname === "/" && isDistinctiveBilledName(row.billedName) &&
+    normalize(subdomain).replaceAll(" ", "") === normalize(row.billedName).replaceAll(" ", ""));
 }
 
 const months = [
@@ -220,6 +245,7 @@ function matchesDate(quote: string, date: string, requireYear = true): boolean {
   const mm = `0?${Number(month)}`;
   const word = `(?:${months[Number(month) - 1]})`;
   const suffix = requireYear ? ` ${year}` : "";
+  if (!requireYear && new RegExp(`\\b${dd}[./-]${mm}\\b`).test(quote)) return true;
   return new RegExp(`\\b(?:${year} ${mm} ${dd}|${dd} ${mm} ${year}|${dd} ${word}${suffix}|${word} ${dd}(?:st|nd|rd|th)?${suffix})\\b`)
     .test(normalize(quote));
 }
@@ -229,18 +255,30 @@ function matchesEvent(source: PerformerWebEvidence, row: PreparedRow, requireYea
   const event = normalize(row.eventTitle);
   const name = normalize(row.billedName);
   const distinctTitle = event.replace(name, "").replace(/\b(?:live|concert|koncert|dj|set|party|zurka|at)\b/g, "").trim();
-  if (!matchesName(source.quote, row) || !contains(quote, normalize(row.venue))) return false;
+  const venue = normalize(row.venue);
+  const venueMatch = contains(quote, venue) || (venue === "sava centar" &&
+    (contains(quote, "sava centru") || contains(quote, "sava centra")));
+  const officialVoxStage = !row.titleOnly && venue === "vox blues club" &&
+    onDomain(source.domain, "voxbluesclub.com") && contains(quote, "vox main stage");
+  if (!matchesName(source.quote, row) || (!venueMatch && !officialVoxStage)) return false;
   if (matchesDate(source.quote, row.date) ||
-    (!requireYear && !year.test(quote) && matchesDate(source.quote, row.date, false))) return true;
+    ((!requireYear || officialVoxStage) && !year.test(quote) && matchesDate(source.quote, row.date, false))) return true;
   return !row.titleOnly && !calendarDate.test(quote) && !numericDate.test(source.quote) &&
     distinctTitle.length >= 8 && contains(quote, event);
+}
+
+function namesOfficialVenueSubject(source: PerformerWebEvidence, row: PreparedRow): boolean {
+  if (normalize(row.venue) !== "sava centar" || !onDomain(source.domain, "savacentar.rs")) return false;
+  const slug = new URL(source.url).pathname.match(/^\/dogadjaji\/([^/]+)$/i)?.[1];
+  return Boolean(slug && normalize(slug) === normalize(row.billedName) &&
+    /^(?:njegov[ao]?|njen[ao]?|njihov[ao]?|his|her|their) (?:muzika|music|stil|style)\b/.test(normalize(source.quote)));
 }
 
 function matchesMusicRole(source: PerformerWebEvidence, row: PreparedRow): boolean {
   const text = normalize(source.quote);
   return row.trustedFormat === "party" || row.trustedFormat === "dj-set"
     ? /\b(?:dj|deejay|producer|producent\w*|selector|turntablist)\b/.test(text)
-    : /\b(?:musician|music artist|recording artist|muzicar\w*|singer|vocalist|guitarist|pianist|band|bend|ensemble|kompozitor\w*|pevac\w*|rapper|trio|quartet)\b/.test(text);
+    : /\b(?:musician|music artist|recording artist|muzicar\w*|singer|vocalist|guitarist|pianist|band|bend|sastav\w*|ensemble|kompozitor\w*|pevac\w*|rapper|trio|quartet)\b/.test(text);
 }
 
 function resolveIdentity(raw: unknown, row: PreparedRow, sources: Map<string, SourceMetadata>) {
@@ -259,13 +297,7 @@ function resolveIdentity(raw: unknown, row: PreparedRow, sources: Map<string, So
   const handle = billedHandle ?? proposedHandle;
   const primaryHasHandle = matchesHandle(primary, handle);
   const corroborationHasHandle = Boolean(corroboration && matchesHandle(corroboration, handle));
-  const city = normalize(row.city);
-  const cities = ["belgrade", "beograd"].includes(city) ? ["belgrade", "beograd", "beograda", "beogradu", "belgrad", "belgrada"] : [city];
-  const local = (proof: PerformerWebEvidence) => {
-    const text = normalize(proof.quote);
-    return cities.some((name) => contains(text, name)) || contains(text, normalize(row.venue)) ||
-      (cities.includes("belgrade") && /\b(?:serbia|serbian|srbija|srbije|srbiji|srpsk\w*)\b/.test(text));
-  };
+  const local = (proof: PerformerWebEvidence) => matchesLocalAnchor(proof, row);
 
   if (identity.kind === "event-listing" && matchesEvent(primary, row)) {
     const verifiedCorroboration = sameName && corroboration && (
@@ -319,11 +351,15 @@ function decodeRow(raw: JsonObject, row: PreparedRow, sources: Map<string, Sourc
     // exact billed name already tied to a verified profile and occurrence.
     const secondSpecialist = specialist && isDistinctiveBilledName(row.billedName) &&
       domainGroup(specialist.domain) !== domainGroup(proof.domain) && hasMatchingSpecialistProfile(proof, row.billedName);
+    const verifiedCarrd = !identity.primaryIsProfile && matchesEvent(identity.primary, row) &&
+      domainGroup(identity.primary.domain) !== domainGroup(proof.domain) &&
+      matchesArtistCarrd(proof, row);
+    const verifiedVenueSubject = !identity.primaryIsProfile && proof.url === identity.primary.url && namesOfficialVenueSubject(proof, row);
     const verifiedProfile = (identity.primaryIsProfile && proof.url === identity.primary.url) ||
-      (proof.url === identity.corroboration?.url && hasProfilePath(proof)) || secondSpecialist;
+      (proof.url === identity.corroboration?.url && hasProfilePath(proof)) || secondSpecialist || verifiedCarrd || verifiedVenueSubject;
     if (!verifiedProfile && !matchesName(proof.quote, row) && !matchesName(proof.title, row) &&
       !matchesHandle(proof, identity.handle)) continue;
-    if (!secondSpecialist && proof.url !== identity.primary.url && proof.url !== identity.corroboration?.url &&
+    if (!secondSpecialist && !verifiedCarrd && proof.url !== identity.primary.url && proof.url !== identity.corroboration?.url &&
       !matchesHandle(proof, identity.handle) && !matchesEvent(proof, row)) continue;
     const name = normalize(row.billedName);
     const venue = normalize(row.venue);
@@ -424,15 +460,17 @@ export async function researchPerformerGenresBatch(
   const apiKey = options.apiKey ?? getRequiredEnv("OPENAI_API_KEY");
   const model = options.model ?? getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
   const body = JSON.stringify({
-    model, store: false, max_output_tokens: 5000, max_tool_calls: rows.length * 3,
-    reasoning: { effort: "low" },
+    model, store: false, max_output_tokens: 5000,
+    max_tool_calls: options.thorough ? Math.min(12, rows.length * 6) : rows.length * 3,
+    reasoning: { effort: options.thorough ? "medium" : "low" },
     tools: [{
       type: "web_search", search_context_size: "medium", external_web_access: true,
       filters: { ...(domains.length ? { allowed_domains: domains } : {}), blocked_domains: BLOCKED_DOMAINS },
     }],
     tool_choice: "required",
     include: ["web_search_call.action.sources"],
-    input: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: JSON.stringify({ rows }) }],
+    input: [{ role: "system", content: options.thorough ? `${SYSTEM_PROMPT}\n${THOROUGH_PROMPT}` : SYSTEM_PROMPT },
+      { role: "user", content: JSON.stringify({ rows }) }],
     text: { format: { type: "json_schema", name: "performer_genre_research_v1", strict: true, schema: outputSchema } },
   });
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
