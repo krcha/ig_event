@@ -4,6 +4,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
 import { eventDiscoveryTaxonomy, performerGenreMatch } from "./eventDiscoveryValues";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
+import { formatUtcDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
@@ -40,6 +41,17 @@ function researchIsCurrent(row: Doc<"eventPerformerGenreResearch"> | null, updat
 
 function labelIsCurrent(label: Doc<"eventDiscoveryLabels"> | null, updatedAt: number) {
   return label?.version === EVENT_DISCOVERY_VERSION && label.eventUpdatedAt === updatedAt;
+}
+
+function requireUpcomingDate(fromDate: string) {
+  const parsed = parseDateKeyToUtcNoon(fromDate);
+  if (!parsed || formatUtcDateKey(parsed) !== fromDate) throw new Error("Invalid upcoming date.");
+  return fromDate;
+}
+
+function upcomingEvents(ctx: QueryCtx, fromDate: string) {
+  return ctx.db.query("events").withIndex("by_publicationState_date", (q) =>
+    q.eq("publicationState", "publishable").gte("date", fromDate)).order("asc");
 }
 
 export async function loadPublicEventDiscoveryLabels(
@@ -81,21 +93,47 @@ function getResearchTarget(event: Doc<"events"> | null, label: Doc<"eventDiscove
     venue: event.venue, date: event.date, city: "Belgrade", format, acts };
 }
 
+async function queuedResearchTarget(
+  ctx: QueryCtx,
+  event: Doc<"events"> | null,
+  label: Doc<"eventDiscoveryLabels"> | null,
+  retryBefore: number,
+) {
+  const target = getResearchTarget(event, label);
+  if (!target) return null;
+  const row = await loadGenreResearch(ctx, target.key);
+  return row && researchIsCurrent(row, target.expectedUpdatedAt) &&
+    (row.matches.length || row.researchedAt > retryBefore) ? null : target;
+}
+
 export const listGenreResearchInputs = query({
-  args: { serviceSecret: v.string(), cursor: v.union(v.string(), v.null()), retryBefore: v.number() },
+  args: {
+    serviceSecret: v.string(), cursor: v.union(v.string(), v.null()), retryBefore: v.number(),
+    upcomingFrom: v.optional(v.string()), eventIds: v.optional(v.array(v.id("events"))),
+  },
   returns: v.object({ events: v.array(researchCandidate), cursor: v.union(v.string(), v.null()) }),
-  handler: async (ctx, { serviceSecret, cursor, retryBefore }) => {
+  handler: async (ctx, { serviceSecret, cursor, retryBefore, upcomingFrom, eventIds }) => {
     await requireAdminOrServiceSecret(ctx, serviceSecret);
+    if (eventIds && (upcomingFrom === undefined || cursor !== null ||
+      eventIds.length > 12 || new Set(eventIds).size !== eventIds.length)) {
+      throw new Error("Invalid priority research batch.");
+    }
+    if (upcomingFrom !== undefined) {
+      requireUpcomingDate(upcomingFrom);
+      const result = eventIds ? null : await upcomingEvents(ctx, upcomingFrom).paginate({ cursor, numItems: 36 });
+      const events = result?.page ?? await Promise.all((eventIds ?? []).map((eventId) => ctx.db.get(eventId)));
+      const targets = await Promise.all(events.map(async (event) => {
+        if (!event || event.date < upcomingFrom || event.status !== "approved" ||
+          event.publicationState !== "publishable") return null;
+        return queuedResearchTarget(ctx, event, await loadLabel(ctx, event._id), retryBefore);
+      }));
+      return { events: targets.filter((target) => target !== null), cursor: result && !result.isDone ? result.continueCursor : null };
+    }
     const result = await ctx.db.query("eventDiscoveryLabels").order("desc").paginate({ cursor, numItems: 36 });
     const events = await Promise.all(result.page.map(async (label) => {
       if (label.version !== EVENT_DISCOVERY_VERSION ||
         (label.taxonomy && !getPerformerGenreResearchFormat(label.taxonomy))) return null;
-      const target = getResearchTarget(await ctx.db.get(label.eventId), label);
-      if (!target) return null;
-      const row = await loadGenreResearch(ctx, target.key);
-      if (row && researchIsCurrent(row, target.expectedUpdatedAt) &&
-        (row.matches.length || row.researchedAt > retryBefore)) return null;
-      return target;
+      return queuedResearchTarget(ctx, await ctx.db.get(label.eventId), label, retryBefore);
     }));
     return { events: events.filter((event) => event !== null), cursor: result.isDone ? null : result.continueCursor };
   },
@@ -147,20 +185,21 @@ export const recordGenreResearch = mutation({
 });
 
 export const listRecentInputs = query({
-  args: { serviceSecret: v.string(), cursor: v.union(v.string(), v.null()) },
+  args: { serviceSecret: v.string(), cursor: v.union(v.string(), v.null()), upcomingFrom: v.optional(v.string()) },
   returns: v.object({
     events: v.array(eventInput),
     cursor: v.union(v.string(), v.null()),
   }),
-  handler: async (ctx, { serviceSecret, cursor }) => {
+  handler: async (ctx, { serviceSecret, cursor, upcomingFrom }) => {
     await requireAdminOrServiceSecret(ctx, serviceSecret);
-    const result = await ctx.db.query("events").withIndex("by_updatedAt").order("desc")
-      .paginate({ cursor, numItems: 60 });
+    const result = upcomingFrom === undefined
+      ? await ctx.db.query("events").withIndex("by_updatedAt").order("desc").paginate({ cursor, numItems: 60 })
+      : await upcomingEvents(ctx, requireUpcomingDate(upcomingFrom)).paginate({ cursor, numItems: 12 });
     const eligible = result.page.filter((event) => event.status === "approved" &&
       event.publicationState === "publishable");
     const events = await Promise.all(eligible.map(async (event) => {
       const label = await loadLabel(ctx, event._id);
-      if (label?.version === EVENT_DISCOVERY_VERSION && label.eventUpdatedAt === event.updatedAt) return null;
+      if (labelIsCurrent(label, event.updatedAt)) return null;
       const evidence = readEventEvidenceRecord(event.normalizedFieldsJson);
       const row = evidence.rowSourceText ?? evidence.splitSourceLine;
       const occurrenceText = typeof row === "string" && row.trim() ? row.slice(0, 800) : undefined;
@@ -206,7 +245,8 @@ export const recordBatch = mutation({
         (taxonomy.categories.length > 1 && taxonomy.categories.includes("other"))
       ))) throw new Error("Invalid discovery classification.");
       const event = await ctx.db.get(eventId);
-      if (!event || event.status !== "approved" || event.updatedAt !== expectedUpdatedAt) {
+      if (!event || event.status !== "approved" || event.publicationState !== "publishable" ||
+        event.updatedAt !== expectedUpdatedAt) {
         stale++;
         continue;
       }

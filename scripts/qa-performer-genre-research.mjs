@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { loadPublicEventDiscoveryLabels, recordGenreResearch } from "../convex/eventDiscovery.ts";
+import {
+  listGenreResearchInputs,
+  listRecentInputs,
+  loadPublicEventDiscoveryLabels,
+  recordBatch,
+  recordGenreResearch,
+} from "../convex/eventDiscovery.ts";
 import {
   PERFORMER_GENRE_RESEARCH_BATCH_LIMIT,
   researchPerformerGenresBatch,
@@ -226,6 +232,11 @@ const db = {
     } };
   },
   insert: async (table, data) => {
+    if (table === "eventDiscoveryLabels") {
+      assert.equal(label, null);
+      label = { ...data, _id: "discovery-label-fixture" };
+      return;
+    }
     assert.equal(table, "eventPerformerGenreResearch");
     assert.equal(research, null);
     research = { ...data, _id: "research-fixture" };
@@ -242,6 +253,110 @@ const stale = { written: 0, resolved: 0, unchanged: 0, stale: 1 };
 const unchanged = { written: 0, resolved: 0, unchanged: 1, stale: 0 };
 const publicProjection = (includePerformerGenreResearch = true) => loadPublicEventDiscoveryLabels(ctx, event, includePerformerGenreResearch);
 const adminBeforeFixture = process.env.ADMIN_CLERK_USER_IDS;
+
+function upcomingQueueFixture() {
+  const upcomingFrom = "2026-11-08";
+  const later = "2026-11-15";
+  const fixtureEvent = (id, date = upcomingFrom, overrides = {}) => ({
+    ...currentEvent, _id: id, title: "Selka", date, ...overrides,
+  });
+  const events = [
+    fixtureEvent("later-unclassified", later, { updatedAt: 1 }),
+    fixtureEvent("later-research", later, { updatedAt: 2 }),
+    fixtureEvent("pending", upcomingFrom, { status: "pending" }),
+    fixtureEvent("hidden", upcomingFrom, { publicationState: "hidden" }),
+    fixtureEvent("past", "2026-11-07"),
+    fixtureEvent("today-unclassified", upcomingFrom, { updatedAt: 3 }),
+    fixtureEvent("today-research", upcomingFrom, { updatedAt: 4 }),
+    fixtureEvent("announced"),
+    fixtureEvent("stale-version"),
+    fixtureEvent("stale-revision"),
+    fixtureEvent("already-researched"),
+    fixtureEvent("recent-empty"),
+    fixtureEvent("expired-empty"),
+    fixtureEvent("outdated-research"),
+    fixtureEvent("unknown-act", upcomingFrom, { title: "Saturday Night", artists: ["Special guest"] }),
+    fixtureEvent("screening"),
+  ];
+  const byId = new Map(events.map((row) => [row._id, row]));
+  const labels = new Map(events.filter((row) => !row._id.endsWith("-unclassified")).map((row) => [row._id, {
+    eventId: row._id,
+    eventUpdatedAt: row.updatedAt,
+    version: EVENT_DISCOVERY_VERSION,
+    taxonomy: party,
+  }]));
+  labels.get("announced").taxonomy = announced;
+  labels.get("stale-version").version = EVENT_DISCOVERY_VERSION + 1;
+  labels.get("stale-revision").eventUpdatedAt--;
+  labels.get("screening").taxonomy = nonMusic;
+  const retryBefore = 1000;
+  const researchRow = (key, researchedAt, matches = []) => ({
+    version: PERFORMER_GENRE_RESEARCH_VERSION,
+    eventUpdatedAt: byId.get(key).updatedAt,
+    researchedAt,
+    matches,
+  });
+  const rows = new Map([
+    ["already-researched", researchRow("already-researched", 100, [researchMatches[0]])],
+    ["recent-empty", researchRow("recent-empty", retryBefore + 1)],
+    ["expired-empty", researchRow("expired-empty", retryBefore - 1)],
+    ["outdated-research", { ...researchRow("outdated-research", retryBefore + 1, [researchMatches[0]]), eventUpdatedAt: 99 }],
+  ]);
+  const pages = [];
+  const reads = [];
+  function ordered(table, index, matches) {
+    return {
+      order(direction) {
+        return {
+          async paginate({ cursor, numItems }) {
+            pages.push({ table, index, direction, numItems, cursor });
+            const sorted = index === "by_publicationState_date"
+              ? [...matches].sort((a, b) => a.date.localeCompare(b.date))
+              : [...matches].sort((a, b) => (b.updatedAt ?? b.eventUpdatedAt) - (a.updatedAt ?? a.eventUpdatedAt));
+            const start = cursor === null ? 0 : Number(cursor);
+            const end = start + numItems;
+            return { page: sorted.slice(start, end), isDone: end >= sorted.length, continueCursor: String(end) };
+          },
+        };
+      },
+    };
+  }
+  const queueCtx = {
+    auth: ctx.auth,
+    db: {
+      get: async (id) => { reads.push(id); return byId.get(id) ?? null; },
+      query(table) {
+        if (table === "events") return {
+          withIndex(index, range) {
+            if (index === "by_updatedAt") return ordered(table, index, events);
+            assert.equal(index, "by_publicationState_date");
+            const calls = [];
+            const chain = {
+              eq(field, value) { calls.push(["eq", field, value]); return chain; },
+              gte(field, value) { calls.push(["gte", field, value]); return chain; },
+            };
+            range(chain);
+            assert.deepEqual(calls, [["eq", "publicationState", "publishable"], ["gte", "date", upcomingFrom]]);
+            return ordered(table, index, events.filter((row) => row.publicationState === "publishable" && row.date >= upcomingFrom));
+          },
+        };
+        const byEventId = table === "eventDiscoveryLabels" ? labels : rows;
+        assert.ok(["eventDiscoveryLabels", "eventPerformerGenreResearch"].includes(table));
+        return {
+          withIndex(index, range) {
+            assert.equal(index, "by_eventId");
+            let eventId;
+            range({ eq(field, id) { assert.equal(field, "eventId"); eventId = id; } });
+            return { unique: async () => byEventId.get(eventId) ?? null };
+          },
+          ...ordered(table, null, [...byEventId.values()]),
+        };
+      },
+    },
+  };
+  return { queueCtx, upcomingFrom, retryBefore, pages, reads };
+}
+
 try {
   process.env.ADMIN_CLERK_USER_IDS = "fixture-admin";
   event = { ...currentEvent, publicationState: "held" };
@@ -278,9 +393,69 @@ try {
   const readsBeforeAnnounced = researchReads;
   assert.deepEqual(await publicProjection(), { eventTaxonomy: announced }, "Announced genres always win.");
   assert.equal(researchReads, readsBeforeAnnounced, "Announced genres do not trigger an extra research lookup.");
+
+  const { queueCtx, upcomingFrom, retryBefore, pages, reads } = upcomingQueueFixture();
+  const recentArgs = { serviceSecret: "", cursor: null };
+  const genreArgs = { ...recentArgs, retryBefore };
+  const keys = (result) => result.events.map(({ key }) => key);
+  const first = await listRecentInputs._handler(queueCtx, { ...recentArgs, upcomingFrom });
+  assert.deepEqual(keys(first), ["today-unclassified", "stale-version", "stale-revision"]);
+  assert.equal(first.cursor, "12", "The cursor advances across raw date-ordered rows, including already classified rows.");
+  const second = await listRecentInputs._handler(queueCtx, { ...recentArgs, upcomingFrom, cursor: first.cursor });
+  assert.deepEqual(keys(second), ["later-unclassified"], "A future event is reachable even when its update timestamp is the oldest.");
+  assert.equal(second.cursor, null);
+  assert.deepEqual(pages.splice(0), [
+    { table: "events", index: "by_publicationState_date", direction: "asc", numItems: 12, cursor: null },
+    { table: "events", index: "by_publicationState_date", direction: "asc", numItems: 12, cursor: "12" },
+  ]);
+  const upcoming = await listGenreResearchInputs._handler(queueCtx, { ...genreArgs, upcomingFrom });
+  assert.deepEqual(keys(upcoming), ["today-research", "expired-empty", "outdated-research", "later-research"],
+    "Research walks upcoming public dates and excludes unpublished, stale-classification, already labeled and recently attempted rows.");
+  assert.equal(upcoming.cursor, null);
+  assert.deepEqual(pages.splice(0), [
+    { table: "events", index: "by_publicationState_date", direction: "asc", numItems: 36, cursor: null },
+  ]);
+  reads.length = 0;
+  const eventIds = [
+    "later-research", "missing", "announced", "stale-version", "today-research", "pending",
+    "hidden", "past", "stale-revision", "already-researched", "recent-empty", "expired-empty",
+  ];
+  const focused = await listGenreResearchInputs._handler(queueCtx, { ...genreArgs, upcomingFrom, eventIds });
+  assert.deepEqual(keys(focused), ["later-research", "today-research", "expired-empty"],
+    "Focused research preserves the requested order while requiring public eligibility and current classifications.");
+  assert.deepEqual(focused.events.map(({ expectedUpdatedAt }) => expectedUpdatedAt), [2, 4, 100]);
+  assert.equal(focused.cursor, null);
+  assert.deepEqual(pages, [], "A focused request does not scan the date index.");
+  assert.equal(reads.length, eventIds.length);
+  for (const invalid of [
+    { eventIds }, { upcomingFrom, eventIds, cursor: "1" }, { upcomingFrom, eventIds: [...eventIds, "outdated-research"] },
+    { upcomingFrom, eventIds: ["today-research", "today-research"] },
+  ]) await assert.rejects(listGenreResearchInputs._handler(queueCtx, { ...genreArgs, ...invalid }));
+  assert.equal(reads.length, eventIds.length, "Invalid focused requests are rejected before loading event rows.");
+
+  await listRecentInputs._handler(queueCtx, recentArgs);
+  await listGenreResearchInputs._handler(queueCtx, genreArgs);
+  assert.deepEqual(pages, [
+    { table: "events", index: "by_updatedAt", direction: "desc", numItems: 60, cursor: null },
+    { table: "eventDiscoveryLabels", index: null, direction: "desc", numItems: 36, cursor: null },
+  ], "Omitting upcoming options preserves both legacy indexes and bounds.");
+
+  const nextClassification = { eventId: currentEvent._id, expectedUpdatedAt: 100, taxonomy: party, auditJson: "{}" };
+  const recordClassification = () => recordBatch._handler(ctx, {
+    serviceSecret: "", model: "fixture", results: [nextClassification],
+  });
+  label = null;
+  for (const overrides of [{ publicationState: "hidden" }, { publicationState: "pending_verification" }, { status: "pending" }, { updatedAt: 101 }]) {
+    event = { ...currentEvent, ...overrides };
+    assert.deepEqual(await recordClassification(), { written: 0, unchanged: 0, stale: 1 });
+    assert.equal(label, null, "Publication or revision changes after listing must fence off the classification write.");
+  }
+  event = currentEvent;
+  assert.deepEqual(await recordClassification(), { written: 1, unchanged: 0, stale: 0 });
+  assert.deepEqual(await recordClassification(), { written: 0, unchanged: 1, stale: 0 });
 } finally {
   if (adminBeforeFixture === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
   else process.env.ADMIN_CLERK_USER_IDS = adminBeforeFixture;
 }
 
-console.log("Performer genre research QA passed: cited web transport, exact identities, evidence, strict row coverage and revision-bound projection.");
+console.log("Performer genre research QA passed: cited web transport, upcoming and focused scheduling, revision-bound projection.");
