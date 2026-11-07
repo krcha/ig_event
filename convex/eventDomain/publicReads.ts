@@ -25,7 +25,7 @@ import {
 } from "../publicationCutover";
 import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy";
 import { getConfirmedEventSchemaFacts } from "../../lib/events/confirmed-event-schema-facts";
-import { loadPublicEventDiscoveryTaxonomy } from "../eventDiscovery";
+import { loadPublicEventDiscoveryLabels } from "../eventDiscovery";
 
 // Live publication validation can touch persisted source evidence, venue
 // identities, and occurrence lineage for every raw row. Keep each public UDF
@@ -531,7 +531,7 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
 
 export async function listPublicCalendarEventsWindowPaginatedHandler(
   ctx: QueryCtx,
-  args: { beforeDate: string; cursor?: string | null; fromDate: string; includeEventTaxonomy?: boolean },
+  args: { beforeDate: string; cursor?: string | null; fromDate: string; includeEventTaxonomy?: boolean; includePerformerGenreResearch?: boolean },
 ) {
   assertPublicEventDateWindow(
     args.fromDate,
@@ -560,8 +560,8 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
       )).map(toPublicCalendarEvent);
       if (!args.includeEventTaxonomy) return projected;
       return Promise.all(projected.map(async (event) => {
-        const eventTaxonomy = await loadPublicEventDiscoveryTaxonomy(ctx, event);
-        return eventTaxonomy ? { ...event, eventTaxonomy } : event;
+        const discovery = await loadPublicEventDiscoveryLabels(ctx, event, args.includePerformerGenreResearch === true);
+        return discovery ? { ...event, ...discovery } : event;
       }));
     },
   });

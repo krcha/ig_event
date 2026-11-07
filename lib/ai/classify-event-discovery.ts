@@ -73,7 +73,7 @@ export class EventDiscoveryProviderError extends Error {
   }
 }
 
-const genreProof: Record<MusicGenre, RegExp> = {
+export const genreProof: Record<MusicGenre, RegExp> = {
   electronic: /\b(?:electronic(?:a)?|elektronsk\w* muzik\w*|elektronik\w*|elektronn\w* muzy\w*|edm|electro|idm|hardstyle|hardcore techno|breakcore)\b/,
   house: /\b(?:house|haus)\b/,
   techno: /\b(?:techno|tekno|tehno|schranz)\b/,

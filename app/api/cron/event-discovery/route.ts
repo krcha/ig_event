@@ -1,16 +1,99 @@
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
 import { classifyEventDiscoveryBatch, type EventDiscoveryInput } from "@/lib/ai/classify-event-discovery";
+import {
+  PERFORMER_GENRE_RESEARCH_BATCH_LIMIT,
+  researchPerformerGenresBatch,
+} from "@/lib/ai/research-performer-genres";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
 import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-config";
+import {
+  EMPTY_RESEARCH_RETRY_MS,
+  canPublishPerformerGenreSource,
+  type PerformerGenreAct,
+  type PerformerGenreFormat,
+  type PerformerGenreMatch,
+} from "@/lib/taxonomy/performer-genre-research";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
 
 const listRecentInputs = "eventDiscovery:listRecentInputs" as unknown as FunctionReference<"query">;
 const recordBatch = "eventDiscovery:recordBatch" as unknown as FunctionReference<"mutation">;
+const listGenreResearchInputs = "eventDiscovery:listGenreResearchInputs" as unknown as FunctionReference<"query">;
+const recordGenreResearch = "eventDiscovery:recordGenreResearch" as unknown as FunctionReference<"mutation">;
 const BATCH_SIZE = 12;
 let processing = false;
+let prioritizeResearch = false;
+let researchCursor: string | null = null;
+
+type Candidate = {
+  key: string;
+  expectedUpdatedAt: number;
+  title: string;
+  venue: string;
+  date: string;
+  city: string;
+  format: PerformerGenreFormat;
+  acts: PerformerGenreAct[];
+};
+let pendingResearch: Candidate[] = [];
+
+async function researchNextBatch(convex: ReturnType<typeof createConvexHttpClient>, serviceSecret: string) {
+  if (!pendingResearch.length) {
+    const hourMs = 60 * 60 * 1000;
+    const retryBefore = Math.floor(Date.now() / hourMs) * hourMs - EMPTY_RESEARCH_RETRY_MS;
+    for (let page = 0; page < 4; page++) {
+      let result: { events: Candidate[]; cursor: string | null };
+      try {
+        result = await convex.query(listGenreResearchInputs, { serviceSecret, cursor: researchCursor, retryBefore });
+      } catch (error) {
+        researchCursor = null;
+        throw error;
+      }
+      researchCursor = result.cursor;
+      pendingResearch = result.events;
+      if (pendingResearch.length || !researchCursor) break;
+    }
+  }
+  const candidates: Candidate[] = [];
+  let count = 0;
+  for (const candidate of pendingResearch) {
+    if (count + candidate.acts.length > PERFORMER_GENRE_RESEARCH_BATCH_LIMIT) break;
+    count += candidate.acts.length;
+    candidates.push(candidate);
+  }
+  if (!candidates.length) return;
+
+  const inputs = candidates.flatMap((candidate, index) =>
+    candidate.acts.map((act, actIndex) => ({
+      ...act, key: `${index}:${actIndex}`, eventTitle: candidate.title, venue: candidate.venue,
+      date: candidate.date, city: candidate.city, trustedFormat: candidate.format,
+    })),
+  );
+  const { model, results, searchCalls, usage, responseId } = await researchPerformerGenresBatch(inputs);
+  const applied = await convex.mutation(recordGenreResearch, {
+    serviceSecret,
+    results: candidates.map((candidate, index) => {
+      const acts = candidate.acts.map((_, actIndex) => results.get(`${index}:${actIndex}`));
+      if (acts.some((act) => !act)) throw new Error("Incomplete performer research batch.");
+      const matches: PerformerGenreMatch[] = acts.flatMap((act) => {
+        if (act?.status !== "resolved" || !act.identityEvidence ||
+          !canPublishPerformerGenreSource(act.identityEvidence.url)) return [];
+        const identityUrl = act.identityEvidence.url;
+        return act.genreEvidence
+          .filter(({ url }) => canPublishPerformerGenreSource(url))
+          .map(({ genre, url }) => ({ performer: act.billedName, genre, url, identityUrl }));
+      });
+      return {
+        eventId: candidate.key, expectedUpdatedAt: candidate.expectedUpdatedAt, model, matches,
+        auditJson: JSON.stringify({ responseId, searchCalls, acts }),
+      };
+    }),
+  });
+  pendingResearch = pendingResearch.slice(candidates.length);
+  return { state: "researched", tested: candidates.length, searchCalls, applied, usage };
+}
 
 export async function POST(request: Request) {
   if (!isAuthorizedCronRequestHeader(request.headers.get("authorization"))) {
@@ -21,6 +104,12 @@ export async function POST(request: Request) {
   try {
     const serviceSecret = requireServiceSecret();
     const convex = createConvexHttpClient();
+    const shouldResearch = prioritizeResearch;
+    prioritizeResearch = false;
+    if (shouldResearch) {
+      const researched = await researchNextBatch(convex, serviceSecret);
+      if (researched) return NextResponse.json(researched);
+    }
     const candidates: Array<EventDiscoveryInput & { key: string; expectedUpdatedAt: number }> = [];
     let cursor: string | null = null;
     for (let page = 0; page < 4 && candidates.length < BATCH_SIZE; page++) {
@@ -31,7 +120,10 @@ export async function POST(request: Request) {
       cursor = result.cursor;
       if (!cursor) break;
     }
-    if (!candidates.length) return NextResponse.json({ state: "idle" });
+    if (!candidates.length) {
+      const researched = shouldResearch ? undefined : await researchNextBatch(convex, serviceSecret);
+      return NextResponse.json(researched ?? { state: "idle" });
+    }
 
     const { model, results, usage } = await classifyEventDiscoveryBatch(candidates);
     const revisions = new Map(candidates.map((item) => [item.key, item.expectedUpdatedAt]));
@@ -45,6 +137,7 @@ export async function POST(request: Request) {
         auditJson: JSON.stringify({ credits, evidence, discardedClaims }),
       })),
     });
+    prioritizeResearch = true;
     return NextResponse.json({ state: "processed", tested: results.length, applied, usage });
   } catch {
     return NextResponse.json({ state: "deferred" }, { status: 503 });

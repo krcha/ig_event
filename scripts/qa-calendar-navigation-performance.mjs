@@ -527,7 +527,7 @@ try {
   const callsBeforeEnrichment = dayCalls;
   await Promise.all([dayLoader.loadPublicCalendarEventsWindow(enrichedWindow), dayLoader.loadPublicCalendarEventsWindow(enrichedWindow)]);
   assert.equal(dayCalls, callsBeforeEnrichment + 1, "Enriched day reads coalesce separately from the plain day cache.");
-  assert.deepEqual(dayQueryArgs.at(-1), { ...enrichedWindow, cursor: null });
+  assert.deepEqual(dayQueryArgs.at(-1), { ...enrichedWindow, includePerformerGenreResearch: true, cursor: null });
   await dayLoader.loadPublicCalendarEventsWindow(dayWindow);
   await dayLoader.loadPublicCalendarEventsWindow(enrichedWindow);
   assert.equal(dayCalls, callsBeforeEnrichment + 1, "Both day variants must keep their own fresh cache entry.");

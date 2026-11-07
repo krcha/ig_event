@@ -29,6 +29,7 @@ import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-win
 import { isPriorityCalendarWindow, prunePublicEventReadCache } from "@/lib/events/public-event-read-cache";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 import type { EventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
+import type { PerformerGenreSource } from "@/lib/taxonomy/performer-genre-research";
 
 export type EventStatus = "pending" | "approved" | "rejected";
 export type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
@@ -76,6 +77,7 @@ export type PublicEvent = {
   artists: string[];
   eventType: string;
   eventTaxonomy?: EventDiscoveryTaxonomy;
+  performerGenreResearch?: { sources: PerformerGenreSource[] };
   ticketPrice?: string;
   attendance?: number | string;
   attendanceCount?: number | string;
@@ -508,7 +510,7 @@ async function queryPublicCalendarEventsWindowPage(options: {
     beforeDate: options.beforeDate,
     cursor: options.cursor ?? null,
     fromDate: options.fromDate,
-    ...(options.includeEventTaxonomy ? { includeEventTaxonomy: true } : {}),
+    ...(options.includeEventTaxonomy ? { includeEventTaxonomy: true, includePerformerGenreResearch: true } : {}),
   })) as PaginatedEventsResponse;
 }
 

@@ -3,7 +3,7 @@ import { PublicText, LocalizedElement, PublicEventCount } from "@/components/i18
 
 
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { VirtualAgendaList } from "./virtual-agenda-list";
 import { CalendarEventPreviews, CalendarEventPreviewRow } from "./calendar-event-preview";
 import { CalendarDiscoveryFilters } from "./calendar-discovery-filters";
@@ -15,11 +15,12 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { CALENDAR_TIME_BANDS } from "@/lib/events/calendar-time-band-definitions";
 import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/lib/events/agenda-sort-options";
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
-import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, eventMatchesMusicGenre, getEventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, getEventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
 import styles from "./mobile-events-home.module.css";
 
 const categoryLabels = new Map(DISCOVERY_CATEGORIES.map(({ key, label }) => [key, label]));
 const formatLabels = new Map(DISCOVERY_FORMATS.map(({ key, label }) => [key, label]));
+const genreLabels = new Map(MUSIC_GENRES.map(({ key, label }) => [key, label]));
 
 type AgendaItem = { event: CalendarAgendaEvent; taxonomy: ReturnType<typeof getEventDiscoveryTaxonomy> };
 
@@ -30,6 +31,33 @@ type Props = {
   hasActiveFilters: boolean;
   clearFiltersHref: string;
 };
+
+function PerformerGenreProvenance({ genres, research }: {
+  genres: readonly DiscoveryGenre[];
+  research: NonNullable<CalendarAgendaEvent["performerGenreResearch"]>;
+}) {
+  const sources = new Map<string, string>();
+  for (const { url, performer } of research.sources) {
+    try {
+      const source = new URL(url);
+      if ((source.protocol === "https:" || source.protocol === "http:") && !source.username && !source.password && !sources.has(source.href)) {
+        sources.set(source.href, performer.trim() || source.hostname);
+      }
+    } catch {
+      // Keep the provenance label even when a source link is unavailable.
+    }
+  }
+
+  return <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs leading-5 text-muted-foreground" data-calendar-genre-provenance="performer">
+    <span><PublicText text="Žanr prema izvođaču" />{genres.length ? " · " : null}
+      {genres.map((genre, index) => <Fragment key={genre}>{index ? ", " : null}<PublicText text={genreLabels.get(genre)} /></Fragment>)}
+    </span>
+    {[...sources].map(([href, performer]) => <a key={href} href={href} target="_blank" rel="noopener noreferrer"
+      className="min-w-0 break-words text-detail underline underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-detail">
+      <PublicText text="Izvor za žanr izvođača" />{" · "}{performer}
+    </a>)}
+  </p>;
+}
 
 function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean) {
   const categoryLabel = taxonomy.primaryCategory === "party" ? "Žurke"
@@ -76,6 +104,7 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
           </span>
           <EventMetaRow event={event} presentation={{ category: event.category, tags: secondaryTags }} />
         </div>
+        {event.performerGenreResearch ? <PerformerGenreProvenance genres={taxonomy.genres} research={event.performerGenreResearch} /> : null}
         <OpenNowStatus eventId={event._id} state={event.openNowState} />
       </div>
       <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="icon" />
