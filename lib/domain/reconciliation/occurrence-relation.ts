@@ -91,6 +91,28 @@ const NON_DISTINCTIVE_TITLE_TOKENS = new Set([
   "za",
 ]);
 
+const GENERIC_BILLED_ARTIST_TOKENS = new Set([
+  "artist",
+  "artists",
+  "band",
+  "bend",
+  "crew",
+  "friends",
+  "gost",
+  "gosti",
+  "guest",
+  "guests",
+  "house",
+  "lineup",
+  "resident",
+  "residents",
+  "support",
+  "surprise",
+  "tba",
+  "tbd",
+  "techno",
+]);
+
 function parseNormalizedFields(
   candidate: OccurrenceRelationshipCandidate,
 ): Record<string, unknown> | null {
@@ -233,6 +255,110 @@ function titlesProveDistinct(left: string, right: string): boolean {
   );
 }
 
+function sourceBoundLineup(
+  candidate: OccurrenceRelationshipCandidate,
+): readonly string[] | null {
+  const artists = candidate.artists;
+  if (!artists || artists.length < 3 || artists.length > 12) return null;
+
+  const identities = artists.map(toSearchableText);
+  if (
+    identities.some((identity) => !identity) ||
+    new Set(identities.map((identity) => identity.replaceAll(" ", ""))).size !== artists.length ||
+    toSearchableText(candidate.title) !== identities.join(" ")
+  ) {
+    return null;
+  }
+
+  const fields = parseNormalizedFields(candidate);
+  const attestedArtists = fields?.artists;
+  if (
+    !fields ||
+    fields.sourceOccurrencePlanUnverified === true ||
+    !Array.isArray(attestedArtists) ||
+    attestedArtists.length !== artists.length ||
+    !artists.every((artist, index) => artist === attestedArtists[index])
+  ) {
+    return null;
+  }
+
+  if (
+    fields.sourceGroundingRowVerified === true &&
+    fields.sourceGroundingArtistsVerified === true
+  ) {
+    return artists;
+  }
+  if (
+    fields.extractionContractVersion !== "event_evidence_v2" ||
+    fields.structuredEvidenceVerified !== true ||
+    fields.identityEvidenceVerified !== true ||
+    typeof fields.rowSourceText !== "string"
+  ) {
+    return null;
+  }
+  const sourceRow = ` ${toSearchableText(fields.rowSourceText)} `;
+  return identities.every((identity) => sourceRow.includes(` ${identity} `))
+    ? artists
+    : null;
+}
+
+function billedArtistMatch(
+  left: string,
+  right: string,
+): "exact" | "alias" | "expansion" | null {
+  const handlePattern = /^@[a-z0-9][a-z0-9._]{1,29}$/iu;
+  const leftIsHandle = handlePattern.test(left);
+  const rightIsHandle = handlePattern.test(right);
+  const name = toSearchableText(leftIsHandle ? right : left);
+  const words = name.split(" ");
+  const compactName = words.join("");
+  if (
+    compactName.length < 4 ||
+    words.some((word) =>
+      GENERIC_BILLED_ARTIST_TOKENS.has(word) || NON_DISTINCTIVE_TITLE_TOKENS.has(word),
+    )
+  ) {
+    return null;
+  }
+  if (leftIsHandle === rightIsHandle) {
+    return toSearchableText(left) === toSearchableText(right) ? "exact" : null;
+  }
+
+  const handle = toSearchableText(leftIsHandle ? left : right).replaceAll(" ", "");
+  if (handle === compactName || handle === `dj${compactName}`) {
+    const distinctive =
+      compactName.length >= 8 ||
+      (compactName.length >= 7 && words.length >= 2 && words.every((word) => word.length >= 2));
+    return distinctive ? "alias" : "exact";
+  }
+  return /^[a-z]{4,12}$/u.test(name) &&
+    handle.startsWith(name) && /^[a-z]{5,}$/u.test(handle.slice(name.length))
+    ? "expansion"
+    : null;
+}
+
+function lineupsSuggestCrossSourceCollision(
+  left: OccurrenceRelationshipCandidate,
+  right: OccurrenceRelationshipCandidate,
+): boolean {
+  const leftLineup = sourceBoundLineup(left);
+  const rightLineup = sourceBoundLineup(right);
+  if (!leftLineup || !rightLineup || leftLineup.length !== rightLineup.length) {
+    return false;
+  }
+
+  // Require the same bill order. A single weak name expansion can only
+  // corroborate the stronger aliases and never proves a shared occurrence.
+  const matches = leftLineup.map((artist, index) =>
+    billedArtistMatch(artist, rightLineup[index]),
+  );
+  return (
+    matches.every(Boolean) &&
+    matches.filter((match) => match === "alias").length >= 2 &&
+    matches.filter((match) => match === "expansion").length <= 1
+  );
+}
+
 /**
  * Authoritative same-day occurrence relationship invariant.
  *
@@ -314,6 +440,11 @@ export function classifyOccurrenceRelationshipInvariant(options: {
   if (!sameVenue && !sameSource) {
     if (!unknownVenue || (!sameTitle && !sharedArtist)) return "unrelated";
     return sameReliableTime ? "proven_duplicate" : "ambiguous";
+  }
+  if (
+    sameVenue && !sameSource && lineupsSuggestCrossSourceCollision(candidate, existing)
+  ) {
+    return "ambiguous";
   }
   if (sameVenue && sameNamedOccurrence) return "proven_duplicate";
   if (

@@ -9,6 +9,8 @@ import {
   recordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { classifyApprovalOccurrenceRelation } from "../lib/events/approval-occurrence-conflict.ts";
+import { classifyApprovalCandidates } from "../convex/eventDomain/sourceApproval.ts";
+import { classifyExistingApprovedOccurrence } from "../lib/pipeline/ingestion/post-processing-policy.ts";
 import {
   bindSourceOccurrenceMetadata,
   prepareEventsForInsert,
@@ -773,6 +775,85 @@ assert.equal(
   "proven_distinct",
   "An independently named untimed event must remain distinct from a lineup at the same venue.",
 );
+
+function dorcoletaLineup(title, artists, rowSourceText, source, options = {}) {
+  return {
+    title,
+    artists,
+    date: "2026-11-07",
+    venue: "Dorćoleta",
+    venueId: "dorcoleta-venue",
+    time: "TBD",
+    instagramPostId: source,
+    sourceOccurrenceKey: `source-occurrence:${source}`,
+    normalizedFieldsJson: JSON.stringify({
+      artists,
+      rowSourceText,
+      extractionContractVersion: "event_evidence_v2",
+      structuredEvidenceVerified: true,
+      identityEvidenceVerified: true,
+      sourceGroundingArtistsVerified: false,
+      sourceGroundingRowVerified: false,
+      ...options,
+    }),
+  };
+}
+
+const dorcoletaPromoter = dorcoletaLineup(
+  "Danijelcehranov, Djalextic, Anyastankovich",
+  ["@danijelcehranov", "@djalextic", "@anyastankovich"],
+  "Subota, 07. novembar; 🎧 @danijelcehranov | @djalextic | @anyastankovich; 📍 Dorćoleta, Dobračina 76",
+  "promoter-post",
+  { sourceGroundingArtistsVerified: true, sourceGroundingRowVerified: true },
+);
+const dorcoletaVenue = dorcoletaLineup(
+  "Danijel Čehranov, Alex Tic, Anya",
+  ["Danijel Čehranov", "Alex Tic", "Anya"],
+  "DANIJEL ČEHRANOV / ALEX TIC / ANYA / SUBOTA 07.11.",
+  "venue-post",
+);
+for (const classify of [classifyApprovalCandidates, classifyExistingApprovedOccurrence]) {
+  assert.equal(
+    classify(dorcoletaPromoter, dorcoletaVenue),
+    "ambiguous",
+    "A verified full lineup in handle and display-name forms needs a moderation decision.",
+  );
+  assert.equal(
+    classify(dorcoletaVenue, dorcoletaPromoter),
+    "ambiguous",
+    "A full lineup alias collision needs review whichever source is ingested first.",
+  );
+  assert.equal(
+    classify({ ...dorcoletaPromoter, time: "23:00" }, { ...dorcoletaVenue, time: "18:00" }),
+    "proven_distinct",
+    "Reliable different start times keep repeat sessions distinct.",
+  );
+  assert.equal(
+    classify(dorcoletaPromoter, dorcoletaLineup(
+      "Danijel Čehranov, Alex Tic, Teodor Jovanović",
+      ["Danijel Čehranov", "Alex Tic", "Teodor Jovanović"],
+      "DANIJEL ČEHRANOV / ALEX TIC / TEODOR JOVANOVIĆ / SUBOTA 07.11.",
+      "other-lineup-post",
+    )),
+    "proven_distinct",
+    "Two aliases in an otherwise different lineup must leave the events distinct.",
+  );
+  assert.equal(
+    classify(dorcoletaPromoter, dorcoletaLineup(
+      dorcoletaVenue.title,
+      dorcoletaVenue.artists,
+      "DANIJEL ČEHRANOV / ALEX TIC / SUBOTA 07.11.",
+      "incomplete-lineup-post",
+    )),
+    "proven_distinct",
+    "The full artist array must be corroborated by the bound source row.",
+  );
+  assert.equal(
+    classify(dorcoletaPromoter, { ...dorcoletaVenue, title: `Matinee: ${dorcoletaVenue.title}` }),
+    "proven_distinct",
+    "A session-specific title must not be interpreted as a lineup-only title.",
+  );
+}
 
 const emptyVenueFixture = emptyVenueOccurrenceFixture();
 const emptyVenueCreateState = makeDb({
