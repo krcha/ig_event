@@ -39,8 +39,11 @@ Clerk, Convex, OpenAI and Apify remain the existing services.
 | Open Graph locale | `sr_RS` | `en_RS` | `ru_RS` |
 | Timezone | `Europe/Belgrade` | `Europe/Belgrade` | `Europe/Belgrade` |
 
-Language names in the switcher are native names, supplied by the translation
-catalog. Use text labels rather than flags. All interfaces use 24-hour time;
+Per the user's updated preference, the collapsed switcher shows only a country
+flag: Serbia for Serbian, the United Kingdom for English, and Russia for Russian.
+The menu retains native language names beside the flags and accessible labels.
+Flag SVGs are self-hosted from flag-icons, with its MIT license retained under
+`public/flags/LICENSE.txt`. All interfaces use 24-hour time;
 the language setting does not convert the event's timezone or ticket currency.
 Serbian Cyrillic can be added later as an explicit locale, with editorial review.
 

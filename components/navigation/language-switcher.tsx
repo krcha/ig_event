@@ -1,16 +1,17 @@
 "use client";
 
-import { Check, ChevronDown, Globe2 } from "lucide-react";
+import { Check } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useLocale } from "@/i18n/client";
 import { localizeHref, type Locale } from "@/i18n/config";
 import { accountText } from "@/lib/i18n/account-messages";
 
-const LANGUAGE_OPTIONS: ReadonlyArray<{ locale: Locale; label: string }> = [
-  { locale: "sr", label: "Srpski" },
-  { locale: "en", label: "English" },
-  { locale: "ru", label: "Русский" },
+const LANGUAGE_OPTIONS: ReadonlyArray<{ locale: Locale; label: string; flag: string }> = [
+  { locale: "sr", label: "Srpski", flag: "rs" },
+  { locale: "en", label: "English", flag: "gb" },
+  { locale: "ru", label: "Русский", flag: "ru" },
 ];
 
 /** A language switch loads a fresh document so the server document language,
@@ -61,16 +62,14 @@ export function LanguageSwitcher() {
       <button
         aria-expanded={isOpen}
         aria-label={accountText(locale, "nav.chooseLanguage")}
-        className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-1 text-xs font-medium text-foreground hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring lg:gap-1.5 lg:px-2"
+        className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-foreground hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         onClick={() => { setHash(window.location.hash); setIsOpen(value => !value); }}
         onKeyDown={event => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openAndFocus(); } }}
         ref={trigger}
+        title={current.label}
         type="button"
       >
-        <Globe2 aria-hidden="true" className="h-3.5 w-3.5" />
-        <span className="lg:hidden">{locale.toUpperCase()}</span>
-        <span className="hidden lg:inline">{current.label}</span>
-        <ChevronDown aria-hidden="true" className="hidden h-3 w-3 lg:block" />
+        <Image alt="" aria-hidden="true" className="h-[18px] w-6 rounded-[2px] object-cover" data-language-flag={current.flag} height={18} src={`/flags/${current.flag}.svg`} unoptimized width={24} />
       </button>
       {isOpen ? (
         <div className="absolute right-0 top-full z-[90] mt-1 min-w-48 rounded-xl border border-border bg-card p-2 shadow-[0_12px_30px_-10px_rgba(0,0,0,0.6)]">
@@ -96,7 +95,11 @@ export function LanguageSwitcher() {
               }}
               ref={element => { options.current[index] = element; }}
             >
-              {option.label}{option.locale === locale ? <Check aria-hidden="true" className="h-4 w-4" /> : null}
+              <span className="flex items-center gap-3">
+                <Image alt="" aria-hidden="true" className="h-[18px] w-6 rounded-[2px] object-cover" height={18} src={`/flags/${option.flag}.svg`} unoptimized width={24} />
+                {option.label}
+              </span>
+              {option.locale === locale ? <Check aria-hidden="true" className="h-4 w-4" /> : null}
             </a>
           ))}
         </div>
