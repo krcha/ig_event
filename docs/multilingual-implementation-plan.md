@@ -47,11 +47,13 @@ Flag SVGs are self-hosted from flag-icons, with its MIT license retained under
 the language setting does not convert the event's timezone or ticket currency.
 Serbian Cyrillic can be added later as an explicit locale, with editorial review.
 
-The URL determines the rendered language. Disable automatic redirects based on
-`Accept-Language`, IP or a preference cookie. A preference cookie may remember
-an explicit switch, but must not change the content served at a fixed URL. The
-switcher preserves the current event/venue ID, supported query parameters and
-fragment. Existing unprefixed links continue to work and render Serbian.
+The URL determines the rendered language. On entry to the unprefixed home page,
+a document request uses the saved choice, then the browser's `Accept-Language`
+preferences, with Serbian as the fallback. English and Russian selection uses
+a temporary redirect to the matching home page. The switcher remembers an
+explicit choice and preserves the current event/venue ID, query and fragment.
+The Serbian home alias selects Serbian before redirecting to `/`. In-site
+navigation and direct links to other pages keep the language of their URL.
 Separate language URLs follow [Google's multilingual site guidance](https://developers.google.com/search/docs/specialty/international/managing-multi-regional-sites).
 
 | Surface | Serbian | English | Russian | Indexing |

@@ -7,7 +7,7 @@ import nextConfig from "../next.config.mjs";
 
 const require = createRequire(import.meta.url);
 const { NextRequest, NextResponse } = require("next/server");
-const { localizeHref, stripLocalePrefix, resolveLocaleRequestPath } = localeConfig;
+const { localizeHref, stripLocalePrefix, resolveLocaleRequestPath, LOCALE_PREFERENCE_COOKIE, LOCALE_SELECTION_PARAM } = localeConfig;
 
 for (const locale of ["sr", "en", "ru"]) {
   const prefix = locale === "sr" ? "" : `/${locale}`;
@@ -68,6 +68,13 @@ function loadMiddleware({ configured = false, malformedCookie = false } = {}) {
   return { handle: compiledModule.exports.default, config: compiledModule.exports.config, calls };
 }
 
+function documentRequest(path, headers = {}, method = "GET") {
+  return new NextRequest(`https://eventzeka.com${path}`, {
+    method,
+    headers: { accept: "text/html", "sec-fetch-dest": "document", "sec-fetch-site": "none", ...headers },
+  });
+}
+
 for (const configured of [false, true]) {
   const { handle, config, calls } = loadMiddleware({ configured });
   assert.ok(config.matcher.some((pattern) => pattern.includes("_next")), "Public pages must enter locale validation.");
@@ -96,6 +103,69 @@ for (const configured of [false, true]) {
     const destination = response.headers.get("x-middleware-rewrite");
     assert.equal(destination, null, "Middleware must not proxy into itself and reset the locale; the fixed public rewrite table resolves the page.");
   }
+  const search = "?day=2026-11-07&q=a%26b";
+  for (const [language, saved, expected] of [
+    ["en-GB,en;q=0.9", null, "en"],
+    ["de-DE,ru-RU;q=0.8,en;q=0.7", null, "ru"],
+    ["ru;q=0,en-US;q=0.5", null, "en"],
+    ["RU-ru;q=0.4,en;q=0.8", null, "en"],
+    ["sr-Latn-RS,en;q=0.9", null, "sr"],
+    ["de-DE,fr;q=0.9,*;q=0.1", null, "sr"],
+    ["ru;q=2,en;q=broken", null, "sr"],
+    ["", null, "sr"],
+    ["ru-RU", "sr", "sr"],
+    ["sr-RS", "ru", "ru"],
+    ["ru-RU", "invalid", "ru"],
+  ]) {
+    const headers = { "accept-language": language, ...(saved ? { cookie: `${LOCALE_PREFERENCE_COOKIE}=${saved}` } : {}) };
+    const response = await handle(documentRequest(`/${search}`, headers), {});
+    assert.equal(response.status, expected === "sr" ? 200 : 307);
+    assert.equal(response.headers.get("set-cookie"), null, "Automatic language selection does not save a manual preference.");
+    if (expected === "sr") {
+      assert.equal(response.headers.get("content-language"), "sr-Latn-RS");
+    } else {
+      assert.equal(response.headers.get("location"), `https://eventzeka.com/${expected}${search}`);
+      assert.match(response.headers.get("cache-control"), /private, no-store/u);
+    }
+  }
+  for (const [path, lang] of [["/en", "en"], ["/ru/events/event_123", "ru"], ["/events/event_123", "sr"], ["/sign-in", "sr"]]) {
+    const response = await handle(documentRequest(path, {
+      "accept-language": "en", cookie: `${LOCALE_PREFERENCE_COOKIE}=ru`, "x-eventzeka-locale": "ru",
+    }), {});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-language"), localeConfig.LOCALE_LANGUAGE_TAGS[lang]);
+    assert.equal(response.headers.get("set-cookie"), null);
+  }
+  for (const [headers, method] of [
+    [{ rsc: "1" }, "GET"],
+    [{ "next-router-prefetch": "1" }, "GET"],
+    [{ "sec-purpose": "prefetch" }, "GET"],
+    [{ "sec-fetch-dest": "empty" }, "GET"],
+    [{ "sec-fetch-site": "same-origin" }, "GET"],
+    [{}, "HEAD"],
+  ]) {
+    const response = await handle(documentRequest("/", { "accept-language": "ru", ...headers }, method), {});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-language"), "sr-Latn-RS");
+  }
+  for (const [path, language] of [["/", "sr"], ["/en/discover", "en"], ["/ru/events/event_123", "ru"]]) {
+    const response = await handle(documentRequest(`${path}${search}&${LOCALE_SELECTION_PARAM}=${language}`, { "accept-language": "ru-RU" }), {});
+    assert.equal(response.status, 307);
+    assert.equal(response.headers.get("location"), `https://eventzeka.com${path}${search}`);
+    assert.equal(response.cookies.get(LOCALE_PREFERENCE_COOKIE)?.value, language);
+    assert.match(response.headers.get("set-cookie"), /Path=\/;.*Secure;.*HttpOnly;.*SameSite=lax/iu);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+  }
+  for (const query of [`${LOCALE_SELECTION_PARAM}=ru`, `${LOCALE_SELECTION_PARAM}=en&${LOCALE_SELECTION_PARAM}=en`]) {
+    const response = await handle(documentRequest(`/en?${query}`), {});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("set-cookie"), null);
+  }
+  const explicitSerbian = await handle(documentRequest(`/sr${search}`, { "accept-language": "en-US" }), {});
+  assert.equal(explicitSerbian.status, 308);
+  assert.equal(explicitSerbian.headers.get("location"), `https://eventzeka.com/${search}`);
+  assert.equal(explicitSerbian.cookies.get(LOCALE_PREFERENCE_COOKIE)?.value, "sr");
+
   const canonical = await handle(new NextRequest("https://eventzeka.com/sr/discover?date=2026-11-07"), {});
   assert.equal(canonical.status, 308);
   assert.equal(canonical.headers.get("location"), "https://eventzeka.com/discover?date=2026-11-07");

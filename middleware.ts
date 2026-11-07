@@ -6,11 +6,17 @@ import {
   shouldFailClosedForAdminRoutes,
 } from "@/lib/utils/env";
 import {
+  DEFAULT_LOCALE,
   getLocaleFromPath,
+  isPublicPagePath,
   localizeHref,
   LOCALE_HEADER,
   LOCALE_LANGUAGE_TAGS,
+  LOCALE_PREFERENCE_COOKIE,
+  LOCALE_SELECTION_PARAM,
+  preferredLocale,
   resolveLocaleRequestPath,
+  type Locale,
 } from "@/i18n/config";
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)", "/api/admin(.*)"]);
@@ -59,6 +65,29 @@ function malformedClerkCookieResponse(req: NextRequest): NextResponse {
   return clearClerkCookies(NextResponse.redirect(signInUrl), req);
 }
 
+function isDocumentNavigation(req: NextRequest): boolean {
+  const headers = req.headers;
+  const destination = headers.get("sec-fetch-dest");
+  const purpose = `${headers.get("purpose") ?? ""} ${headers.get("sec-purpose") ?? ""}`;
+  return req.method === "GET" &&
+    (destination ? destination === "document" : /\btext\/html\b/i.test(headers.get("accept") ?? "")) &&
+    !headers.has("rsc") && !headers.has("next-router-state-tree") &&
+    !headers.has("next-router-prefetch") && !headers.has("next-router-segment-prefetch") &&
+    !/\bprefetch\b/i.test(purpose);
+}
+
+function rememberLocale(response: NextResponse, req: NextRequest, locale: Locale): NextResponse {
+  response.headers.set("cache-control", "private, no-store");
+  response.cookies.set(LOCALE_PREFERENCE_COOKIE, locale, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: req.nextUrl.protocol === "https:",
+    path: "/",
+    maxAge: 365 * 24 * 60 * 60,
+  });
+  return response;
+}
+
 function localizedPageResponse(req: NextRequest): NextResponse {
   const resolution = resolveLocaleRequestPath(req.nextUrl.pathname);
   if (resolution.kind === "not_found") {
@@ -67,13 +96,38 @@ function localizedPageResponse(req: NextRequest): NextResponse {
       headers: { "content-type": "text/plain; charset=utf-8", "x-robots-tag": "noindex" },
     });
   }
+  const documentNavigation = isDocumentNavigation(req);
   if (resolution.kind === "redirect") {
     const destination = req.nextUrl.clone();
     destination.pathname = resolution.pathname;
-    return NextResponse.redirect(destination, 308);
+    const response = NextResponse.redirect(destination, 308);
+    // The Serbian home alias is an explicit choice before it canonicalizes to /.
+    return documentNavigation && resolution.pathname === "/"
+      ? rememberLocale(response, req, DEFAULT_LOCALE)
+      : response;
   }
-  // Locale is URL-bound. Never trust an externally supplied locale header,
-  // browser language or preference cookie for server-rendered page identity.
+  if (documentNavigation) {
+    const selection = req.nextUrl.searchParams.getAll(LOCALE_SELECTION_PARAM);
+    if (selection.length === 1 && selection[0] === resolution.locale && isPublicPagePath(resolution.pathname)) {
+      const destination = req.nextUrl.clone();
+      destination.searchParams.delete(LOCALE_SELECTION_PARAM);
+      return rememberLocale(NextResponse.redirect(destination, 307), req, resolution.locale);
+    }
+    // Language negotiation applies on entry to the homepage. In-site navigation
+    // and language-specific URLs keep the locale of their destination.
+    if (req.nextUrl.pathname === "/" && req.headers.get("sec-fetch-site") !== "same-origin") {
+      const locale = preferredLocale(req.cookies.get(LOCALE_PREFERENCE_COOKIE)?.value, req.headers.get("accept-language"));
+      if (locale !== DEFAULT_LOCALE) {
+        const destination = req.nextUrl.clone();
+        destination.pathname = localizeHref("/", locale);
+        return NextResponse.redirect(destination, {
+          status: 307,
+          headers: { "cache-control": "private, no-store", vary: "Accept-Language, Cookie" },
+        });
+      }
+    }
+  }
+  // Only the destination URL sets the locale of the rendered document.
   const requestHeaders = new Headers(req.headers);
   requestHeaders.delete(LOCALE_HEADER);
   requestHeaders.set(LOCALE_HEADER, resolution.locale);

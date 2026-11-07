@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useLocale } from "@/i18n/client";
-import { localizeHref, type Locale } from "@/i18n/config";
+import { localizeHref, LOCALE_SELECTION_PARAM, type Locale } from "@/i18n/config";
 import { accountText } from "@/lib/i18n/account-messages";
 
 const LANGUAGE_OPTIONS: ReadonlyArray<{ locale: Locale; label: string; flag: string }> = [
@@ -56,7 +56,11 @@ export function LanguageSwitcher() {
     requestAnimationFrame(() => options.current[LANGUAGE_OPTIONS.findIndex(option => option.locale === locale)]?.focus());
   }
 
-  const sourceHref = `${pathname}${search.size ? `?${search.toString()}` : ""}${hash}`;
+  function selectionHref(language: Locale) {
+    const query = new URLSearchParams(search.toString());
+    query.set(LOCALE_SELECTION_PARAM, language);
+    return localizeHref(`${pathname}?${query}${hash}`, language);
+  }
   return (
     <div className="relative shrink-0" data-language-switcher ref={root}>
       <button
@@ -80,7 +84,7 @@ export function LanguageSwitcher() {
               className={option.locale === locale
                 ? "flex min-h-11 items-center justify-between gap-4 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
                 : "flex min-h-11 items-center justify-between gap-4 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-raised focus-visible:outline-2 focus-visible:outline-ring"}
-              href={localizeHref(sourceHref, option.locale)}
+              href={selectionHref(option.locale)}
               hrefLang={option.locale === "sr" ? "sr-Latn" : option.locale}
               key={option.locale}
               lang={option.locale === "sr" ? "sr-Latn" : option.locale}

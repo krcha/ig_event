@@ -3,6 +3,8 @@ export const LOCALES = ["sr", "en", "ru"] as const;
 export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = "sr";
 export const LOCALE_HEADER = "x-eventzeka-locale";
+export const LOCALE_PREFERENCE_COOKIE = "eventzeka_language";
+export const LOCALE_SELECTION_PARAM = "set_language";
 
 export const LOCALE_LANGUAGE_TAGS: Record<Locale, string> = {
   sr: "sr-Latn-RS",
@@ -18,6 +20,23 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 export function isLocale(value: unknown): value is Locale {
   return typeof value === "string" && LOCALES.some((locale) => locale === value);
+}
+
+export function preferredLocale(saved: unknown, acceptLanguage: string | null): Locale {
+  if (isLocale(saved)) return saved;
+
+  let preferred = DEFAULT_LOCALE;
+  let bestWeight = 0;
+  for (const range of (acceptLanguage ?? "").split(",")) {
+    const match = /^\s*([a-z]{1,8})(?:-[a-z0-9]{1,8})*(?:\s*;\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?))?\s*$/iu.exec(range);
+    const locale = match?.[1].toLowerCase();
+    const weight = Number(match?.[2] ?? 1);
+    if (isLocale(locale) && weight > bestWeight) {
+      preferred = locale;
+      bestWeight = weight;
+    }
+  }
+  return preferred;
 }
 
 /** A whole URL segment is required: /english and /envelope are ordinary paths. */

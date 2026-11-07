@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { isPublicPagePath, localizeHref, stripLocalePrefix, LOCALE_LANGUAGE_TAGS } from "../i18n/config.ts";
+import { isPublicPagePath, localizeHref, stripLocalePrefix, LOCALE_LANGUAGE_TAGS, LOCALE_SELECTION_PARAM } from "../i18n/config.ts";
 import { accountMessages, accountText } from "../lib/i18n/account-messages.ts";
 import { getSafeRedirectPath } from "../lib/auth/safe-redirect.ts";
 import { getEmailSignInError, getEmailSignInStep } from "../lib/auth/email-sign-in.ts";
@@ -100,14 +100,16 @@ for (const locale of ["sr", "en", "ru"]) {
     "lucide-react": { Check: icon },
     "next/image": { default: "img" },
     "@/i18n/client": { useLocale: () => locale },
-    "@/i18n/config": { localizeHref },
+    "@/i18n/config": { localizeHref, LOCALE_SELECTION_PARAM },
     "@/lib/i18n/account-messages": { accountText },
   });
   const switchTree = flatten(resolve(switcher.LanguageSwitcher()));
   const languageLinks = switchTree.filter(node => node.type === "a");
   assert.equal(languageLinks.length, 3);
   assert.deepEqual(languageLinks.map(node => text(node)), ["Srpski", "English", "Русский"]);
-  assert.deepEqual(languageLinks.map(node => node.props.href), ["", "/en", "/ru"].map(next => `${next}/events/exact-event?day=2026-11-07&venue=id%3Aexact-venue#details`));
+  assert.deepEqual(languageLinks.map(node => node.props.href), ["sr", "en", "ru"].map(language =>
+    localizeHref(`/events/exact-event?day=2026-11-07&venue=id%3Aexact-venue&${LOCALE_SELECTION_PARAM}=${language}#details`, language),
+  ));
 
   const authCard = loadComponent("components/auth/email-auth-card.tsx", {
     "react/jsx-runtime": { jsx, jsxs: jsx },
