@@ -66,6 +66,7 @@ import {
   clipText,
 } from "@/lib/seo/site";
 
+import type { ConfirmedEventSchemaFacts } from "@/lib/events/confirmed-event-schema-facts";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
 
 export const revalidate = 60;
@@ -93,6 +94,7 @@ type EventRecord = {
   description?: string;
   reviewedSourceUpdate?: ReviewedSourceUpdate;
   sourceCaption?: string;
+  structuredDataFacts?: ConfirmedEventSchemaFacts;
   imageUrl?: string;
   imageStorageId?: string;
   instagramPostId?: string;
@@ -216,6 +218,9 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   event.displayTimeStart = displayTime.startLabel;
   event.venueCategory = venue?.category ?? event.venueCategory ?? undefined;
   const publicEvent = projectPublicEventVenueDisplay(event, venue);
+  if (!event.venueId || venue?._id !== event.venueId) {
+    publicEvent.structuredDataFacts = undefined;
+  }
   // The public venue query fails closed. Never retain the denormalized ID
   // when the referenced venue is pending or hidden.
   publicEvent.venueId = venue?._id;
@@ -341,9 +346,16 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
     { name: event.title, path: `/events/${event._id}` },
   ];
   const eventSchema = buildEventStructuredData({
-    ...event,
-    description: event.description,
+    _id: event._id,
+    date: event.date,
     imageUrl: buildStableEventImageUrl(event) ?? undefined,
+    structuredDataFacts: event.structuredDataFacts,
+    title: event.title,
+    venue: event.venue,
+    venueId: event.venueId,
+    venueLatitude: event.venueLatitude,
+    venueLocation: event.venueLocation,
+    venueLongitude: event.venueLongitude,
   }, locale);
 
   return (

@@ -381,8 +381,8 @@ assert.doesNotMatch(
 
 assert.match(
   browsePageSource,
-  /fromDate: selectedDayKey,\s*beforeDate: addDaysToDateKey\(selectedDayKey, 1\),[\s\S]*loadPublicCalendarEventsWindow\(eventWindow\)/,
-  "Ordinary calendar details stop at the selected day's exclusive next-day bound.",
+  /fromDate: selectedDayKey,\s*beforeDate: addDaysToDateKey\(selectedDayKey, 1\),[\s\S]*loadPublicCalendarEventsWindow\(\{\s*\.\.\.eventWindow,\s*includeEventTaxonomy: true\s*\}\)/,
+  "Ordinary calendar details and discovery metadata stop at the selected day's exclusive next-day bound.",
 );
 assert.match(
   browsePageSource,

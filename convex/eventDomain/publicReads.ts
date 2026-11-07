@@ -24,6 +24,8 @@ import {
   type PublicationReadMode,
 } from "../publicationCutover";
 import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy";
+import { getConfirmedEventSchemaFacts } from "../../lib/events/confirmed-event-schema-facts";
+import { loadPublicEventDiscoveryTaxonomy } from "../eventDiscovery";
 
 // Live publication validation can touch persisted source evidence, venue
 // identities, and occurrence lineage for every raw row. Keep each public UDF
@@ -437,16 +439,21 @@ export async function getPublicApprovedEventHandler(
   if (!event || event.status !== "approved") return null;
   // The calendar uses the reviewed materialized publication read when its
   // cutover is active. Keep links from that calendar visible on the detail page.
-  if (
+  const materialized =
     event.publicationState === "publishable" &&
     event.publicationPolicyVersion === PUBLICATION_POLICY_VERSION &&
-    (await resolvePublicationReadMode(ctx)) === "materialized"
-  ) {
-    return (await projectMaterializedPublicEventPage(ctx, [event]))[0] ?? null;
-  }
-  return (
-    (await projectLegacyCompatiblePublicEventPage(ctx, [event]))[0] ?? null
-  );
+    (await resolvePublicationReadMode(ctx)) === "materialized";
+  const [projected] = await (materialized
+    ? projectMaterializedPublicEventPage(ctx, [event])
+    : projectLegacyCompatiblePublicEventPage(ctx, [event]));
+  if (!projected) return null;
+  const structuredDataFacts = getConfirmedEventSchemaFacts(event, projected.venueId);
+  const eventTaxonomy = await loadPublicEventDiscoveryTaxonomy(ctx, event);
+  return {
+    ...projected,
+    ...(structuredDataFacts ? { structuredDataFacts } : {}),
+    ...(eventTaxonomy ? { eventTaxonomy } : {}),
+  };
 }
 
 export async function listPublicEventsWindowHandler(
@@ -508,6 +515,7 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
       ? { timeConfidence: event.timeConfidence }
       : {}),
     ...(event.timeStatus ? { timeStatus: event.timeStatus } : {}),
+    ...(event.timeEvidenceKind ? { timeEvidenceKind: event.timeEvidenceKind } : {}),
     ...(event.venueCategory ? { venueCategory: event.venueCategory } : {}),
     ...(event.venueId ? { venueId: event.venueId } : {}),
     ...(event.venueInstagramHandle
@@ -525,7 +533,7 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
 
 export async function listPublicCalendarEventsWindowPaginatedHandler(
   ctx: QueryCtx,
-  args: { beforeDate: string; cursor?: string | null; fromDate: string },
+  args: { beforeDate: string; cursor?: string | null; fromDate: string; includeEventTaxonomy?: boolean },
 ) {
   assertPublicEventDateWindow(
     args.fromDate,
@@ -547,11 +555,17 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
         fromDate: args.fromDate,
         numItems,
       }),
-    projectVisible: async (events) =>
-      (await (readMode === "materialized"
+    projectVisible: async (events) => {
+      const projected = (await (readMode === "materialized"
         ? projectMaterializedPublicEventPage(ctx, events)
         : projectLegacyCompatiblePublicEventPage(ctx, events)
-      )).map(toPublicCalendarEvent),
+      )).map(toPublicCalendarEvent);
+      if (!args.includeEventTaxonomy) return projected;
+      return Promise.all(projected.map(async (event) => {
+        const eventTaxonomy = await loadPublicEventDiscoveryTaxonomy(ctx, event);
+        return eventTaxonomy ? { ...event, eventTaxonomy } : event;
+      }));
+    },
   });
 }
 

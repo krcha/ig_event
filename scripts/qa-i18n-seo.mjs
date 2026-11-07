@@ -10,9 +10,14 @@ const event = {
   _id: "j5704hyc9wdzy7r10v0vbtj5e98hp1nt", title: "Karma Koma", venue: "Club", venueId: "k17cp35s3e07ebpthy4m4trf01896hwv",
   artists: ["DJ One", "DJ Two"], eventType: "nightlife", date: "2026-11-06", time: "23:00-06:00", timeStatus: "confirmed",
   description: "Nightlife event with DJ One, DJ Two at Club.",
+  venueLocation: "Cetinjska 15, Beograd",
 };
+function withStructuredDataFacts(occurrence) {
+  const { title, date, venueId, time } = occurrence;
+  return { ...occurrence, structuredDataFacts: { title, date, venueId, time } };
+}
 const before = JSON.stringify(event);
-const schemas = LOCALES.map(locale => buildEventStructuredData(event, locale));
+const schemas = LOCALES.map(locale => buildEventStructuredData(withStructuredDataFacts(event), locale));
 for (const [index, locale] of LOCALES.entries()) {
   const path = `/events/${event._id}`;
   const prefix = locale === "sr" ? "" : `/${locale}`;
@@ -27,7 +32,7 @@ for (const [index, locale] of LOCALES.entries()) {
   assert.equal(schemas[index].location["@id"], schemas[0].location["@id"]);
   assert.equal(schemas[index].startDate, "2026-11-06T23:00:00+01:00");
   assert.equal(schemas[index].endDate, "2026-11-07T06:00:00+01:00", "The continuous overnight occurrence must stay intact.");
-  assert.deepEqual(schemas[index].performer, schemas[0].performer);
+  assert.equal("performer" in schemas[index], false, "Localized artist labels do not prove a structured performer claim.");
   assert.equal(schemas[index].name, event.title);
   assert.equal(schemas[index].url, alternatives.canonical);
   assert.equal("inLanguage" in schemas[index], false, "Interface locale is not the performance language.");
@@ -66,8 +71,8 @@ for (const locale of ["en", "ru"]) {
 }
 assert.equal(manifest(new Request("https://eventzeka.com/api/manifest?locale=fr")).status, 400);
 
-const one = buildEventStructuredData({ ...event, title: "Stablo Masline", time: "18:30" }, "ru");
-const two = buildEventStructuredData({ ...event, title: "Pukotina u ledu", time: "20:30" }, "ru");
+const one = buildEventStructuredData(withStructuredDataFacts({ ...event, title: "Stablo Masline", time: "18:30" }), "ru");
+const two = buildEventStructuredData(withStructuredDataFacts({ ...event, title: "Pukotina u ledu", time: "20:30" }), "ru");
 assert.notEqual(one.startDate, two.startDate);
 assert.notEqual(one.name, two.name);
 console.log("I18n SEO QA passed: reciprocal URLs, stable entities, overnight facts, original-prose readiness, source preservation, date copy and stable PWA identity.");

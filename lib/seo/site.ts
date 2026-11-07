@@ -1,8 +1,7 @@
 import { getVenueCoordinates } from "../venues/coordinates.ts";
-import { getEventAgeRange } from "../events/event-session.ts";
+import type { ConfirmedEventSchemaFacts } from "../events/confirmed-event-schema-facts.ts";
 import { LOCALE_LANGUAGE_TAGS, localizeHref, type Locale } from "../../i18n/config.ts";
 import { getHomeFaqItems, SITE_COPY } from "../i18n/seo.ts";
-import { getLocalizedEventDescription } from "../i18n/event-content.ts";
 import {
   parseVenueHoursJson,
   type VenueHoursCacheFields,
@@ -35,18 +34,12 @@ export const HOME_FAQ_ITEMS = [
 
 type EventStructuredDataInput = {
   _id: string;
-  artists: string[];
   date: string;
-  description?: string;
-  eventType: string;
   imageUrl?: string;
-  ticketPrice?: string;
-  time?: string;
-  timeStatus?: "confirmed" | "inferred" | "unknown" | null;
+  structuredDataFacts?: ConfirmedEventSchemaFacts;
   title: string;
   venue: string;
   venueId?: string;
-  venueHours?: VenueHoursCacheFields | null;
   venueLatitude?: number;
   venueLocation?: string;
   venueLongitude?: number;
@@ -75,23 +68,17 @@ type EventStructuredData = {
   "@context": "https://schema.org";
   "@id": string;
   "@type": "Event";
-  description: string;
-  eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode";
-  eventStatus: "https://schema.org/EventScheduled";
   image?: string[];
-  inLanguage?: string[];
-  isAccessibleForFree?: true;
-  keywords: string;
   location: {
     "@type": "Place";
-    "@id"?: string;
-    url?: string;
+    "@id": string;
+    url: string;
     hasMap?: string;
     address: {
       "@type": "PostalAddress";
-      addressCountry: "RS";
-      addressLocality: "Belgrade";
-      streetAddress?: string;
+      addressCountry?: "RS";
+      addressLocality?: "Belgrade";
+      streetAddress: string;
     };
     geo?: {
       "@type": "GeoCoordinates";
@@ -99,13 +86,10 @@ type EventStructuredData = {
       longitude: number;
     };
     name: string;
-    openingHoursSpecification?: OpeningHoursSpecification[];
   };
   name: string;
-  performer?: Array<{ "@type": "Person"; name: string }>;
   startDate: string;
   endDate?: string;
-  typicalAgeRange?: string;
   url: string;
 };
 
@@ -355,12 +339,6 @@ export function buildVenueOpeningHoursSpecification(
     candidate.closes === entry.closes) === index);
 }
 
-function isExplicitlyFree(ticketPrice: string | null | undefined): boolean {
-  const normalized = ticketPrice?.replace(/\s+/g, " ").trim().replace(/[.!]+$/, "") ?? "";
-  // A conditional or negated price must not describe the whole event as free.
-  return /^(?:free(?: (?:entry|admission))?|(?:entry|admission)(?: is)? free|besplatan(?: ulaz)?|besplatno|slobodan ulaz|ulaz(?: je)? (?:besplatan|slobodan))$/i.test(normalized);
-}
-
 function getStreetAddress(location: string | null | undefined): string | null {
   const trimmed = location?.trim();
   if (
@@ -377,28 +355,31 @@ export function buildEventStructuredData(
   event: EventStructuredDataInput,
   locale: Locale = "en",
 ): EventStructuredData | null {
-  // A display fallback (venue hours or assumed venue closing) is not an
-  // announcement of this event's start/end. Legacy untagged times stay usable.
-  const announcedTime = event.timeStatus === "unknown" || event.timeStatus === "inferred"
-    ? undefined
-    : event.time;
-  const startDate = buildEventStartDate(event.date, announcedTime);
-  if (!startDate) return null;
+  const facts = event.structuredDataFacts;
+  if (!facts || !facts.title.trim() || facts.title !== event.title || facts.date !== event.date ||
+      !facts.venueId || facts.venueId !== event.venueId || !event.venue.trim()) return null;
+
+  const startDate = buildEventStartDate(facts.date, facts.time);
+  const streetAddress = getStreetAddress(event.venueLocation);
+  // A street number or the local no-number marker distinguishes a detailed
+  // address from a city, postal code, or neighborhood used as a map label.
+  if (!startDate || !streetAddress ||
+      !/\p{L}\.?\s+(?:\d{1,4}\p{L}?(?:[-/]\d{1,4}\p{L}?)?|bb|бб)(?=[\s,]|$)/iu.test(streetAddress)) return null;
+
   const url = absoluteUrl(`/events/${event._id}`, locale);
   const identityUrl = absoluteUrl(`/events/${event._id}`);
-  const streetAddress = getStreetAddress(event.venueLocation);
   const coordinates = getVenueCoordinates(event.venueLatitude, event.venueLongitude);
-  const venueUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`, locale) : null;
-  const venueIdentityUrl = event.venueId ? absoluteUrl(`/venues/${event.venueId}`) : null;
-  const openingHoursSpecification = buildVenueOpeningHoursSpecification(event.venueHours);
+  const venueUrl = absoluteUrl(`/venues/${facts.venueId}`, locale);
+  const venueIdentityUrl = absoluteUrl(`/venues/${facts.venueId}`);
+  const hasBelgradeLocality = /(?:^|[^\p{L}])(?:belgrade|beograd|београд)(?=[^\p{L}]|$)/iu.test(streetAddress);
   const location: EventStructuredData["location"] = {
     "@type": "Place",
-    ...(venueUrl ? { "@id": `${venueIdentityUrl}#place`, url: venueUrl } : {}),
+    "@id": `${venueIdentityUrl}#place`,
+    url: venueUrl,
     address: {
       "@type": "PostalAddress",
-      addressCountry: "RS",
-      addressLocality: "Belgrade",
-      ...(streetAddress ? { streetAddress } : {}),
+      streetAddress,
+      ...(hasBelgradeLocality ? { addressCountry: "RS", addressLocality: "Belgrade" } : {}),
     },
     ...(coordinates
       ? {
@@ -411,36 +392,18 @@ export function buildEventStructuredData(
         }
       : {}),
     name: event.venue,
-    ...(openingHoursSpecification.length ? { openingHoursSpecification } : {}),
   };
-  const description = clipText(getLocalizedEventDescription(event, locale).text, 400);
-  const accessibleForFree = isExplicitlyFree(event.ticketPrice);
-  const ageRange = getEventAgeRange(event);
-  const endDate = buildEventEndDate(event.date, announcedTime);
+  const endDate = buildEventEndDate(facts.date, facts.time);
 
   return {
     "@context": "https://schema.org",
     "@id": `${identityUrl}#event`,
     "@type": "Event",
-    description,
-    eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
-    eventStatus: "https://schema.org/EventScheduled",
     ...(event.imageUrl ? { image: [absoluteUrl(event.imageUrl)] } : {}),
-    ...(accessibleForFree ? { isAccessibleForFree: true as const } : {}),
-    keywords: [event.eventType, ...event.artists, "Belgrade events"].filter(Boolean).join(", "),
     location,
-    name: event.title,
-    ...(event.artists.length > 0
-      ? {
-          performer: event.artists.map((artist) => ({
-            "@type": "Person" as const,
-            name: artist,
-          })),
-        }
-      : {}),
+    name: facts.title,
     startDate,
     ...(endDate ? { endDate } : {}),
-    ...(ageRange ? { typicalAgeRange: ageRange } : {}),
     url,
   };
 }

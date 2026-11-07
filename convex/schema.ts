@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { analyticsEventFields } from "./analyticsValidators";
+import { eventDiscoveryTaxonomy } from "./eventDiscoveryValues";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -387,6 +388,14 @@ export default defineSchema({
     .index("by_updatedAt", ["updatedAt"])
     .index("by_venueId", ["venueId"])
     .index("by_venueId_status_date", ["venueId", "status", "date"]),
+  eventDiscoveryLabels: defineTable({
+    eventId: v.id("events"),
+    eventUpdatedAt: v.number(),
+    version: v.number(),
+    model: v.string(),
+    taxonomy: v.union(eventDiscoveryTaxonomy, v.null()),
+    auditJson: v.string(),
+  }).index("by_eventId", ["eventId"]),
   instagramSourceOccurrenceReceipts: defineTable({
     sourceIdentity: v.string(),
     sourceFingerprint: v.string(),

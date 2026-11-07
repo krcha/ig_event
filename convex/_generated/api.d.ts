@@ -15,6 +15,8 @@ import type * as automaticApprovalDiagnostics from "../automaticApprovalDiagnost
 import type * as autonomousModeration from "../autonomousModeration.js";
 import type * as crons from "../crons.js";
 import type * as durableIngestionRuns from "../durableIngestionRuns.js";
+import type * as eventDiscovery from "../eventDiscovery.js";
+import type * as eventDiscoveryValues from "../eventDiscoveryValues.js";
 import type * as eventDomain_coalescingSupport from "../eventDomain/coalescingSupport.js";
 import type * as eventDomain_compatibilityReads from "../eventDomain/compatibilityReads.js";
 import type * as eventDomain_contracts from "../eventDomain/contracts.js";
@@ -166,6 +168,8 @@ declare const fullApi: ApiFromModules<{
   autonomousModeration: typeof autonomousModeration;
   crons: typeof crons;
   durableIngestionRuns: typeof durableIngestionRuns;
+  eventDiscovery: typeof eventDiscovery;
+  eventDiscoveryValues: typeof eventDiscoveryValues;
   "eventDomain/coalescingSupport": typeof eventDomain_coalescingSupport;
   "eventDomain/compatibilityReads": typeof eventDomain_compatibilityReads;
   "eventDomain/contracts": typeof eventDomain_contracts;

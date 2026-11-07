@@ -291,6 +291,7 @@ export const listPublicCalendarEventsWindowPaginated = query({
     fromDate: v.string(),
     beforeDate: v.string(),
     cursor: v.optional(v.union(v.string(), v.null())),
+    includeEventTaxonomy: v.optional(v.boolean()),
   },
   handler: listPublicCalendarEventsWindowPaginatedHandler,
 });

@@ -75,7 +75,7 @@ try {
           done({ firstInputToResultMs: inputAt ? resultAt - inputAt : null });
         }))));
       }
-      async function step(flow, action, perform, settleAfterResult) {
+      async function step(flow, action, perform) {
         const requestStart = requests.length;
         const errorStart = errors.length;
         const from = page.url();
@@ -88,15 +88,15 @@ try {
           else {
             const timing = await painted();
             result = { status: "passed", actionToResultMs: performance.now() - started, ...timing, ...detail };
-            // The local category change can paint before its background RSC read.
-            // Keep that response time separate from the visible-result metric.
             await ready();
-            if (settleAfterResult) await settleAfterResult();
           }
         } catch (error) {
           result = { status: "failed", message: error.message, actionToResultMs: null, firstInputToResultMs: null };
         }
         const activity = requests.slice(requestStart);
+        if (result.clientOnly && activity.some((request) => request.document || request.rsc)) {
+          result = { ...result, status: "failed", message: "A selected-day facet initiated a document or server component navigation." };
+        }
         const entry = { profile, run, flow, action, from, to: page.url(), ...result,
           documents: activity.filter((request) => request.document).length,
           rscRequests: activity.filter((request) => request.rsc).length,
@@ -125,49 +125,103 @@ try {
         }
         return page.locator('input[name="q"][type="search"]:visible').first();
       }
+      async function followAdjacentCalendarDay(direction) {
+        const date = await page.locator('[data-calendar-week-date="true"]:visible').evaluateAll((links, delta) => {
+          const selected = links.findIndex((link) => link.dataset.calendarDateSelected === "true");
+          return selected < 0 ? null : links[selected + delta]?.dataset.calendarDate;
+        }, direction);
+        if (!date) return skip("The selected day has no adjacent day in the visible week.");
+        await follow(page.locator(`[data-calendar-week-date="true"][data-calendar-date="${date}"]:visible`));
+        await page.locator(`[data-calendar-date="${date}"][data-calendar-date-selected="true"]:visible`).waitFor();
+        return { date };
+      }
+      async function openCalendarFilters() {
+        const trigger = page.locator('button[aria-controls="events-extra-filters"]:visible');
+        if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
+      }
 
       try {
         if (flows.includes("calendar")) {
-          await visit("/");
+          await visit("/en");
           const initialUrl = page.url();
-          await step("calendar", "next-day", async () => follow(page.locator('a[aria-label="Next day"]:visible').first()));
+          let nextDate;
+          await step("calendar", "next-day", async () => {
+            const detail = await followAdjacentCalendarDay(1);
+            nextDate = detail.date;
+            return detail;
+          });
           await step("calendar", "browser-back", async () => {
+            if (!nextDate) return skip("No next-day history entry was created.");
             await page.goBack({ waitUntil: "domcontentloaded" });
             await page.waitForURL(initialUrl);
             await ready();
           });
-          await step("calendar", "previous-day", async () => follow(page.locator('a[aria-label="Previous day"]:visible').first()));
-          await step("calendar", "next-day-return", async () => follow(page.locator('a[aria-label="Next day"]:visible').first()));
+          if (nextDate) await followAdjacentCalendarDay(1);
+          await step("calendar", "previous-day", () => followAdjacentCalendarDay(-1));
+          await step("calendar", "next-day-return", () => followAdjacentCalendarDay(1));
           const firstEvent = page.locator('[data-calendar-event-id]:visible').first();
-          const category = await firstEvent.count() ? await firstEvent.getAttribute("data-calendar-event-kind") : null;
+          const category = await firstEvent.count() ? (await firstEvent.getAttribute("data-calendar-event-discovery-categories"))?.split(",")[0] : null;
           await step("calendar", "focus-category", async () => {
             if (!category) return skip("No selected-day event is available to verify category filtering.");
-            await page.locator(`[data-calendar-kind-toggle="${category}"]:visible`).first().click();
-            await page.waitForFunction((kind) => [...document.querySelectorAll('[data-calendar-event-kind]')].every((row) => row.hidden === (row.dataset.calendarEventKind !== kind)), category);
-            return { category };
-          }, async () => {
-            await page.waitForURL((url) => Boolean(url.searchParams.get("hide")) && !url.searchParams.get("hide").split(",").includes(category));
-            await ready();
+            const categoryButton = page.locator(`[data-calendar-kind-toggle="${category}"]`);
+            if (!await categoryButton.isVisible()) await page.getByRole("button", { name: "More categories" }).click();
+            await categoryButton.click();
+            await queryEquals("category", category);
+            await page.waitForFunction((kind) => {
+              const rows = [...document.querySelectorAll('[data-calendar-event-id]')];
+              return rows.length > 0 && rows.every((row) => row.dataset.calendarEventDiscoveryCategories.split(",").includes(kind));
+            }, category);
+            return { category, clientOnly: true };
+          });
+          await step("calendar", "filter-genre", async () => {
+            const genreButton = page.locator('[data-calendar-genre-filter]:visible').first();
+            if (!await genreButton.count()) return skip("The selected category has no confirmed genre.");
+            const genre = await genreButton.getAttribute("data-calendar-genre-filter");
+            await genreButton.click();
+            await queryEquals("genre", genre);
+            await page.locator(`[data-calendar-genre-filter="${genre}"][aria-pressed="true"]:visible`).waitFor();
+            return { genre, clientOnly: true };
           });
           await step("calendar", "show-all-categories", async () => {
-            if (!category) return skip("No category was hidden.");
+            if (!category) return skip("No category was selected.");
             await page.locator('[data-calendar-kind-toggle="all"]:visible').first().click();
-            await page.waitForFunction(() => !document.querySelector('[data-calendar-event-id][hidden]'));
-          }, async () => queryEquals("hide", ""));
-          let input = await searchInput();
-          await input.fill("__performance_no_match__");
+            await queryEquals("category", "");
+            await queryEquals("genre", "");
+            await page.locator('[data-calendar-kind-toggle="all"][aria-pressed="true"]:visible').waitFor();
+            return { clientOnly: true };
+          });
+          await openCalendarFilters();
+          await step("calendar", "filter-start-time", async () => {
+            const time = await page.locator('[data-calendar-time-band]:visible').first().getAttribute("data-calendar-time-band", { timeout: 1000 }).catch(() => null);
+            if (!time) return skip("No time band is available on the selected day.");
+            await page.locator('[data-calendar-time-filter="true"]:visible').selectOption(time);
+            await queryEquals("time", time);
+            await page.waitForFunction((key) => {
+              const bands = [...document.querySelectorAll('[data-calendar-time-band]')];
+              return bands.length === 1 && bands[0].dataset.calendarTimeBand === key;
+            }, time);
+            return { time, clientOnly: true };
+          });
+          await step("calendar", "clear-start-time", async () => {
+            if (!new URL(page.url()).searchParams.has("time")) return skip("No time band was selected.");
+            await page.locator('[data-calendar-time-filter="true"]:visible').selectOption("");
+            await queryEquals("time", "");
+            return { clientOnly: true };
+          });
           await step("calendar", "search-submit-no-match", async () => {
-            await (await searchInput()).press("Enter");
+            const input = await searchInput();
+            await input.fill("__performance_no_match__");
+            await input.press("Enter");
             await queryEquals("q", "__performance_no_match__");
             await page.locator('[data-calendar-empty-state="true"]:visible').first().waitFor();
           });
-          input = await searchInput();
-          await input.fill("");
           await step("calendar", "search-clear", async () => {
-            await (await searchInput()).press("Enter");
+            const input = await searchInput();
+            await input.fill("");
+            await input.press("Enter");
             await queryEquals("q", "");
           });
-          if (settings.mobile) await page.locator('[data-calendar-mobile-sort-button="true"]:visible').click();
+          await openCalendarFilters();
           await step("calendar", "sort-venue", async () => {
             await page.locator('select[name="sort"]:visible').first().selectOption("venue");
             await queryEquals("sort", "venue");
@@ -191,8 +245,11 @@ try {
           });
           let visitedEvent = false;
           await step("calendar", "event-detail", async () => {
+            const preview = page.locator('[data-calendar-event-preview-toggle]:visible').first();
+            if (!await preview.count()) return skip("No selected-day event is available for a detail visit.");
+            await preview.click();
             const event = page.locator('[data-calendar-event-link="true"]:visible').first();
-            if (!await event.count()) return skip("No selected-day event is available for a detail visit.");
+            await event.waitFor();
             await follow(event);
             await page.getByText("Event details", { exact: true }).waitFor();
             visitedEvent = true;

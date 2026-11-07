@@ -4,6 +4,7 @@ import { useLocalizedRouter as useRouter, PublicText, LocalizedElement } from "@
 import { useEffect, useTransition } from "react";
 import { Check, Clock3, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { copyCalendarDiscoveryFilters } from "./calendar-discovery-query";
 
 type OpenNowFilterProps = {
   active: boolean;
@@ -77,7 +78,8 @@ export function OpenNowFilter({ active, href, appearance = "default" }: OpenNowF
         if (appearance === "chip" || appearance === "events") {
           const target = new URL(href, window.location.origin);
           const current = new URL(window.location.href);
-          for (const key of ["hide", "q", "venue", "sort"]) {
+          copyCalendarDiscoveryFilters(target.searchParams, current.searchParams);
+          for (const key of ["q", "venue", "sort"]) {
             const value = current.searchParams.get(key);
             if (value) target.searchParams.set(key, value);
             else target.searchParams.delete(key);

@@ -12,6 +12,8 @@ import styles from "./mobile-week-calendar.module.css";
 import { useCalendarOverviewDays } from "./calendar-overview";
 import { useLocale } from "@/i18n/client";
 import { formatEventCount } from "@/lib/i18n/display";
+import { useSearchParams } from "next/navigation";
+import { copyCalendarDiscoveryFilters } from "./calendar-discovery-query";
 
 const MobileCalendarDialog = lazy(() => import("./mobile-calendar-dialog"));
 
@@ -34,6 +36,7 @@ type Props = {
 
 export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthDays, selectedDayKey, todayKey }: Props) {
   const locale = useLocale();
+  const searchParams = useSearchParams();
   const days = useCalendarOverviewDays(initialDays);
   const monthDays = useCalendarOverviewDays(initialMonthDays);
   const router = useRouter();
@@ -53,11 +56,7 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
   function navigate(href: string) {
     const url = new URL(href, window.location.origin);
     const current = new URL(window.location.href);
-    // Category chips can update the current URL before new server props arrive.
-    const hidden = current.searchParams.get("hide");
-    if (hidden) url.searchParams.set("hide", hidden);
-    else url.searchParams.delete("hide");
-    url.searchParams.delete("category");
+    copyCalendarDiscoveryFilters(url.searchParams, current.searchParams);
     url.searchParams.delete("open");
     if (isOpen) closeCalendar();
     startTransition(() => router.push(`${url.pathname}${url.search}`, { scroll: false }));
@@ -74,6 +73,12 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
     url.searchParams.set("day", dayKey);
     url.searchParams.set("month", dayKey.slice(0, 7));
     return `${url.pathname}${url.search}`;
+  }
+
+  function hrefWithFilters(href: string) {
+    const url = new URL(href, "https://eventzeka.invalid");
+    copyCalendarDiscoveryFilters(url.searchParams, searchParams);
+    return `${url.pathname}${url.search}${url.hash}`;
   }
 
   return (
@@ -93,7 +98,7 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
             data-calendar-date-upcoming="true"
             data-calendar-date-weekend={day.isWeekend ? "true" : undefined}
             data-calendar-week-date="true"
-            href={day.href}
+            href={hrefWithFilters(day.href)}
             key={day.dayKey}
             onClick={(event) => selectDay(event, day.href)}
             prefetch={false}

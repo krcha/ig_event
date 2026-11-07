@@ -8,7 +8,7 @@ export type CalendarEventSummary = Pick<PublicEvent,
   "displayTimeEnd" | "displayTimeLabel" | "displayTimeSource" | "displayTimeStart" |
   "venue" | "venueId" | "venueCategory" | "venueHours" | "artists" | "eventType" |
   "ticketPrice" | "attendance" | "attendanceCount" | "attendeeCount" | "attendees" |
-  "attendeesCount" | "going" | "goingCount"
+  "attendeesCount" | "going" | "goingCount" | "eventTaxonomy" | "timeEvidenceKind"
 >;
 
 export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "venueHours"> & {

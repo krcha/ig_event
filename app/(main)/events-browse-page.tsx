@@ -20,7 +20,7 @@ import { JsonLd } from "@/components/seo/json-ld";
 import { MobileWeekCalendar } from "@/components/calendar/mobile-week-calendar";
 import { getMobileWeekDateKeys } from "@/lib/events/mobile-week";
 import { getLocale } from "@/i18n/server";
-import { LOCALE_LANGUAGE_TAGS, localizeHref } from "@/i18n/config";
+import { LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
 import { eventNoun, formatPublicDate, publicDayHeading, publicDayLabel } from "@/lib/i18n/display";
 import { getHomeFaqItems } from "@/lib/i18n/seo";
 import mobileStyles from "@/components/calendar/mobile-events-home.module.css";
@@ -47,6 +47,9 @@ type CalendarSearchParams = {
   day?: string | string[];
   venue?: string | string[];
   category?: string | string[];
+  genre?: string | string[];
+  time?: string | string[];
+  format?: string | string[];
   hide?: string | string[];
   sort?: string | string[];
   q?: string | string[];
@@ -196,6 +199,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     venueHours: event.venueHours,
     artists: event.artists,
     eventType: event.eventType,
+    eventTaxonomy: event.eventTaxonomy,
     ticketPrice: event.ticketPrice,
     attendance: event.attendance,
     attendanceCount: event.attendanceCount,
@@ -262,7 +266,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     beforeDate: addDaysToDateKey(selectedDayKey, 1),
   };
   const [loaded, venueSelection] = await Promise.all([
-    loadPublicCalendarEventsWindow(eventWindow),
+    loadPublicCalendarEventsWindow({ ...eventWindow, includeEventTaxonomy: true }),
     resolveCalendarVenueSelection(requestedVenue, { fromDate: monthStartKey, beforeDate: formatDateKey(nextMonthStart), q: selectedSearchQuery }),
   ]);
   const error = loaded.error ?? venueSelection.error;
@@ -280,7 +284,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
   const hiddenDayCategories = normalizeHiddenDayCategories(getSingleValue(resolvedSearchParams?.hide));
   const hiddenDayCategorySet = new Set(hiddenDayCategories);
   const selectedSortMode = normalizeAgendaSortMode(getSingleValue(resolvedSearchParams?.sort));
-  const authEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   const monthDayBuckets = new Map<string, CalendarDayBucket>();
 
@@ -334,6 +337,10 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     q: selectedSearchQuery,
     venue: venueSelection.value,
     hide: hiddenCategoriesParam,
+    category: getSingleValue(resolvedSearchParams?.category),
+    genre: getSingleValue(resolvedSearchParams?.genre),
+    time: getSingleValue(resolvedSearchParams?.time),
+    format: getSingleValue(resolvedSearchParams?.format),
     sort: hiddenSort,
     open: openNowActive ? "now" : undefined,
   };
@@ -381,7 +388,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     categoryCounts: weekDayBuckets.get(dayKey)?.categoryCounts ?? createEmptyDayCategoryCounts(),
     isWeekend: isWeekendDate(dateKeyToLocalNoonDate(dayKey)),
   }));
-  const hasActiveFilters = Boolean(selectedSearchQuery || venueSelection.value || hiddenCategoriesParam || hiddenSort || openNowActive);
+  const hasActiveFilters = Boolean(selectedSearchQuery || venueSelection.value || hiddenSort || openNowActive);
   const dateLabel = formatPublicDate(locale, selectedDate, { weekday: "long", day: "numeric", month: "long" });
 
   return (
@@ -406,9 +413,7 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
       {error ? <p className="py-4 text-sm text-destructive" role="alert"><PublicText text={error} /></p> : <CalendarAgenda
         key={JSON.stringify([selectedDayKey, venueSelection.value, selectedSearchQuery, hiddenCategoriesParam, selectedSortMode, openNowActive])}
         events={projectCalendarAgendaEvents(sortedDayAgendaEvents, new Map(sortedDayAgendaEvents.map((event, index) => [event._id, index])), openNowStates)}
-        hiddenDayCategories={hiddenDayCategories} selectedDayEventCount={selectedDayEventCount}
-        dayLabel={formatPublicDate(locale, selectedDate, { weekday: "short", month: "short", day: "numeric" })} openNowActive={openNowActive} openNowHref={localizeHref(openNowHref, locale)}
-        now={now} authEnabled={authEnabled} sortMode={selectedSortMode} hasActiveFilters={hasActiveFilters}
+        openNowActive={openNowActive} sortMode={selectedSortMode} hasActiveFilters={hasActiveFilters}
         clearFiltersHref={`/${buildQueryString({ month: monthParam, day: selectedDayKey })}`} />}
 
       <section

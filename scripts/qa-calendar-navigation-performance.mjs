@@ -4,13 +4,13 @@ import { createRequire } from "node:module";
 import ts from "typescript";
 import { NextRequest } from "next/server.js";
 import * as categories from "../lib/taxonomy/event-categories.ts";
+import * as discovery from "../lib/taxonomy/event-discovery.ts";
 import * as eventTime from "../lib/events/event-time.ts";
 import * as presentation from "../lib/events/event-time-presentation.ts";
 import * as bands from "../lib/events/calendar-time-bands.ts";
 import * as sessions from "../lib/events/event-session.ts";
 import * as nightlife from "../lib/events/nightlife-date.ts";
 import * as week from "../lib/events/mobile-week.ts";
-import * as grouping from "../lib/events/venue-day-grouping.ts";
 import * as venueFilter from "../lib/events/public-event-venue-filter.ts";
 import * as search from "../lib/events/public-event-search.ts";
 import * as openNow from "../lib/venues/venue-open-now.ts";
@@ -36,6 +36,7 @@ const require = createRequire(import.meta.url);
 const jsx = (type, props, key) => type?.qaRender ? type(props) : ({ type, props: props ?? {}, key });
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
 let pageLocale = "sr";
+let discoveryParams = new URLSearchParams();
 const localizedComponents = new Proxy({
   PublicText: Object.assign(({ text }) => publicText(pageLocale, text), { qaRender: true }),
   LocalizedLink: Object.assign(({ href, ...props }) => jsx("link", { ...props, href: localeConfig.localizeHref(href, pageLocale) }), { qaRender: true }),
@@ -59,6 +60,8 @@ function compile(file, mocks) {
     if (name === "@/lib/i18n/display") return publicDisplay;
     if (name === "@/lib/i18n/seo") return localizedSeo;
     if (name === "@/components/i18n/public-text") return localizedComponents;
+    if (name === "@/lib/taxonomy/event-discovery") return discovery;
+    if (name === "./calendar-discovery-state") return discoveryState;
     if (name === "lucide-react" || name.startsWith("@/components/") || name.startsWith("./calendar-") || name === "./event-kind-toggle-chips" || name === "./open-now-filter") return components;
     if (name === "next/image") return { __esModule: true, default: "image" };
     if (name.endsWith(".png")) return { __esModule: true, default: {src:"/skyline.png",width:2170,height:725} };
@@ -72,6 +75,12 @@ function compile(file, mocks) {
   }, compiled.exports, compiled);
   return compiled.exports;
 }
+const discoveryState = compile("components/calendar/calendar-discovery-state.ts", {
+  "next/navigation": { useSearchParams: () => discoveryParams },
+  react: { useMemo: callback => callback() },
+  "@/lib/events/calendar-time-band-definitions": bands,
+  "@/lib/taxonomy/event-categories": categories,
+});
 const projection = compile("lib/events/calendar-agenda-projection.ts", {
   "server-only": {}, "../taxonomy/event-categories": categories, "./event-time-presentation": presentation,
   "./event-time": eventTime, "./calendar-time-bands": bands, "./event-session": sessions,
@@ -126,7 +135,7 @@ assert.equal(events[0].description, "For ages 5-8. Art workshop.", "Compact proj
     react: { useMemo: cb => cb(), useState: value => [value, () => {}], useEffect: () => {} },
     "./virtual-agenda-list": { VirtualAgendaList }, "@/lib/events/calendar-time-band-definitions": bands,
   });
-  const tree = CalendarAgenda({ events: compact, hiddenDayCategories: [], openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+  const tree = CalendarAgenda({ events: compact, openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
   const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
   function timeBlock(id) {
     return nodes(rows.find(row => row.props["data-calendar-event-id"] === id), node => node.props?.["data-time-source"])[0];
@@ -202,11 +211,68 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   });
   const ordered=agendaSort.sortAgendaEvents(events,sortMode);
   const compact=projection.projectCalendarAgendaEvents(ordered,new Map(ordered.map((e,i)=>[e._id,i])),new Map());
-  const tree=CalendarAgenda({events:compact,hiddenDayCategories:[],sortMode,selectedDayEventCount:8,openNowActive:false,hasActiveFilters:false,clearFiltersHref:"/"});
+  const tree=CalendarAgenda({events:compact,sortMode,openNowActive:false,hasActiveFilters:false,clearFiltersHref:"/"});
   const rows=nodes(tree,node=>node.props?.["data-calendar-event-id"]);
   assert.deepEqual(rows.map(node=>node.props["data-calendar-event-id"]),ordered.map(e=>e._id),`The whole ${sortMode} ordering must survive the ${mobile?"mobile":"desktop"} rendering path.`);
   assert.equal(new Set(rows.map(node=>node.props["data-calendar-event-id"])).size,events.length);
   if(sortMode==="title"||sortMode==="venue")assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Alphabetical lists cannot be regrouped by time.");
+}
+
+{
+  const VirtualAgendaList = Object.assign(({ items, getKey, children }) => {
+    assert.equal(new Set(items.map(getKey)).size, items.length, "Virtual rows require unique occurrence keys.");
+    return items.map(children);
+  }, { qaRender: true });
+  const { CalendarAgenda } = compile("components/calendar/calendar-agenda.tsx", {
+    react: { useMemo: callback => callback() },
+    "./virtual-agenda-list": { VirtualAgendaList }, "@/lib/events/calendar-time-band-definitions": bands,
+  });
+  const hybrid = {
+    ...projected[1], band: "evening",
+    eventTaxonomy: { primaryCategory: "party", categories: ["party", "live"], genres: ["house", "techno"], formats: ["dj-set", "concert"] },
+  };
+  const jazz = {
+    ...projected[2], band: "evening",
+    eventTaxonomy: { primaryCategory: "live", categories: ["live"], genres: ["jazz-blues"], formats: ["concert"] },
+  };
+  const late = {
+    ...projected[3], band: "night",
+    eventTaxonomy: { primaryCategory: "party", categories: ["party"], genres: ["techno"], formats: ["dj-set"] },
+  };
+  const legacy = { ...projected[4], title: "House party", eventType: "nightlife", band: "evening" };
+  const standUp = {
+    ...projected[5], band: "evening",
+    eventTaxonomy: { primaryCategory: "culture", categories: ["culture"], genres: [], formats: ["stand-up"] },
+  };
+  const film = {
+    ...projected[6], band: "evening",
+    eventTaxonomy: { primaryCategory: "culture", categories: ["culture"], genres: [], formats: ["screening"] },
+  };
+  const render = (query) => {
+    discoveryParams = new URLSearchParams(query);
+    const tree = CalendarAgenda({ events: [hybrid, jazz, late, legacy, hybrid, standUp, film], openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+    return {
+      ids: nodes(tree, node => node.props?.["data-calendar-event-id"]).map(node => node.props["data-calendar-event-id"]),
+      facets: nodes(tree, node => node.type === "CalendarDiscoveryFilters")[0].props,
+      count: nodes(tree, node => node.type === "PublicEventCount")[0].props.count,
+    };
+  };
+  const categoriesOnly = render("category=party,live");
+  assert.equal(categoriesOnly.count, 4, "An occurrence that matches both intents still counts once.");
+  assert.equal(categoriesOnly.facets.categoryCounts.get("party"), 3);
+  assert.equal(categoriesOnly.facets.categoryCounts.get("live"), 2);
+  assert.equal(categoriesOnly.facets.genreCounts.get("electronic"), 2, "The electronic parent genre counts each matching event once.");
+  const filtered = render("category=party,live&genre=electronic&time=evening");
+  assert.deepEqual(filtered.ids, [hybrid._id], "Category choices are OR, with verified genre and time applied as AND.");
+  assert.equal(filtered.count, 1);
+  assert.equal(filtered.facets.categoryCounts.get("party"), 1);
+  assert.equal(filtered.facets.categoryCounts.get("live"), 1);
+  assert.equal(filtered.facets.genreCounts.get("house"), 1, "Legacy title tags must not become verified genre filters.");
+  assert.deepEqual(render("genre=unknown").ids, [legacy._id], "Unknown genre matches music without an announced genre only.");
+  const comedy = render("category=culture&format=stand-up");
+  assert.deepEqual(comedy.ids, [standUp._id], "Stand-up narrows the culture category without matching films.");
+  assert.equal(comedy.facets.standUpCount, 1);
+  discoveryParams = new URLSearchParams();
 }
 
 let dayReads = 0;
@@ -239,14 +305,16 @@ for (const locale of localeConfig.LOCALES) {
   const readsBefore = dayReads;
   const localizedTree = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31" }) });
   assert.equal(dayReads - readsBefore, 1, "Each locale must render with the same single bounded day read, without month reads or translation fetches.");
-  assert.deepEqual(dayReadWindows.at(-1), { fromDate: "2026-10-31", beforeDate: "2026-11-01" }, "Locale must not alter the exclusive selected-day backend window.");
+  assert.deepEqual(dayReadWindows.at(-1), { fromDate: "2026-10-31", beforeDate: "2026-11-01", includeEventTaxonomy: true }, "Locale must not alter the exclusive selected-day backend window or its compact discovery projection.");
   const heading = nodes(localizedTree, node => node.props?.id === "events-heading")[0];
   assert.equal(heading.props.lang, localeConfig.LOCALE_LANGUAGE_TAGS[locale]);
   assert.equal(heading.props.children, publicDisplay.publicDayHeading(locale, "2026-10-31", nightlife.getNightlifeDefaultDateKey(new Date())));
   const agenda = nodes(localizedTree, node => node.type === "CalendarAgenda")[0];
   assert.equal(JSON.stringify(agenda.props.events), canonicalAgenda, "Language projection must leave event identity, source metadata, timing, categories and payload size unchanged.");
-  assert.equal(agenda.props.dayLabel, publicDisplay.formatPublicDate(locale, "2026-10-31", { weekday: "short", month: "short", day: "numeric" }));
-  assert.equal(localeConfig.getLocaleFromPath(agenda.props.openNowHref), locale);
+  const weekCalendar = nodes(localizedTree, node => node.type === "MobileWeekCalendar")[0];
+  assert.equal(weekCalendar.props.selectedDayKey, "2026-10-31");
+  const toolbar = nodes(localizedTree, node => node.type === "EventsToolbar")[0];
+  assert.equal(new URL(toolbar.props.openNowHref, seo.SITE_ORIGIN).searchParams.get("open"), "now");
   assert.ok(!JSON.stringify(localizedTree).includes("private-sized-hours-data"));
   const discover = nodes(localizedTree, node => node.type === "link" && node.props.href === localeConfig.localizeHref("/discover", locale));
   assert.equal(discover.length, 1, "The locale fixture must execute localized links rather than silently rendering inert component placeholders.");
@@ -405,12 +473,14 @@ try {
 // Exercise the shipped loader: distant-date traffic must not evict a fresh or
 // in-flight near-term day, while its existing TTL/error behavior stays intact.
 let dayCalls = 0; let failDay = false; let pendingDay;
+const dayQueryArgs = [];
 const dayLoader = compile("lib/events/public-events.ts", {
   "server-only": {},
   "convex/browser": { ConvexHttpClient: class {
     constructor(url) { this.url = url; }
     async query(_reference, args) {
       dayCalls++;
+      dayQueryArgs.push(args);
       if (failDay) { failDay = false; throw new Error("Day read failed"); }
       if (args.fromDate === "2026-11-04") await new Promise(resolve => { pendingDay = resolve; });
       return { page: [], isDone: true, continueCursor: "" };
@@ -453,6 +523,14 @@ try {
   const retryWindow = { fromDate: "2026-11-02", beforeDate: "2026-11-03" };
   assert.match((await dayLoader.loadPublicCalendarEventsWindow(retryWindow)).error, /Day read failed/);
   assert.equal((await dayLoader.loadPublicCalendarEventsWindow(retryWindow)).error, undefined);
+  const enrichedWindow = { ...dayWindow, includeEventTaxonomy: true };
+  const callsBeforeEnrichment = dayCalls;
+  await Promise.all([dayLoader.loadPublicCalendarEventsWindow(enrichedWindow), dayLoader.loadPublicCalendarEventsWindow(enrichedWindow)]);
+  assert.equal(dayCalls, callsBeforeEnrichment + 1, "Enriched day reads coalesce separately from the plain day cache.");
+  assert.deepEqual(dayQueryArgs.at(-1), { ...enrichedWindow, cursor: null });
+  await dayLoader.loadPublicCalendarEventsWindow(dayWindow);
+  await dayLoader.loadPublicCalendarEventsWindow(enrichedWindow);
+  assert.equal(dayCalls, callsBeforeEnrichment + 1, "Both day variants must keep their own fresh cache entry.");
 } finally { Date.now = realNow; }
 const bounded = new Map(Array.from({ length: 80 }, (_, index) => [String(index), { expiresAt: Infinity, priority: true }]));
 readCache.prunePublicEventReadCache(bounded, 48, dayNow);

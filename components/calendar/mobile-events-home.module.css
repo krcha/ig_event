@@ -15,3 +15,98 @@
 @media(max-width:350px){.home{width:calc(100% - 24px)}.heading{font-size:31px}.searchLabel{padding-inline:9px;gap:7px}.search::placeholder{font-size:14px}.stickyFilters nav{gap:2px}.stickyFilters button{gap:4px}.eventHeader{padding:10px;gap:7px!important}.eventTime{width:43px}.eventTitle{font-size:14px}.venueName{font-size:12px}.bandHeader>span:not(:last-child){display:none}}
 .venueHoursWindow{display:flex;flex-direction:column;align-items:center;white-space:nowrap}
 .venueHoursWindow+.venueHoursWindow{margin-top:4px}
+
+.stickyFilters nav {
+  gap: clamp(8px, 2.7vw, 28px);
+  justify-content: flex-start;
+  padding-inline: 3px;
+  scrollbar-width: none;
+}
+
+.stickyFilters nav::-webkit-scrollbar { display: none; }
+
+.stickyFilters nav > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 2px;
+  white-space: nowrap;
+}
+
+.stickyFilters button:focus-visible {
+  outline: 2px solid var(--detail);
+  outline-offset: -2px;
+}
+
+.facetCount {
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+.moreCategoriesToggle svg { flex: none; }
+.moreCategoriesToggle[aria-expanded=true] svg { transform: rotate(180deg); }
+
+.facetRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.facetRow[hidden] { display: none; }
+
+.facetRow button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  max-width: 100%;
+  padding-inline: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: start;
+}
+
+.facetRow button:hover,
+.facetRow button:focus-visible {
+  border-color: var(--detail);
+}
+
+.facetRow button[aria-pressed=true] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.facetRow button[aria-pressed=true] .facetCount { color: inherit; }
+.facetRow .activeTime { border-color: var(--detail); color: var(--detail); }
+.facetLabel { margin-inline: 2px 3px; font-size: 13px; font-weight: 600; }
+
+.startFilter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.startFilter > span { flex: none; max-width: 42%; }
+.startFilter .sort { font-size: 16px; font-weight: 500; }
+
+@media (min-width: 768px) {
+  .extraFilters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr); }
+}
+
+@media (max-width: 767px) {
+  .stickyFilters nav { height: 100%; }
+  .startFilter { grid-column: 1 / -1; }
+}

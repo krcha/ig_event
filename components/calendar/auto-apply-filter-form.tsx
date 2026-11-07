@@ -68,7 +68,7 @@ export function AutoApplyFilterForm({
       searchTimer.current = setTimeout(() => applyFilters(form), searchDebounceMs);
       return;
     }
-    if (!(target instanceof HTMLSelectElement)) {
+    if (!(target instanceof HTMLSelectElement) || !target.name) {
       return;
     }
 

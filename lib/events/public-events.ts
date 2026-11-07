@@ -28,6 +28,7 @@ import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 import { buildPublicCalendarDateWindows } from "@/lib/events/public-calendar-windows";
 import { isPriorityCalendarWindow, prunePublicEventReadCache } from "@/lib/events/public-event-read-cache";
 import type { VenueHoursCacheFields } from "@/lib/venues/venue-hours-cache";
+import type { EventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
 
 export type EventStatus = "pending" | "approved" | "rejected";
 export type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
@@ -74,6 +75,7 @@ export type PublicEvent = {
   venueLongitude?: number;
   artists: string[];
   eventType: string;
+  eventTaxonomy?: EventDiscoveryTaxonomy;
   ticketPrice?: string;
   attendance?: number | string;
   attendanceCount?: number | string;
@@ -500,11 +502,13 @@ async function queryPublicCalendarEventsWindowPage(options: {
   cursor?: string | null;
   fromDate: string;
   beforeDate: string;
+  includeEventTaxonomy: boolean;
 }): Promise<PaginatedEventsResponse> {
   return (await options.convex.query(listPublicCalendarEventsWindowQuery, {
     beforeDate: options.beforeDate,
     cursor: options.cursor ?? null,
     fromDate: options.fromDate,
+    ...(options.includeEventTaxonomy ? { includeEventTaxonomy: true } : {}),
   })) as PaginatedEventsResponse;
 }
 
@@ -512,6 +516,7 @@ async function loadAllPublicCalendarEventsWindow(
   convex: ConvexHttpClient,
   fromDate: string,
   beforeDate: string,
+  includeEventTaxonomy: boolean,
 ): Promise<PublicEvent[]> {
   const events: PublicEvent[] = [];
 
@@ -523,6 +528,7 @@ async function loadAllPublicCalendarEventsWindow(
         convex,
         cursor,
         fromDate: window.fromDate,
+        includeEventTaxonomy,
       });
       events.push(...page.page);
 
@@ -551,10 +557,11 @@ function getCachedPublicCalendarEventsWindow(
   convex: ConvexHttpClient,
   fromDate: string,
   beforeDate: string,
+  includeEventTaxonomy: boolean,
 ): Promise<PublicEvent[]> {
   const now = Date.now();
   prunePublicEventsCache(now);
-  const cacheKey = `calendar:${convex.url}:${fromDate}:${beforeDate}`;
+  const cacheKey = `calendar:${convex.url}:${fromDate}:${beforeDate}${includeEventTaxonomy ? ":discovery" : ""}`;
   const cached = publicEventsCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     publicEventsCache.delete(cacheKey);
@@ -562,7 +569,7 @@ function getCachedPublicCalendarEventsWindow(
     return cached.promise;
   }
 
-  const promise = loadAllPublicCalendarEventsWindow(convex, fromDate, beforeDate).catch((error) => {
+  const promise = loadAllPublicCalendarEventsWindow(convex, fromDate, beforeDate, includeEventTaxonomy).catch((error) => {
     const current = publicEventsCache.get(cacheKey);
     if (current?.promise === promise) {
       publicEventsCache.delete(cacheKey);
@@ -578,6 +585,7 @@ function getCachedPublicCalendarEventsWindow(
 export async function loadPublicCalendarEventsWindow(options: {
   beforeDate?: string;
   fromDate?: string;
+  includeEventTaxonomy?: boolean;
 }): Promise<{
   events: PublicEvent[];
   error?: string;
@@ -600,7 +608,7 @@ export async function loadPublicCalendarEventsWindow(options: {
 
   try {
     const convex = new ConvexHttpClient(convexUrl);
-    const events = await getCachedPublicCalendarEventsWindow(convex, fromDate, beforeDate);
+    const events = await getCachedPublicCalendarEventsWindow(convex, fromDate, beforeDate, options.includeEventTaxonomy === true);
     return { events };
   } catch (error) {
     return {

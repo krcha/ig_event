@@ -85,6 +85,7 @@ const checks = [
   { script: "qa:ingestion-triage", timeoutMs: 60_000 },
   { script: "qa:venue-types", timeoutMs: 60_000 },
   { script: "qa:event-categories", timeoutMs: 60_000 },
+  { script: "qa:event-discovery", nodeScript: "scripts/qa-event-discovery.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-lifecycle", timeoutMs: 60_000 },
   { script: "qa:venue-bulk-edit", nodeScript: "scripts/qa-venue-bulk-edit.mjs", timeoutMs: 60_000 },
   { script: "qa:venue-table", nodeScript: "scripts/qa-venue-table.mjs", timeoutMs: 60_000 },

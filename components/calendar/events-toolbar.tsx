@@ -8,19 +8,26 @@ import { AutoApplyFilterForm } from "./auto-apply-filter-form";
 import { OpenNowFilter } from "./open-now-filter";
 import { useEventsUi } from "./events-ui-provider";
 import { AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/lib/events/agenda-sort-options";
+import { CALENDAR_TIME_BANDS } from "@/lib/events/calendar-time-band-definitions";
+import { calendarBandLabels, useCalendarDiscoveryFilters } from "./calendar-discovery-state";
+import { replaceCalendarDiscoveryFilters } from "./calendar-discovery-query";
+import { useLocale } from "@/i18n/client";
+import { publicText } from "@/lib/i18n/public-messages";
 import styles from "./mobile-events-home.module.css";
 
 export function EventsToolbar({ query, sortMode, openNowActive, openNowHref, now }: {
   query?: string; sortMode: AgendaSortMode; openNowActive: boolean; openNowHref: string; now: number;
 }) {
   const { filtersOpen, setFiltersOpen } = useEventsUi();
+  const { time } = useCalendarDiscoveryFilters();
+  const locale = useLocale();
   const [selectedSort, setSelectedSort] = useState(sortMode);
   useEffect(() => setSelectedSort(sortMode), [sortMode]);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (input.current && document.activeElement !== input.current) input.current.value = query ?? "";
   }, [query]);
-  const active = openNowActive || selectedSort !== "time";
+  const active = openNowActive || selectedSort !== "time" || Boolean(time);
 
   return <LocalizedElement as="section" className={styles.toolbar} aria-label="Pretraga i filteri">
     <AutoApplyFilterForm searchDebounceMs={300}>
@@ -45,6 +52,16 @@ export function EventsToolbar({ query, sortMode, openNowActive, openNowHref, now
           {AGENDA_SORT_OPTIONS.map(option => <option key={option.value} value={option.value}><PublicText text={option.label} /></option>)}
         </LocalizedElement></label>
       </div>
+      <label className={styles.startFilter}>
+        <span><PublicText text="Početak događaja" /></span>
+        <select className={styles.sort} data-calendar-time-filter="true" value={time ?? ""}
+          onChange={event => replaceCalendarDiscoveryFilters({ time: event.target.value })}>
+          <option value=""><PublicText text="Bilo kada" /></option>
+          {CALENDAR_TIME_BANDS.map(({ key, description }) => <option key={key} value={key}>
+            {publicText(locale, calendarBandLabels[key])}{key === "time-not-announced" ? "" : ` · ${description.replace("-", "–")}`}
+          </option>)}
+        </select>
+      </label>
     </div>
     </AutoApplyFilterForm>
   </LocalizedElement>;

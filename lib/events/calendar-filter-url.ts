@@ -1,3 +1,5 @@
+import { DISCOVERY_CATEGORIES } from "../taxonomy/event-discovery";
+
 export function buildCalendarFilterUrl(
   pathname: string,
   formEntries: Iterable<readonly [string, unknown]>,
@@ -13,7 +15,10 @@ export function buildCalendarFilterUrl(
     const value = rawValue.trim();
     if (value) params.set(key, value);
   }
-  params.delete("category");
+  const categories = params.get("category")?.split(",")
+    .filter((value) => DISCOVERY_CATEGORIES.some(({ key }) => key === value));
+  if (categories?.length) params.set("category", categories.join(","));
+  else params.delete("category");
 
   const query = params.toString();
   return query ? `${pathname}?${query}` : pathname;
