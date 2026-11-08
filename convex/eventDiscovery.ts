@@ -338,9 +338,12 @@ export const recordBatch = mutation({
 
 async function completedDailyWindow(ctx: Pick<QueryCtx, "db">, runId: Id<"ingestionRuns">) {
   const run = await ctx.db.get(runId);
-  if (run?.mode !== "daily" || run.status !== "completed" || !run.dailyDayKey ||
-    typeof run.startedAt !== "number" || typeof run.finishedAt !== "number" || run.startedAt > run.finishedAt) return;
-  return { from: run.startedAt, to: run.finishedAt };
+  if (run?.mode !== "daily" || run.status !== "completed" || !run.dailyDayKey) return;
+  // The durable executor can dispatch only after the queue is ready. Daily
+  // runs do not necessarily write the older optional startedAt field.
+  const from = run.startedAt ?? run.dispatchReadyAt ?? run.queueBuildCompletedAt ?? run.createdAt;
+  if (!Number.isFinite(from) || typeof run.finishedAt !== "number" || !Number.isFinite(run.finishedAt) || from > run.finishedAt) return;
+  return { from, to: run.finishedAt };
 }
 
 async function cameFromDailyRun(

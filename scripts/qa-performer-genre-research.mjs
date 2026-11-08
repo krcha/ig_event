@@ -372,7 +372,8 @@ function upcomingQueueFixture() {
 function dailyQueueFixture() {
   const startedAt = Date.parse("2026-11-08T08:00:00Z");
   const finishedAt = startedAt + 30_000;
-  const run = { _id: "run-today", mode: "daily", status: "completed", dailyDayKey: "2026-11-08", startedAt, finishedAt };
+  const run = { _id: "run-today", mode: "daily", status: "completed", dailyDayKey: "2026-11-08",
+    createdAt: startedAt - 10_000, queueBuildCompletedAt: startedAt - 1_000, dispatchReadyAt: startedAt, finishedAt };
   const runs = new Map([
     [run._id, run],
     ["manual-run", { ...run, _id: "manual-run", mode: "manual" }],
