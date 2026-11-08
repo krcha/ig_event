@@ -48,8 +48,8 @@ function PerformerGenreProvenance({ genres, research }: {
     }
   }
 
-  return <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs leading-5 text-muted-foreground" data-calendar-genre-provenance="performer">
-    <span><PublicText text="Žanr prema izvođaču" />{genres.length ? " · " : null}
+  return <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs leading-5 text-muted-foreground" data-calendar-genre-provenance={research.estimated ? "estimate" : "performer"}>
+    <span><PublicText text={research.estimated ? "Procena žanra prema izvođaču" : "Žanr prema izvođaču"} />{genres.length ? " · " : null}
       {genres.map((genre, index) => <Fragment key={genre}>{index ? ", " : null}<PublicText text={genreLabels.get(genre)} /></Fragment>)}
     </span>
     {[...sources].map(([href, performer]) => <a key={href} href={href} target="_blank" rel="noopener noreferrer"

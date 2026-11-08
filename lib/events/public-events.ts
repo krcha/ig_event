@@ -77,7 +77,7 @@ export type PublicEvent = {
   artists: string[];
   eventType: string;
   eventTaxonomy?: EventDiscoveryTaxonomy;
-  performerGenreResearch?: { sources: PerformerGenreSource[] };
+  performerGenreResearch?: { sources: PerformerGenreSource[]; estimated?: true };
   ticketPrice?: string;
   attendance?: number | string;
   attendanceCount?: number | string;

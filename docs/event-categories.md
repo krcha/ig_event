@@ -42,6 +42,20 @@ Conditional free entry keeps its condition in the price display rather than
 receiving an unconditional free-admission tag. A DJ workshop does not imply that
 a DJ set is being performed.
 
+The daily ingestion launcher runs discovery once after the current day's
+ingestion and duplicate cleanup. It only considers newly created, published
+events linked to that ingestion run, and skips events already classified.
+The classifier checks the original Instagram caption
+for music advertised for that event, including what a DJ plans to play. It uses
+the fixed 20-genre list and saves the exact supporting excerpt. For a post
+listing multiple occurrences, only exact excerpts associated with the current
+occurrence are eligible. A venue's usual music, a playlist, or the lineup for
+another date does not establish the genre of the event. If a new music event
+still has no advertised genre, the model can estimate from a known billed
+performer. The calendar labels that estimate separately; the model leaves the
+genre blank for unfamiliar or ambiguous performers. These estimates are not
+confirmed event facts. Existing labels are retained.
+
 ## Legacy Data Compatibility
 
 The four categories are a public presentation taxonomy. Existing Convex fields,

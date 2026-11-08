@@ -2,10 +2,11 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
-import { eventDiscoveryTaxonomy, performerGenreMatch } from "./eventDiscoveryValues";
+import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
+import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
 import { formatUtcDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
-import { EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy } from "../lib/taxonomy/event-discovery";
+import { EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy, MUSIC_GENRES, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
   PERFORMER_GENRE_RESEARCH_VERSION,
@@ -15,7 +16,10 @@ import {
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
 
-const eventInput = v.object({
+const CAPTION_MAX_LENGTH = 2200;
+const genreKeys: ReadonlySet<string> = new Set(MUSIC_GENRES.map(({ key }) => key));
+
+const eventInputFields = {
   key: v.id("events"),
   expectedUpdatedAt: v.number(),
   title: v.string(),
@@ -23,7 +27,9 @@ const eventInput = v.object({
   occurrenceText: v.optional(v.string()),
   venue: v.string(),
   artists: v.array(v.string()),
-});
+};
+const eventInput = v.object(eventInputFields);
+const dailyInput = v.object({ ...eventInputFields, eventType: v.string(), sourceCaption: v.optional(v.string()) });
 
 function loadLabel(ctx: Pick<QueryCtx, "db">, eventId: Id<"events">) {
   return ctx.db.query("eventDiscoveryLabels")
@@ -54,6 +60,67 @@ function upcomingEvents(ctx: QueryCtx, fromDate: string) {
     q.eq("publicationState", "publishable").gte("date", fromDate)).order("asc");
 }
 
+async function readScopedInstagramCaption(
+  ctx: Pick<QueryCtx, "db">, event: Doc<"events">, fields: Record<string, unknown>,
+) {
+  const raw = event.sourceCaption?.trim().slice(0, CAPTION_MAX_LENGTH);
+  const source = canonicalizeSourceUrl("instagram", event.instagramPostUrl ?? event.canonicalSourceUrl);
+  if (!raw || !source.ok || fields.sourceOccurrencePlanUnverified === true) return;
+  const sharedByEvidence = fields.multiEventSplitDetected === true || fields.dateRangeExpanded === true ||
+    ["multiEventSplitCount", "splitEventTotal", "dateRangeExpandedCount", "expandedDateTotal"].some((key) => {
+      const count = fields[key];
+      return typeof count === "number" && count > 1;
+    });
+  const sharedByIndex = async () => {
+    const other = (rows: Doc<"events">[]) => rows.some(({ _id }) => _id !== event._id);
+    if (event.instagramPostId && other(await ctx.db.query("events").withIndex("by_instagramPostId", (q) =>
+      q.eq("instagramPostId", event.instagramPostId)).take(2))) return true;
+    const { canonicalUrl } = source.value;
+    if (event.canonicalSourceUrl === canonicalUrl) {
+      return other(await ctx.db.query("events").withIndex("by_canonicalSourceUrl", (q) =>
+        q.eq("canonicalSourceUrl", canonicalUrl)).take(2));
+    }
+    if (event.normalizedInstagramPostUrl === canonicalUrl) {
+      return other(await ctx.db.query("events").withIndex("by_normalizedInstagramPostUrl", (q) =>
+        q.eq("normalizedInstagramPostUrl", canonicalUrl)).take(2));
+    }
+    const originalUrl = event.instagramPostUrl;
+    return !!originalUrl && other(await ctx.db.query("events").withIndex("by_instagramPostUrl", (q) =>
+      q.eq("instagramPostUrl", originalUrl)).take(2));
+  };
+  if (!sharedByEvidence && !await sharedByIndex()) return raw;
+
+  // Shared posts can contain several lineups. Reuse only evidence assigned to
+  // this occurrence during extraction and present verbatim in the source.
+  const excerpts = [fields.rowSourceText, fields.splitSourceLine];
+  if (Array.isArray(fields.carouselTextEvidence)) {
+    for (const item of fields.carouselTextEvidence.slice(0, 8)) {
+      if (item?.source === "caption") excerpts.push(item.text);
+    }
+  }
+  const exact = excerpts.flatMap((item) => {
+    const text = typeof item === "string" ? item.trim() : "";
+    return text && text !== raw && raw.includes(text) ? [text] : [];
+  });
+  const scoped = [...new Set(exact)].join("\n\n").slice(0, CAPTION_MAX_LENGTH);
+  return scoped || undefined;
+}
+
+function readCaptionClaims(auditJson: string) {
+  const { evidence } = readEventEvidenceRecord(auditJson);
+  return Array.isArray(evidence) ? evidence.filter((claim) => claim?.source === "sourceCaption") : [];
+}
+
+function readEstimatedGenres(auditJson: string): MusicGenre[] {
+  // This prefix is only written by recordDailyBatch. Legacy classifier and
+  // web research audits retain their original structure.
+  if (!auditJson.startsWith('{"estimatedGenres":')) return [];
+  const { estimatedGenres } = readEventEvidenceRecord(auditJson);
+  return Array.isArray(estimatedGenres)
+    ? estimatedGenres.filter((genre): genre is MusicGenre => typeof genre === "string" && genreKeys.has(genre)).slice(0, 2)
+    : [];
+}
+
 export async function loadPublicEventDiscoveryLabels(
   ctx: QueryCtx,
   event: Pick<Doc<"events">, "_id" | "updatedAt" | "title" | "eventType" | "venue" | "artists">,
@@ -66,6 +133,11 @@ export async function loadPublicEventDiscoveryLabels(
     const row = await loadGenreResearch(ctx, event._id);
     if (row?.matches.length && researchIsCurrent(row, event.updatedAt)) {
       return applyPerformerGenreResearch(taxonomy, row.matches);
+    }
+    const estimatedGenres = readEstimatedGenres(label.auditJson ?? "");
+    if (estimatedGenres.length) {
+      return { eventTaxonomy: { ...taxonomy, genres: estimatedGenres },
+        performerGenreResearch: { sources: [], estimated: true as const } };
     }
   }
   return label.taxonomy ? { eventTaxonomy: label.taxonomy } : undefined;
@@ -251,7 +323,7 @@ export const recordBatch = mutation({
         continue;
       }
       const label = await loadLabel(ctx, eventId);
-      if (label?.version === EVENT_DISCOVERY_VERSION && label.eventUpdatedAt === event.updatedAt) {
+      if (labelIsCurrent(label, event.updatedAt)) {
         unchanged++;
         continue;
       }
@@ -261,5 +333,106 @@ export const recordBatch = mutation({
       written++;
     }
     return { written, unchanged, stale };
+  },
+});
+
+async function completedDailyWindow(ctx: Pick<QueryCtx, "db">, runId: Id<"ingestionRuns">) {
+  const run = await ctx.db.get(runId);
+  if (run?.mode !== "daily" || run.status !== "completed" || !run.dailyDayKey ||
+    typeof run.startedAt !== "number" || typeof run.finishedAt !== "number" || run.startedAt > run.finishedAt) return;
+  return { from: run.startedAt, to: run.finishedAt };
+}
+
+async function cameFromDailyRun(
+  ctx: Pick<QueryCtx, "db">, event: Doc<"events">, runId: Id<"ingestionRuns">, window: { from: number; to: number },
+) {
+  const postId = event.instagramPostId;
+  if (!postId || event.status !== "approved" || event.publicationState !== "publishable" ||
+    event._creationTime < window.from || event._creationTime > window.to ||
+    event.createdAt < window.from || event.createdAt > window.to) return false;
+  // A time window alone would also pick up manual imports or a concurrent
+  // recovery. Match this exact Instagram post against the run's saved receipt.
+  const posts = await ctx.db.query("scrapedPosts").withIndex("by_postId", (q) => q.eq("postId", postId)).take(8);
+  const receipts = await Promise.all(posts.map((post) => ctx.db.query("ingestionRunHandleReceipts")
+    .withIndex("by_run_handle", (q) => q.eq("runId", runId).eq("handle", post.handle)).unique()));
+  return posts.some((post, index) => {
+    const receipt = receipts[index];
+    return receipt?.scrapedPostId === post._id || receipt?.savedPostLinks?.some((link) =>
+      link.scrapedPostId === post._id && link.postId === postId);
+  });
+}
+
+export const listDailyInputs = query({
+  args: { serviceSecret: v.string(), runId: v.id("ingestionRuns"), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ events: v.array(dailyInput), cursor: v.union(v.string(), v.null()) }),
+  handler: async (ctx, { serviceSecret, runId, cursor }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    const window = await completedDailyWindow(ctx, runId);
+    if (!window) return { events: [], cursor: null };
+    const page = await ctx.db.query("events").withIndex("by_creation_time", (q) =>
+      q.gte("_creationTime", window.from).lte("_creationTime", window.to)).paginate({ cursor, numItems: 12 });
+    const events = await Promise.all(page.page.map(async (event) => {
+      if (!await cameFromDailyRun(ctx, event, runId, window) || await loadLabel(ctx, event._id)) return null;
+      const evidence = readEventEvidenceRecord(event.normalizedFieldsJson);
+      const row = evidence.rowSourceText ?? evidence.splitSourceLine;
+      const occurrenceText = typeof row === "string" && row.trim() ? row.slice(0, 800) : undefined;
+      const sourceCaption = await readScopedInstagramCaption(ctx, event, evidence);
+      return { key: event._id, expectedUpdatedAt: event.updatedAt, title: event.title, venue: event.venue,
+        eventType: event.eventType, artists: event.artists.slice(0, 20),
+        ...(event.description ? { description: event.description.slice(0, 800) } : {}),
+        ...(occurrenceText ? { occurrenceText } : {}), ...(sourceCaption ? { sourceCaption } : {}) };
+    }));
+    return { events: events.filter((event) => event !== null), cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
+export const recordDailyBatch = mutation({
+  args: { serviceSecret: v.string(), runId: v.id("ingestionRuns"), model: v.string(), results: v.array(v.object({
+    eventId: v.id("events"), expectedUpdatedAt: v.number(), taxonomy: v.union(eventDiscoveryTaxonomy, v.null()),
+    auditJson: v.string(), estimatedGenres: v.optional(v.array(musicGenre)),
+  })) },
+  returns: v.object({ written: v.number(), unchanged: v.number(), stale: v.number() }),
+  handler: async (ctx, { serviceSecret, runId, model, results }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    if (!model.trim() || model.length > 100 || results.length > 12 ||
+      new Set(results.map(({ eventId }) => eventId)).size !== results.length) throw new Error("Invalid daily discovery batch.");
+    const window = await completedDailyWindow(ctx, runId);
+    const counts = { written: 0, unchanged: 0, stale: 0 };
+    if (!window) return { ...counts, stale: results.length };
+    for (const { eventId, expectedUpdatedAt, taxonomy, auditJson, estimatedGenres = [] } of results) {
+      if (auditJson.length > 15_600 || estimatedGenres.length > 2 || new Set(estimatedGenres).size !== estimatedGenres.length ||
+        (taxonomy && (!taxonomy.categories.includes(taxonomy.primaryCategory) ||
+          new Set(taxonomy.categories).size !== taxonomy.categories.length || new Set(taxonomy.genres).size !== taxonomy.genres.length ||
+          new Set(taxonomy.formats).size !== taxonomy.formats.length ||
+          (taxonomy.categories.length > 1 && taxonomy.categories.includes("other"))))) throw new Error("Invalid daily discovery result.");
+      const event = await ctx.db.get(eventId);
+      if (!event || event.updatedAt !== expectedUpdatedAt || !await cameFromDailyRun(ctx, event, runId, window)) {
+        counts.stale++;
+        continue;
+      }
+      if (await loadLabel(ctx, eventId)) {
+        counts.unchanged++;
+        continue;
+      }
+      const captionClaims = readCaptionClaims(auditJson);
+      if (captionClaims.length) {
+        const caption = await readScopedInstagramCaption(ctx, event, readEventEvidenceRecord(event.normalizedFieldsJson));
+        if (captionClaims.some(({ quote }) => typeof quote !== "string" || !quote.trim() || !caption?.includes(quote))) {
+          // Another occurrence may have been added while the model was working.
+          counts.stale++;
+          continue;
+        }
+      }
+      const format = getPerformerGenreResearchFormat(taxonomy ?? getEventDiscoveryTaxonomy(event));
+      const hasBilledAct = format && getPerformerGenreResearchActs(event, format).some(({ titleOnly }) => !titleOnly);
+      const audit = readEventEvidenceRecord(auditJson);
+      delete audit.estimatedGenres;
+      const storedAudit = estimatedGenres.length && hasBilledAct
+        ? JSON.stringify({ estimatedGenres, ...audit }) : JSON.stringify(audit);
+      await ctx.db.insert("eventDiscoveryLabels", { eventId, eventUpdatedAt: event.updatedAt,
+        version: EVENT_DISCOVERY_VERSION, model, taxonomy, auditJson: storedAudit });
+      counts.written++;
+    }
+    return counts;
   },
 });

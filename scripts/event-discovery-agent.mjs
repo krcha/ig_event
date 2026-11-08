@@ -48,6 +48,7 @@ function projectRow(row, index) {
     venue: text(row.venue),
     description: text(row.description),
     occurrenceText: text(row.occurrenceText),
+    sourceCaption: text(row.sourceCaption),
     artists: Array.isArray(row.artists) ? row.artists.filter((name) => typeof name === "string") : [],
   };
 }

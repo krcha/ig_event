@@ -256,6 +256,7 @@ function runLauncherFixture(mode) {
   const lockFile = join(fixtureRoot, "daily.lock");
   const requestCountFile = join(fixtureRoot, "request-count");
   const runnerLog = join(fixtureRoot, "runner.log");
+  const discoveryLog = join(fixtureRoot, "discovery.log");
   const secretLeakLog = join(fixtureRoot, "secret-leak.log");
   mkdirSync(fakeBin);
   mkdirSync(runtimeDir);
@@ -266,6 +267,7 @@ function runLauncherFixture(mode) {
   );
   writeFileSync(requestCountFile, "0", { mode: 0o600 });
   writeFileSync(runnerLog, "", { mode: 0o600 });
+  writeFileSync(discoveryLog, "", { mode: 0o600 });
   writeFileSync(secretLeakLog, "", { mode: 0o600 });
 
   const fakeFlock = join(fakeBin, "flock");
@@ -285,16 +287,39 @@ function runLauncherFixture(mode) {
       '[[ -n "$config_file" && -r "$config_file" ]]',
       '[[ -z "${CRON_SECRET:-}" ]] || printf "leaked\\n" >> "$FAKE_SECRET_LEAK_LOG"',
       'grep -Fq "Authorization: Bearer fixture-secret" "$config_file"',
-      'grep -Fq "url = \\"https://scheduler.invalid/api/cron/durable-ingestion/daily\\"" "$config_file"',
       'body_file="$(sed -nE \'s/^output = "(.*)"$/\\1/p\' "$config_file")"',
+      'url="$(sed -nE \'s/^url = "(.*)"$/\\1/p\' "$config_file")"',
+      'if [[ "$url" == https://scheduler.invalid/api/cron/event-discovery?* ]]; then',
+      '  printf "%s\\n" "$url" >> "$FAKE_DISCOVERY_LOG"',
+      '  if [[ "$FAKE_DAILY_MODE" == "satisfied" ]]; then',
+      '    [[ ! -s "$FAKE_RUNNER_LOG" ]]',
+      '    printf \'{"state":"idle","cursor":null}\' > "$body_file"',
+      '  else',
+      '    [[ "$(tail -n 1 "$FAKE_RUNNER_LOG")" == "today_run" ]]',
+      '    [[ "$FAKE_DAILY_MODE" != "discovery-failed" ]] || exit 22',
+      '    if [[ "$url" == *"&cursor="* && "$FAKE_DAILY_MODE" != "stalled" ]]; then',
+      '      printf \'{"state":"processed","cursor":null,"tested":1}\' > "$body_file"',
+      '    else',
+      '      printf \'{"state":"processed","cursor":"opaque+cursor/= &","tested":12}\' > "$body_file"',
+      '    fi',
+      '  fi',
+      '  exit 0',
+      'fi',
+      '[[ "$url" == "https://scheduler.invalid/api/cron/durable-ingestion/daily" ]]',
       'count="$(<"$FAKE_REQUEST_COUNT_FILE")"',
       'count=$((count + 1))',
       'printf "%s" "$count" > "$FAKE_REQUEST_COUNT_FILE"',
       'if [[ "$FAKE_DAILY_MODE" == "drain" && "$count" == "1" ]]; then',
-      '  printf \'{"runId":"prior_run","executeRequired":true,"followUpRequired":true}\' > "$body_file"',
+      '  printf \'{"runId":"prior_run","runMode":"catch_up","runStatus":"running","runDayKey":null,"currentDayKey":"2026-08-11","executeRequired":true,"followUpRequired":true}\' > "$body_file"',
       "else",
-      '  if [[ "$FAKE_DAILY_MODE" == "satisfied" ]]; then execute=false; else execute=true; fi',
-      '  printf \'{"runId":"today_run","executeRequired":%s,"followUpRequired":false}\' "$execute" > "$body_file"',
+      '  execute=true; status=queued; run_day=2026-08-11; mode=daily',
+      '  case "$FAKE_DAILY_MODE" in',
+      '    satisfied) execute=false; status=completed ;;',
+      '    failed) execute=false; status=failed ;;',
+      '    older) run_day=2026-08-10 ;;',
+      '    catch-up) mode=catch_up ;;',
+      '  esac',
+      '  printf \'{"runId":"today_run","runMode":"%s","runStatus":"%s","runDayKey":"%s","currentDayKey":"2026-08-11","executeRequired":%s,"followUpRequired":false}\' "$mode" "$status" "$run_day" "$execute" > "$body_file"',
       "fi",
       "",
     ].join("\n"),
@@ -305,7 +330,7 @@ function runLauncherFixture(mode) {
   const fakeRunner = join(fakeBin, "durable-runner");
   writeFileSync(
     fakeRunner,
-    "#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' \"$1\" >> \"$FAKE_RUNNER_LOG\"\n",
+    "#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' \"$1\" >> \"$FAKE_RUNNER_LOG\"\n[[ \"$FAKE_DAILY_MODE\" != \"runner-failed\" ]]\n",
     { mode: 0o755 },
   );
   chmodSync(fakeRunner, 0o755);
@@ -320,6 +345,7 @@ function runLauncherFixture(mode) {
         FAKE_DAILY_MODE: mode,
         FAKE_REQUEST_COUNT_FILE: requestCountFile,
         FAKE_RUNNER_LOG: runnerLog,
+        FAKE_DISCOVERY_LOG: discoveryLog,
         FAKE_SECRET_LEAK_LOG: secretLeakLog,
         IG_EVENT_CRON_ENV: envFile,
         IG_EVENT_DURABLE_DAILY_LOCK_FILE: lockFile,
@@ -329,25 +355,38 @@ function runLauncherFixture(mode) {
       },
       timeout: 10_000,
     });
-    assert.equal(result.status, 0, `${mode}: stdout=${result.stdout}; stderr=${result.stderr}`);
+    assert.equal(result.status, mode === "runner-failed" ? 1 : 0, `${mode}: stdout=${result.stdout}; stderr=${result.stderr}`);
     assert.equal(readFileSync(secretLeakLog, "utf8"), "", "curl must not inherit the secret");
     assert.deepEqual(readdirSync(runtimeDir), [], "sensitive curl files must be cleaned");
+    if (["discovery-failed", "stalled"].includes(mode)) {
+      assert.match(result.stderr, /event discovery after daily ingestion failed for run today_run/);
+    }
     return {
       requests: Number(readFileSync(requestCountFile, "utf8")),
       runs: readFileSync(runnerLog, "utf8").trim().split("\n").filter(Boolean),
+      discovery: readFileSync(discoveryLog, "utf8").trim().split("\n").filter(Boolean),
     };
   } finally {
     rmSync(fixtureRoot, { force: true, recursive: true });
   }
 }
 
+const discoveryUrl = "https://scheduler.invalid/api/cron/event-discovery?runId=today_run";
+const discoveryNextUrl = `${discoveryUrl}&cursor=opaque%2Bcursor%2F%3D%20%26`;
 assert.deepEqual(runLauncherFixture("drain"), {
   requests: 2,
   runs: ["prior_run", "today_run"],
+  discovery: [discoveryUrl, discoveryNextUrl],
 });
 assert.deepEqual(runLauncherFixture("satisfied"), {
   requests: 1,
   runs: [],
+  discovery: [discoveryUrl],
 });
+for (const mode of ["failed", "runner-failed", "older", "catch-up"]) {
+  assert.deepEqual(runLauncherFixture(mode).discovery, [], `${mode} cannot trigger daily genre discovery.`);
+}
+assert.deepEqual(runLauncherFixture("discovery-failed").discovery, [discoveryUrl], "A discovery failure preserves the completed ingestion result.");
+assert.deepEqual(runLauncherFixture("stalled").discovery, [discoveryUrl, discoveryNextUrl], "An unchanged cursor ends the genre pass without looping.");
 
 console.log("Durable daily scheduler QA passed.");

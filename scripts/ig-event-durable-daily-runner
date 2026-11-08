@@ -8,6 +8,7 @@ LOCK_FILE="${IG_EVENT_DURABLE_DAILY_LOCK_FILE:-/run/lock/ig-event-durable-daily.
 RUNTIME_DIR="${IG_EVENT_DURABLE_RUNTIME_DIR:-/run/ig_event}"
 DURABLE_RUNNER="${IG_EVENT_DURABLE_RUNNER:-$(dirname "$0")/ig-event-durable-runner}"
 MAX_DRAINED_RUNS=32
+MAX_DISCOVERY_PAGES=64
 
 [[ -r "$ENV_FILE" ]] || { echo "missing cron environment" >&2; exit 78; }
 # shellcheck disable=SC1090
@@ -35,26 +36,66 @@ flock -n 9 || { echo "durable daily ingestion already running"; exit 0; }
 cron_bearer="$CRON_SECRET"
 unset CRON_SECRET
 
-for ((drained_run_count = 0; drained_run_count < MAX_DRAINED_RUNS; drained_run_count += 1)); do
-  body_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.body.XXXXXX")"
-  config_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.curl.XXXXXX")"
-  chmod 600 "$body_file" "$config_file"
+post_cron() {
+  local path="$1" timeout="$2"
+  body_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.body.XXXXXX")" || return 1
+  config_file="$(mktemp "${RUNTIME_DIR%/}/durable-daily.curl.XXXXXX")" || return 1
+  chmod 600 "$body_file" "$config_file" || return 1
   {
     printf 'fail\n'
     printf 'silent\n'
     printf 'show-error\n'
-    printf 'max-time = 120\n'
+    printf 'max-time = %s\n' "$timeout"
     printf 'request = "POST"\n'
     printf 'header = "Authorization: Bearer %s"\n' "$cron_bearer"
     printf 'output = "%s"\n' "$body_file"
-    printf 'url = "%s/api/cron/durable-ingestion/daily"\n' "${APP_ORIGIN%/}"
-  } > "$config_file"
+    printf 'url = "%s%s"\n' "${APP_ORIGIN%/}" "$path"
+  } > "$config_file" || return 1
   curl --disable --config "$config_file"
+}
+
+run_event_discovery() {
+  local run_id="$1" query="" next_query page
+  for ((page = 0; page < MAX_DISCOVERY_PAGES; page += 1)); do
+    post_cron "/api/cron/event-discovery?runId=${run_id}${query}" 240 || return 1
+    next_query="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+from urllib.parse import quote
+
+with open(sys.argv[1]) as response_file:
+    response = json.load(response_file)
+state = response['state']
+cursor = response['cursor']
+if state == 'idle' and cursor is None:
+    sys.exit(0)
+if state != 'processed' or type(response['tested']) is not int or response['tested'] < 0:
+    sys.exit(1)
+if cursor is not None:
+    if not isinstance(cursor, str) or not 1 <= len(cursor) <= 4096:
+        sys.exit(1)
+    print('&cursor=' + quote(cursor, safe=''))
+PY
+    )" || return 1
+    cleanup_sensitive_files
+    [[ -n "$next_query" ]] || return 0
+    [[ "$next_query" != "$query" ]] || return 1
+    query="$next_query"
+  done
+  return 1
+}
+
+for ((drained_run_count = 0; drained_run_count < MAX_DRAINED_RUNS; drained_run_count += 1)); do
+  post_cron /api/cron/durable-ingestion/daily 120
   response="$(<"$body_file")"
 
   # The route emits one compact JSON object. Keep parsing deliberately strict
   # so an error document can never be passed to the durable executor.
   run_id="$(printf '%s' "$response" | sed -nE 's/.*"runId":"([^"]+)".*/\1/p')"
+  run_mode="$(printf '%s' "$response" | sed -nE 's/.*"runMode":"([^"]+)".*/\1/p')"
+  run_status="$(printf '%s' "$response" | sed -nE 's/.*"runStatus":"([^"]+)".*/\1/p')"
+  run_day="$(printf '%s' "$response" | sed -nE 's/.*"runDayKey":"([^"]+)".*/\1/p')"
+  current_day="$(printf '%s' "$response" | sed -nE 's/.*"currentDayKey":"([^"]+)".*/\1/p')"
   execute_required="$(printf '%s' "$response" | sed -nE 's/.*"executeRequired":(true|false).*/\1/p')"
   follow_up_required="$(printf '%s' "$response" | sed -nE 's/.*"followUpRequired":(true|false).*/\1/p')"
   [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] || {
@@ -75,6 +116,15 @@ for ((drained_run_count = 0; drained_run_count < MAX_DRAINED_RUNS; drained_run_c
     "$DURABLE_RUNNER" "$run_id"
   fi
   if [[ "$follow_up_required" == "false" ]]; then
+    # A successful runner has waited for terminal receipts and duplicate cleanup.
+    # If the launcher restarted, the same completed run can resume its genre pass.
+    if [[ "$run_mode" == "daily" && -n "$current_day" && "$run_day" == "$current_day" ]] &&
+      [[ "$execute_required" == "true" || "$run_status" == "completed" ]]; then
+      if ! run_event_discovery "$run_id"; then
+        echo "event discovery after daily ingestion failed for run $run_id" >&2
+        cleanup_sensitive_files
+      fi
+    fi
     trap - EXIT INT TERM
     exit 0
   fi
