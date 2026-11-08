@@ -285,6 +285,7 @@ const chained = await resolveEventGenresBatch(chainedInputs, {
   },
   research: async (items, webOptions) => {
     assert.equal(webOptions.singleAttempt, true);
+    assert.equal(webOptions.thorough, true);
     assert.ok(items.length <= 4);
     assert.ok(items.every(({ venue, date, city }) => venue === "Bridge Hall" && date === "2026-11-08" && city === "Belgrade"));
     checkedBatches.push(items.map(({ billedName, titleOnly }) => [billedName, Boolean(titleOnly)]));
@@ -339,6 +340,37 @@ for (const output of [
   });
   assert.equal(abstained.results.get(0).status, "unverified");
   assert.equal(abstained.searchCalls, 0);
+}
+
+const officialEnglishUrl = "https://savacentar.rs/en/events/tommy-emmanuel/";
+const officialEnglishIdentity = "Tommy Emmanuel will perform in the Sava Center on November 8, 2026";
+const officialEnglishStyle = "His music covers a wide range of styles, including country, jazz, blues";
+const tommy = { ...fallbackInput, billedName: "Tommy Emmanuel", eventTitle: "Tommy Emmanuel Living in the Light Tour",
+  venue: "Sava Centar", trustedFormat: "concert", titleOnly: false };
+async function resolveVenueListing(url, quote) {
+  const batch = await researchPerformerGenresBatch([tommy], {
+    ...options,
+    fetch: async () => Response.json({ status: "completed", output: [
+      { type: "web_search_call", status: "completed", action: { sources: [{ url }] } },
+      { content: [{ type: "output_text", text: JSON.stringify({ rows: [{ row: 0, status: "resolved",
+        identity: webIdentity(url, quote), genres: [{ genre: "jazz-blues", url, quote: officialEnglishStyle }] }] }) }] },
+    ] }),
+  });
+  return batch.results.get(tommy.key);
+}
+const englishListing = await resolveVenueListing(officialEnglishUrl, officialEnglishIdentity);
+assert.equal(englishListing.status, "resolved");
+assert.deepEqual(englishListing.genres, ["jazz-blues"], "The official translated listing binds an exact billed slug to its separate possessive genre quote.");
+assert.equal((await resolveVenueListing(officialEnglishUrl, officialEnglishIdentity.replace("Center", "Centre"))).status, "resolved");
+assert.deepEqual((await resolveVenueListing("https://savacentar.rs/en/events/different-artist/", officialEnglishIdentity)).genres, [],
+  "A possessive genre quote still needs the exact artist slug.");
+for (const [url, quote] of [
+  ["https://venue-index.org/en/events/tommy-emmanuel/", officialEnglishIdentity],
+  [officialEnglishUrl, officialEnglishIdentity.replace("Sava Center", "Bridge Hall")],
+  [officialEnglishUrl, officialEnglishIdentity.replace("November 8", "November 9")],
+  [officialEnglishUrl, "Tommy Emmanuel Living in the Light Tour at Sava Center"],
+]) {
+  assert.equal((await resolveVenueListing(url, quote)).status, "unverified", "The translated alias needs the official site and the full date.");
 }
 
 console.log("Event discovery QA passed: exact occurrence and Instagram caption evidence, existing taxonomy, 20 genre labels, no-search estimates, cited fallback, provider isolation and strict row coverage.");

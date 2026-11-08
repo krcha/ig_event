@@ -713,16 +713,20 @@ try {
     dailyResult("estimate", { estimatedGenres: ["house"] }),
     dailyResult("ambiguous", { estimatedGenres: ["techno"] }),
     dailyResult("legacy-sibling", { webResearch: webResult([researchMatches[2]]) }),
-  ), { written: 0, unchanged: 3, stale: 0 });
+    dailyResult("unbilled", { webResearch: webResult([{ ...researchMatches[0], performer: "Saturday Night", identityUrl: wrongArtistUrl }]) }),
+  ), { written: 0, unchanged: 4, stale: 0 });
   assert.equal(backfill.labels.get("estimate"), initialEstimate);
   assert.equal(backfill.webRows.get("ambiguous"), initialWeb);
   assert.equal(backfill.labels.get("legacy-sibling"), previousUnknownLabel, "Unresolved results do not rewrite taxonomy.");
   assert.deepEqual(await recordUnknown(
     dailyResult("split", { taxonomy: { ...concert, genres: ["techno"] },
       auditJson: JSON.stringify({ evidence: [captionClaim("techno", backfill.neighbor)] }) }),
+    dailyResult("no-post", { taxonomy: announced, auditJson: JSON.stringify({
+      evidence: [{ kind: "genre", label: "techno", source: "title", quote: "Outdated listing title" }],
+    }) }),
     dailyResult("historical", { expectedUpdatedAt: 99, estimatedGenres: ["rock"] }),
     dailyResult("future", { estimatedGenres: ["house"] }),
-  ), { written: 0, unchanged: 0, stale: 3 });
+  ), { written: 0, unchanged: 0, stale: 4 });
 
   assert.deepEqual(await recordUnknown(
     dailyResult("split", { taxonomy: { ...concert, genres: ["house", "disco-funk"] },

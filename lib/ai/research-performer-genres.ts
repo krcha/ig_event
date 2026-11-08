@@ -252,6 +252,10 @@ function matchesDate(quote: string, date: string, requireYear = true): boolean {
     .test(normalize(quote));
 }
 
+function isOfficialSavaCenter(source: PerformerWebEvidence, venue: string): boolean {
+  return venue === "sava centar" && (source.domain === "savacentar.rs" || source.domain === "www.savacentar.rs");
+}
+
 function matchesEvent(source: PerformerWebEvidence, row: PreparedRow, requireYear = true): boolean {
   const quote = normalize(source.quote);
   const event = normalize(row.eventTitle);
@@ -260,9 +264,12 @@ function matchesEvent(source: PerformerWebEvidence, row: PreparedRow, requireYea
   const venue = normalize(row.venue);
   const venueMatch = contains(quote, venue) || (venue === "sava centar" &&
     (contains(quote, "sava centru") || contains(quote, "sava centra")));
+  const officialEnglishVenueMatch = !venueMatch && isOfficialSavaCenter(source, venue) &&
+    (contains(quote, "sava center") || contains(quote, "sava centre"));
   const officialVoxStage = !row.titleOnly && venue === "vox blues club" &&
     onDomain(source.domain, "voxbluesclub.com") && contains(quote, "vox main stage");
-  if (!matchesName(source.quote, row) || (!venueMatch && !officialVoxStage)) return false;
+  if (!matchesName(source.quote, row) || (!venueMatch && !officialVoxStage && !officialEnglishVenueMatch)) return false;
+  if (officialEnglishVenueMatch) return matchesDate(source.quote, row.date);
   if (matchesDate(source.quote, row.date) ||
     ((!requireYear || officialVoxStage) && !year.test(quote) && matchesDate(source.quote, row.date, false))) return true;
   return !row.titleOnly && !calendarDate.test(quote) && !numericDate.test(source.quote) &&
@@ -270,8 +277,8 @@ function matchesEvent(source: PerformerWebEvidence, row: PreparedRow, requireYea
 }
 
 function namesOfficialVenueSubject(source: PerformerWebEvidence, row: PreparedRow): boolean {
-  if (normalize(row.venue) !== "sava centar" || !onDomain(source.domain, "savacentar.rs")) return false;
-  const slug = new URL(source.url).pathname.match(/^\/dogadjaji\/([^/]+)$/i)?.[1];
+  if (!isOfficialSavaCenter(source, normalize(row.venue))) return false;
+  const slug = new URL(source.url).pathname.match(/^\/(?:dogadjaji|en\/events)\/([^/]+)$/i)?.[1];
   return Boolean(slug && normalize(slug) === normalize(row.billedName) &&
     /^(?:njegov[ao]?|njen[ao]?|njihov[ao]?|his|her|their) (?:muzika|music|stil|style)\b/.test(normalize(source.quote)));
 }

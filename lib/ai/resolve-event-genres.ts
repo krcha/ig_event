@@ -180,7 +180,7 @@ export async function resolveEventGenresBatch(
       }) }));
       try {
         const found = await (options.research ?? researchPerformerGenresBatch)(inputs, {
-          ...providerOptions(options, deadlineAt), singleAttempt: true,
+          ...providerOptions(options, deadlineAt), thorough: true, singleAttempt: true,
         });
         searchCalls += found.searchCalls;
         for (const { lookup, keys } of rows) {
