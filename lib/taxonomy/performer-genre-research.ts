@@ -13,10 +13,12 @@ export function getPerformerGenreResearchFormat(
   taxonomy: EventDiscoveryTaxonomy,
 ): PerformerGenreFormat | undefined {
   if (taxonomy.genres.length) return;
-  if (taxonomy.primaryCategory === "party") {
+  const musicCategory = [taxonomy.primaryCategory, ...taxonomy.categories]
+    .find((category) => category === "party" || category === "live");
+  if (musicCategory === "party") {
     return taxonomy.formats.includes("dj-set") ? "dj-set" : "party";
   }
-  if (taxonomy.primaryCategory === "live") {
+  if (musicCategory === "live") {
     if (taxonomy.formats.includes("concert")) return "concert";
     return taxonomy.formats.includes("live-performance") ? "live-performance" : "live";
   }
@@ -25,7 +27,7 @@ export function getPerformerGenreResearchFormat(
 export function getPerformerGenreResearchActs(event: {
   title: string;
   artists: readonly string[];
-}, format: PerformerGenreFormat): PerformerGenreAct[] {
+}, format: PerformerGenreFormat, useListingTitle = false): PerformerGenreAct[] {
   const acts = new Map<string, PerformerGenreAct>();
   for (const artist of event.artists) {
     const credit = artist.trim();
@@ -46,9 +48,12 @@ export function getPerformerGenreResearchActs(event: {
   }
   const title = event.title.trim();
   const normalizedTitle = normalizeTaxonomyText(title);
-  const titleCanIdentify = title.length >= 3 && title.length <= 70 &&
-    !/\b(?:at|vece|zur[kc]|party|program|tribute|festival|docek|night|session|open decks|matinee|svirka|koncert|show)\b/u.test(normalizedTitle);
-  if (!titleCanIdentify || (format === "party" && !/^(?:dj\b|@)/iu.test(title))) return [];
+  if (title.length < 3 || !normalizedTitle) return [];
+  if (useListingTitle) {
+    if (title.length > 100) return [];
+  } else if (title.length > 70 ||
+    /\b(?:at|vece|zur[kc]|party|program|tribute|festival|docek|night|session|open decks|matinee|svirka|koncert|show)\b/u.test(normalizedTitle) ||
+    (format === "party" && !/^(?:dj\b|@)/iu.test(title))) return [];
   const handle = /^@([\w.]{2,30})$/u.exec(title)?.[1];
   return [{ billedName: title, titleOnly: true, ...(handle ? { billedHandle: handle } : {}) }];
 }

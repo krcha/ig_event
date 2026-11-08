@@ -6,6 +6,8 @@ import {
   revalidateEventDiscoveryClassification,
 } from "../lib/ai/classify-event-discovery.ts";
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
+import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
+import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -239,4 +241,104 @@ await assert.rejects(estimatePerformerGenresBatch(estimateInputs.slice(0, 2), {
   ...options, fetch: async () => mockResponse([{ row: 0, recognizedAct: 0, genres: ["techno"] }]),
 }), /invalid performer genre estimate row coverage/);
 
-console.log("Event discovery QA passed: transport, exact occurrence and Instagram caption evidence, 20 genre labels, credits, no-search performer estimates, abstentions and strict row coverage.");
+const currentTaxonomy = { primaryCategory: "culture", categories: ["culture", "party"], formats: ["dj-set"], genres: [] };
+const candidate = (key, extras = {}) => ({ key, expectedUpdatedAt: 42, title: "DJ set", eventType: "nightlife",
+  artists: [], venue: "Bridge Hall", date: "2026-11-08", ...extras });
+const chainedInputs = [
+  candidate("instagram", { title: "Echo", sourceCaption: "Večeras puštamo house.", artists: ["Ari"], currentTaxonomy }),
+  candidate("announcement", { description: "Večeras puštamo techno.", artists: ["Bea"] }),
+  candidate("estimate", { artists: ["Laurent Garnier"] }),
+  candidate("cited", { artists: ["Selka", "Xqwzt"] }),
+  candidate("title-listing", { title: "Echo Archive", description: "Koncert u klubu." }),
+  candidate("no-act", { title: "Saturday Night", description: "DJ set." }),
+  candidate("failed-search", { artists: ["Broken Act", "Other Act"] }),
+  candidate("non-music", { title: "Projekcija", artists: ["Scena Group"] }),
+];
+const partyClaim = claim("party", "title", "DJ set");
+const classificationRows = [
+  row(0, { g: [claim("house", "sourceCaption", "puštamo house.")] }),
+  row(1, { p: partyClaim, g: [claim("techno", "description", "puštamo techno.")] }),
+  row(2, { p: partyClaim }),
+  row(3, { p: partyClaim }),
+  row(4, { p: claim("live", "description", "Koncert") }),
+  row(5, { p: claim("party", "description", "DJ set") }),
+  row(6, { p: partyClaim }),
+  row(7, { p: claim("culture", "title", "Projekcija") }),
+];
+const eventUrl = "https://ra.co/events/1234567";
+const titleUrl = "https://bridgehall.rs/events/echo-archive";
+const wrongTitleUrl = "https://bridgehall.rs/events/echo-archive-earlier";
+const checkedBatches = [];
+const webIdentity = (url, quote) => ({ kind: "event-listing", url, quote, corroboration: null, profileHandle: null });
+const chained = await resolveEventGenresBatch(chainedInputs, {
+  ...options,
+  fetch: async (_url, request) => {
+    const body = JSON.parse(request.body);
+    const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
+    assert.deepEqual(rows[0].currentCategories, ["culture", "party"]);
+    return mockResponse(classificationRows);
+  },
+  estimate: async (items) => {
+    assert.deepEqual(items.map(({ key }) => key), ["estimate", "cited", "failed-search"],
+      "Exact source evidence, title-only events and non-music rows skip the no-search estimator.");
+    return { model: "fixture-estimate", results: new Map(items.map(({ key }) => [key, key === "estimate" ? ["techno"] : []])), usage: estimate.usage };
+  },
+  research: async (items, webOptions) => {
+    assert.equal(webOptions.singleAttempt, true);
+    assert.ok(items.length <= 4);
+    assert.ok(items.every(({ venue, date, city }) => venue === "Bridge Hall" && date === "2026-11-08" && city === "Belgrade"));
+    checkedBatches.push(items.map(({ billedName, titleOnly }) => [billedName, Boolean(titleOnly)]));
+    return researchPerformerGenresBatch(items, { ...webOptions, fetch: async (_url, request) => {
+      assert.ok(request.signal instanceof AbortSignal);
+      if (items.some(({ billedName }) => billedName === "Broken Act")) return new Response("Service temporarily unavailable", { status: 503 });
+      const rows = items.map(({ billedName }, row) => {
+        if (billedName === "Selka") return { row, status: "resolved",
+          identity: webIdentity(eventUrl, "Selka appears at Bridge Hall on November 8, 2026."),
+          genres: [{ genre: "house", url: eventUrl, quote: "Selka plays a deep house DJ set." }] };
+        if (billedName === "Echo Archive") return { row, status: "resolved",
+          identity: webIdentity(titleUrl, "Echo Archive at Bridge Hall on November 8, 2026."),
+          genres: [{ genre: "jazz-blues", url: titleUrl, quote: "The evening features jazz and blues." },
+            { genre: "rock", url: wrongTitleUrl, quote: "Echo Archive plays rock at Bridge Hall on November 8, 2026." }] };
+        return { row, status: "unverified", identity: null, genres: [] };
+      });
+      return Response.json({ id: "fixture-cited", model: "fixture-web", status: "completed", output: [
+        { type: "web_search_call", status: "completed", action: { sources: [eventUrl, titleUrl, wrongTitleUrl].map((url) => ({ url })) } },
+        { content: [{ type: "output_text", text: JSON.stringify({ rows }) }] },
+      ] });
+    } });
+  },
+});
+assert.deepEqual(checkedBatches, [
+  [["Selka", false], ["Xqwzt", false], ["Echo Archive", true], ["Saturday Night", true]], [["Broken Act", false], ["Other Act", false]],
+], "Only still-unresolved music rows are sent to bounded, cited web research.");
+assert.deepEqual(chained.results.map(({ method, deferred }) => [method, Boolean(deferred)]), [
+  ["instagram", false], ["announcement", false], ["estimate", false], ["web", false], ["web", false],
+  ["unknown", false], ["unknown", true], ["unknown", false],
+]);
+assert.deepEqual(chained.results[0].taxonomy, { ...currentTaxonomy, genres: ["house"] },
+  "A backfill adds the caption genre without replacing the previously published categories or formats.");
+assert.deepEqual(JSON.parse(chained.results[0].auditJson).evidence,
+  [{ kind: "genre", label: "house", source: "sourceCaption", quote: "puštamo house." }]);
+assert.deepEqual(chained.results[2].estimatedGenres, ["techno"]);
+assert.deepEqual(chained.results[2].taxonomy.genres, [], "An estimate is not an announced genre.");
+assert.deepEqual(chained.results[3].webResearch.matches, [{ performer: "Selka", genre: "house", url: eventUrl, identityUrl: eventUrl }]);
+assert.deepEqual(chained.results[4].webResearch.matches, [
+  { performer: "Echo Archive", genre: "jazz-blues", url: titleUrl, identityUrl: titleUrl },
+], "The exact event listing, rather than a different edition, must contain the style proof for a title-only search.");
+assert.equal(chained.searchCalls, 1);
+assert.deepEqual(chained.estimateUsage, estimate.usage);
+
+const fallbackInput = { key: 0, billedName: "Echo Archive", eventTitle: "Echo Archive", venue: "Bridge Hall",
+  date: "2026-11-08", trustedFormat: "live", titleOnly: true };
+for (const output of [
+  [{ content: [{ type: "refusal", refusal: "No information can be verified." }] }],
+  [{ content: [{ type: "output_text", text: JSON.stringify({ rows: [{ row: 0, status: "unverified", identity: null, genres: [] }] }) }] }],
+]) {
+  const abstained = await researchPerformerGenresBatch([fallbackInput], {
+    ...options, fetch: async () => Response.json({ status: "completed", output }),
+  });
+  assert.equal(abstained.results.get(0).status, "unverified");
+  assert.equal(abstained.searchCalls, 0);
+}
+
+console.log("Event discovery QA passed: exact occurrence and Instagram caption evidence, existing taxonomy, 20 genre labels, no-search estimates, cited fallback, provider isolation and strict row coverage.");

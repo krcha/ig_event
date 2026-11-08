@@ -120,7 +120,7 @@
   "Manje žanrova": {"sr":"Manje žanrova","en":"Fewer genres","ru":"Меньше жанров"},
   "Format događaja": {"sr":"Format događaja","en":"Event format","ru":"Формат события"},
   "Ukloni filter vremena": {"sr":"Ukloni filter vremena","en":"Clear time filter","ru":"Сбросить фильтр времени"},
-  "Žanr prema izvođaču": {"sr":"Žanr prema izvođaču","en":"Genre based on performer","ru":"Жанр по исполнителю"},
+  "Žanr prema izvoru": {"sr":"Žanr prema izvoru","en":"Sourced genre","ru":"Жанр по источнику"},
   "Procena žanra prema izvođaču": {"sr":"Procena žanra prema izvođaču","en":"Genre estimate based on performer","ru":"Предполагаемый жанр по исполнителю"},
-  "Izvor za žanr izvođača": {"sr":"Izvor za žanr izvođača","en":"Performer genre source","ru":"Источник жанра исполнителя"}
+  "Izvor za žanr": {"sr":"Izvor za žanr","en":"Genre source","ru":"Источник жанра"}
 }

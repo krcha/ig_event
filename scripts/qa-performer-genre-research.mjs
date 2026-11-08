@@ -3,10 +3,12 @@ import {
   listDailyInputs,
   listGenreResearchInputs,
   listRecentInputs,
+  listUnknownGenreInputs,
   loadPublicEventDiscoveryLabels,
   recordBatch,
   recordDailyBatch,
   recordGenreResearch,
+  recordUnknownGenreBatch,
 } from "../convex/eventDiscovery.ts";
 import {
   PERFORMER_GENRE_RESEARCH_BATCH_LIMIT,
@@ -28,10 +30,12 @@ const profileUrl = "https://www.instagram.com/selkadj/";
 const wrongArtistUrl = "https://ra.co/dj/selka";
 
 const party = { primaryCategory: "party", categories: ["party"], genres: [], formats: ["dj-set"] };
+const hybrid = { ...party, primaryCategory: "food", categories: ["food", "party"], formats: ["dinner", "dj-set"] };
 const concert = { primaryCategory: "live", categories: ["live"], genres: [], formats: ["concert"] };
 const nonMusic = { primaryCategory: "culture", categories: ["culture"], genres: [], formats: ["screening"] };
 const announced = { ...party, genres: ["techno"] };
 assert.equal(getPerformerGenreResearchFormat(party), "dj-set");
+assert.equal(getPerformerGenreResearchFormat(hybrid), "dj-set", "A secondary music activity is visible in the Unknown filter.");
 assert.equal(getPerformerGenreResearchFormat(concert), "concert");
 assert.equal(getPerformerGenreResearchFormat(announced), undefined);
 assert.equal(getPerformerGenreResearchFormat(nonMusic), undefined);
@@ -44,6 +48,8 @@ assert.deepEqual(getPerformerGenreResearchActs({ title: "Night program", artists
 assert.deepEqual(getPerformerGenreResearchActs({ title: "Act Two", artists: ["Act One", "Act Two", "Act Three"] }, "dj-set"), [{ billedName: "Act Two" }]);
 assert.deepEqual(getPerformerGenreResearchActs({ title: "Saturday Night", artists: ["Special guest"] }, "party"), [],
   "A generic party title and unnamed guest cannot authorize profile lookup.");
+assert.deepEqual(getPerformerGenreResearchActs({ title: "Saturday Night", artists: ["Special guest"] }, "party", true),
+  [{ billedName: "Saturday Night", titleOnly: true }], "The new fallback may research the exact listing, separately from artist profiles.");
 
 const unsafeUrls = [
   "http://ra.co/dj/selka", "https://user:password@ra.co/dj/selka", "https://ra.co:8443/dj/selka",
@@ -382,6 +388,7 @@ function dailyQueueFixture() {
   ]);
   const events = new Map();
   const labels = new Map();
+  const webRows = new Map();
   const posts = [];
   const receipts = [];
   const pages = [];
@@ -435,7 +442,7 @@ function dailyQueueFixture() {
     scrapedPosts: () => posts,
     ingestionRunHandleReceipts: () => receipts,
     eventDiscoveryLabels: () => [...labels.values()],
-    eventPerformerGenreResearch: () => [],
+    eventPerformerGenreResearch: () => [...webRows.values()],
   };
   const lookupKeys = {
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
@@ -462,7 +469,8 @@ function dailyQueueFixture() {
             return chain;
           }]));
           range(chain);
-          assert.deepEqual(fields, lookupKeys[index], `Unexpected ${table} index range.`);
+          const expectedFields = index === "by_creation_time" && fields.length === 1 ? ["_creationTime"] : lookupKeys[index];
+          assert.deepEqual(fields, expectedFields, `Unexpected ${table} index range.`);
           const rows = tables[table]().filter((row) => checks.every((check) => check(row)));
           const operations = {
             take: async (limit) => rows.slice(0, limit),
@@ -483,14 +491,20 @@ function dailyQueueFixture() {
         } };
       },
       insert: async (table, data) => {
-        assert.equal(table, "eventDiscoveryLabels");
-        assert.ok(!labels.has(data.eventId));
-        labels.set(data.eventId, { ...data, _id: `label-${data.eventId}` });
+        assert.ok(["eventDiscoveryLabels", "eventPerformerGenreResearch"].includes(table));
+        const byEvent = table === "eventDiscoveryLabels" ? labels : webRows;
+        assert.ok(!byEvent.has(data.eventId));
+        byEvent.set(data.eventId, { ...data, _id: `${table}-${data.eventId}` });
+      },
+      replace: async (id, data) => {
+        const byEvent = labels.get(data.eventId)?._id === id ? labels : webRows;
+        assert.equal(byEvent.get(data.eventId)?._id, id);
+        byEvent.set(data.eventId, { ...data, _id: id });
       },
     },
   };
   labels.get("already-classified").eventId = "already-classified";
-  return { dailyCtx, events, labels, run, pages, localRow, localDetail, neighbor };
+  return { dailyCtx, events, labels, webRows, run, pages, localRow, localDetail, neighbor };
 }
 
 try {
@@ -609,6 +623,7 @@ try {
     "Only unclassified, newly inserted, publishable events from posts recorded in the completed daily run are eligible.");
   assert.equal(dailyQueue.get("single").sourceCaption, daily.events.get("single").sourceCaption);
   assert.equal(dailyQueue.get("single").eventType, daily.events.get("single").eventType);
+  assert.equal(dailyQueue.get("single").date, daily.events.get("single").date);
   const splitInput = dailyQueue.get("split");
   assert.equal(splitInput.occurrenceText, daily.localRow);
   assert.ok(splitInput.sourceCaption.includes(daily.localDetail), "A shared carousel may contribute exact caption text scoped to this event.");
@@ -628,13 +643,15 @@ try {
 
   const announcedFromCaption = { ...party, genres: ["house"] };
   const captionClaim = (label, quote) => ({ kind: "genre", label, source: "sourceCaption", quote });
+  const webResult = (matches = [researchMatches[0]]) => ({ model: "web-fixture", matches, auditJson: '{"evidence":"private web proof"}' });
   assert.deepEqual(await recordDaily(
     dailyResult("single", {
       taxonomy: announcedFromCaption,
       auditJson: JSON.stringify({ evidence: [captionClaim("house", "pušta house i disco ploče")] }),
       estimatedGenres: ["techno"],
+      webResearch: webResult(),
     }),
-    dailyResult("estimate", { estimatedGenres: ["techno", "house"] }),
+    dailyResult("estimate", { estimatedGenres: ["techno", "house"], webResearch: webResult() }),
     dailyResult("nonmusic", { taxonomy: nonMusic, estimatedGenres: ["rock"] }),
     dailyResult("unbilled", { estimatedGenres: ["pop"] }),
   ), { written: 4, unchanged: 0, stale: 0 });
@@ -645,6 +662,13 @@ try {
   assert.deepEqual(await projection("estimate", false), { eventTaxonomy: party }, "Consumers that opt out do not see estimated genres.");
   assert.deepEqual(await projection("nonmusic"), { eventTaxonomy: nonMusic });
   assert.deepEqual(await projection("unbilled"), { eventTaxonomy: party }, "A generic title cannot stand in for a billed performer.");
+  assert.equal(daily.webRows.size, 0, "Web research cannot supersede an announced genre or model estimate.");
+  assert.deepEqual(await recordDaily(dailyResult("legacy-sibling", { webResearch: webResult() }),
+    dailyResult("ambiguous", { webResearch: webResult([researchMatches[2]]) })), { written: 2, unchanged: 0, stale: 0 });
+  assert.deepEqual(await projection("legacy-sibling"), {
+    eventTaxonomy: { ...party, genres: ["house"] }, performerGenreResearch: { sources: [{ url: eventUrl, performer: "Selka" }] },
+  }, "Web proof is stored with the new classification and keeps its provenance.");
+  assert.deepEqual(await projection("ambiguous"), { eventTaxonomy: party }, "A web result for a different artist is ignored.");
   assert.deepEqual(await recordDaily(dailyResult("split", {
     taxonomy: { ...party, genres: ["techno"] },
     auditJson: JSON.stringify({ evidence: [captionClaim("techno", daily.neighbor)] }),
@@ -652,9 +676,78 @@ try {
   assert.equal(await projection("split"), undefined);
   assert.deepEqual(await recordDaily(dailyResult("single")), { written: 0, unchanged: 1, stale: 0 }, "Replaying the daily batch cannot remove existing genres.");
   assert.ok(!(await readDaily()).has("single"));
+
+  const backfill = dailyQueueFixture();
+  const setBackfillLabel = (eventId, taxonomy, auditJson = "{}") => backfill.labels.set(eventId, {
+    _id: `label-${eventId}`, eventId, eventUpdatedAt: 100, version: EVENT_DISCOVERY_VERSION, model: "original-fixture", taxonomy, auditJson,
+  });
+  setBackfillLabel("single", announced);
+  setBackfillLabel("estimate", party, '{"estimatedGenres":["techno"],"estimateModel":"old-model"}');
+  setBackfillLabel("ambiguous", party);
+  setBackfillLabel("split", hybrid, '{"originalAudit":"preserve"}');
+  setBackfillLabel("legacy-sibling", party);
+  for (const [eventId, eventUpdatedAt] of [["ambiguous", 100], ["legacy-sibling", 99]]) {
+    backfill.webRows.set(eventId, { _id: `web-${eventId}`, eventId, eventUpdatedAt, version: PERFORMER_GENRE_RESEARCH_VERSION,
+      model: "web-fixture", researchedAt: 10, matches: [researchMatches[0]], auditJson: "{}" });
+  }
+  backfill.events.get("historical").description = "DJ Selka pušta rok ploče.";
+  const backfillArgs = { serviceSecret: "", cutoff: backfill.run.finishedAt };
+  const readUnknown = () => listUnknownGenreInputs._handler(backfill.dailyCtx, { ...backfillArgs, cursor: null });
+  const recordUnknown = (...results) => recordUnknownGenreBatch._handler(backfill.dailyCtx, { ...backfillArgs, model: "backfill-fixture", results });
+  const backfillProjection = (eventId) => loadPublicEventDiscoveryLabels(backfill.dailyCtx, backfill.events.get(eventId), true);
+
+  const initialUnknown = new Map((await readUnknown()).events.map((candidate) => [candidate.key, candidate]));
+  for (const eventId of ["single", "estimate", "ambiguous", "hidden", "legacy-sibling-pending", "nonmusic", "future"]) {
+    assert.equal(initialUnknown.has(eventId), false, `${eventId} is outside the effective Unknown scope.`);
+  }
+  for (const eventId of ["split", "legacy-sibling", "historical", "already-classified", "unbilled"]) {
+    assert.ok(initialUnknown.has(eventId), `${eventId} should be included in the effective Unknown scope.`);
+  }
+  assert.deepEqual(initialUnknown.get("split").currentTaxonomy, hybrid);
+  assert.equal(initialUnknown.get("historical").date, backfill.events.get("historical").date);
+
+  const initialEstimate = backfill.labels.get("estimate");
+  const initialWeb = backfill.webRows.get("ambiguous");
+  const previousUnknownLabel = backfill.labels.get("legacy-sibling");
+  assert.deepEqual(await recordUnknown(
+    dailyResult("estimate", { estimatedGenres: ["house"] }),
+    dailyResult("ambiguous", { estimatedGenres: ["techno"] }),
+    dailyResult("legacy-sibling", { webResearch: webResult([researchMatches[2]]) }),
+  ), { written: 0, unchanged: 3, stale: 0 });
+  assert.equal(backfill.labels.get("estimate"), initialEstimate);
+  assert.equal(backfill.webRows.get("ambiguous"), initialWeb);
+  assert.equal(backfill.labels.get("legacy-sibling"), previousUnknownLabel, "Unresolved results do not rewrite taxonomy.");
+  assert.deepEqual(await recordUnknown(
+    dailyResult("split", { taxonomy: { ...concert, genres: ["techno"] },
+      auditJson: JSON.stringify({ evidence: [captionClaim("techno", backfill.neighbor)] }) }),
+    dailyResult("historical", { expectedUpdatedAt: 99, estimatedGenres: ["rock"] }),
+    dailyResult("future", { estimatedGenres: ["house"] }),
+  ), { written: 0, unchanged: 0, stale: 3 });
+
+  assert.deepEqual(await recordUnknown(
+    dailyResult("split", { taxonomy: { ...concert, genres: ["house", "disco-funk"] },
+      auditJson: JSON.stringify({ evidence: [captionClaim("house", backfill.localRow),
+        { kind: "genre", label: "disco-funk", source: "description", quote: "Unaccepted after a caption match" }] }),
+      estimatedGenres: ["techno"], webResearch: webResult() }),
+    dailyResult("historical", { taxonomy: { ...concert, genres: ["rock"] },
+      auditJson: JSON.stringify({ evidence: [{ kind: "genre", label: "rock", source: "description", quote: "pušta rok ploče" }] }) }),
+    dailyResult("already-classified", { estimatedGenres: ["house"] }),
+    dailyResult("legacy-sibling", { webResearch: webResult() }),
+    dailyResult("unbilled", { estimatedGenres: ["pop"], webResearch: webResult([{ ...researchMatches[0], performer: "Saturday Night" }]) }),
+  ), { written: 5, unchanged: 0, stale: 0 });
+  assert.deepEqual(await backfillProjection("split"), { eventTaxonomy: { ...hybrid, genres: ["house"] } },
+    "Only exact original caption genres win and the existing hybrid taxonomy stays intact.");
+  assert.equal(backfill.labels.get("split").model, "original-fixture");
+  assert.equal(JSON.parse(backfill.labels.get("split").auditJson).originalAudit, "preserve");
+  assert.deepEqual((await backfillProjection("historical")).eventTaxonomy.genres, ["rock"]);
+  assert.deepEqual((await backfillProjection("already-classified")).performerGenreResearch, { sources: [], estimated: true });
+  assert.equal(backfill.labels.get("legacy-sibling"), previousUnknownLabel, "A web result leaves the original classification intact.");
+  assert.deepEqual((await backfillProjection("unbilled")).performerGenreResearch, { sources: [{ url: eventUrl, performer: "Saturday Night" }] });
+  assert.deepEqual(await recordUnknown(dailyResult("split", { estimatedGenres: ["techno"] })), { written: 0, unchanged: 1, stale: 0 });
+  assert.ok((await readUnknown()).events.every(({ key }) => !["split", "historical", "already-classified", "legacy-sibling", "unbilled"].includes(key)));
 } finally {
   if (adminBeforeFixture === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
   else process.env.ADMIN_CLERK_USER_IDS = adminBeforeFixture;
 }
 
-console.log("Performer genre research QA passed: legacy cited web transport, completed-run scope, exact Instagram captions, and estimated genre projection.");
+console.log("Performer genre research QA passed: cited web transport, daily scope, exact Instagram captions, and source-aware Unknown backfill.");

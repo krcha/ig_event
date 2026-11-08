@@ -52,9 +52,16 @@ listing multiple occurrences, only exact excerpts associated with the current
 occurrence are eligible. A venue's usual music, a playlist, or the lineup for
 another date does not establish the genre of the event. If a new music event
 still has no advertised genre, the model can estimate from a known billed
-performer. The calendar labels that estimate separately; the model leaves the
-genre blank for unfamiliar or ambiguous performers. These estimates are not
-confirmed event facts. Existing labels are retained.
+performer. If it cannot identify a genre, a web search looks for a verified
+performer source or a dated listing for that exact event. The calendar labels
+estimates and links to verified web sources. A genre stays blank when the
+available evidence is inconclusive.
+
+For an explicit one-time pass over existing published music events with no
+genre, run `scripts/backfill-event-genres.mjs` with the usual TypeScript loader
+and a private `--journal` path. The same journal resumes a partial run, and
+`--scan-only` lists candidate counts. The backfill retains existing categories
+and skips events with an established genre.
 
 ## Legacy Data Compatibility
 
