@@ -49,6 +49,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/next.config.mjs ./next.config.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/lib/security ./lib/security
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/check-web-readiness.mjs ./scripts/check-web-readiness.mjs
 
+# The staged country database can have root-only permissions.
+RUN chmod a+x /app/runtime \
+  && if [ -d /app/runtime/geodata ]; then \
+       chmod a+x /app/runtime/geodata; \
+     fi \
+  && if [ -f /app/runtime/geodata/country.mmdb ]; then \
+       chmod 0644 /app/runtime/geodata/country.mmdb; \
+     fi
+
 USER nextjs
 EXPOSE 3000
 

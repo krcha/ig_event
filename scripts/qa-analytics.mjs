@@ -229,16 +229,27 @@ try {
   assert.equal((await adminApi.GET(new NextRequest("https://eventzeka.com/api/admin/analytics?start=bad&end=bad&group=day"))).status, 400);
 
   const collected = database();
+  const serbiaIp = "203.0.113.5";
+  const chinaIp = "198.51.100.7";
+  const hongKongIp = "192.0.2.10";
+  const geoCountries = new Map([[serbiaIp, "RS"], [chinaIp, "CN"], [hongKongIp, "HK"]]);
   let geoReads = 0;
   const geo = compile("lib/analytics/geolocation.ts", {
     "server-only": {},
     "node:fs/promises": { readFile: async () => { geoReads++; return Buffer.from("geo-fixture"); } },
-    "mmdb-lib": { Reader: class { get() { return { country_code: "RS" }; } } },
+    "mmdb-lib": {
+      Reader: class {
+        get(ip) {
+          const country = geoCountries.get(ip);
+          return country ? { country_code: country } : null;
+        }
+      },
+    },
   });
-  const forwarded = new Headers({ "x-forwarded-for": "8.8.8.8, 203.0.113.5" });
+  const forwarded = new Headers({ "x-forwarded-for": chinaIp + ", " + serbiaIp });
   assert.equal(geo.getTrustedVisitorIp(forwarded, false), null);
-  assert.equal(geo.getTrustedVisitorIp(forwarded, true), "203.0.113.5");
-  assert.equal(geo.getTrustedVisitorIp(new Headers({ "x-forwarded-for": "203.0.113.5, invalid" }), true), null);
+  assert.equal(geo.getTrustedVisitorIp(forwarded, true), serbiaIp);
+  assert.equal(geo.getTrustedVisitorIp(new Headers({ "x-forwarded-for": serbiaIp + ", invalid" }), true), null);
   assert.equal(await geo.getVisitorCountry(forwarded, { ANALYTICS_COUNTRY_DB_PATH: "/country.mmdb" }), "Unknown");
   assert.equal(geoReads, 0, "untrusted proxy headers must not reach a lookup");
   assert.equal(await geo.getVisitorCountry(forwarded, { ANALYTICS_COUNTRY_DB_PATH: "/country.mmdb", ANALYTICS_TRUST_PROXY: "true" }), "RS");
@@ -281,6 +292,28 @@ try {
   });
   assert.equal((await collector.POST(proxiedRequest)).status, 204, "standalone container URLs must accept the same public Host");
 
+  const countryAccess = compile("app/api/internal/country-access/route.ts", {
+    "@/lib/analytics/geolocation": geo,
+  });
+  process.env.ANALYTICS_COUNTRY_DB_PATH = "/country.mmdb";
+  process.env.ANALYTICS_COUNTRY_HEADER = "CF-IPCountry";
+  const accessCases = [
+    { peer: chinaIp, claimedIp: serbiaIp, claimedCountry: "RS", trusted: "true", status: 403, label: "deny a trusted CN peer despite claims of RS" },
+    { peer: serbiaIp, claimedIp: chinaIp, claimedCountry: "CN", trusted: "true", status: 204, label: "ignore forged CN on a trusted RS peer" },
+    { peer: hongKongIp, claimedIp: chinaIp, claimedCountry: "CN", trusted: "true", status: 204, label: "allow HK separately from CN" },
+    { peer: "192.0.2.33", claimedIp: chinaIp, claimedCountry: "CN", trusted: "true", status: 204, label: "allow an unmapped peer" },
+    { peer: "invalid", claimedIp: chinaIp, claimedCountry: "CN", trusted: "true", status: 204, label: "do not fall back to a client-supplied IP" },
+    { peer: chinaIp, claimedIp: serbiaIp, claimedCountry: "CN", trusted: "false", status: 204, label: "ignore forwarded IPs when proxy trust is off" },
+  ];
+  for (const { peer, claimedIp, claimedCountry, trusted, status, label } of accessCases) {
+    process.env.ANALYTICS_TRUST_PROXY = trusted;
+    const accessResponse = await countryAccess.GET(new Request("http://web:3000/api/internal/country-access", {
+      headers: { "X-Forwarded-For": claimedIp + ", " + peer, "CF-IPCountry": claimedCountry },
+    }));
+    assert.equal(accessResponse.status, status, label);
+    assert.match(accessResponse.headers.get("cache-control") ?? "", /(?:^|,\s*)no-store(?:,|$)/, label);
+  }
+
   let nextCleanup = false;
   store.rows.push({ ...base, _id: "expired", at: now - 401 * 86_400_000 });
   await cleanup._handler({ db: store.db, scheduler: { runAfter: async () => { nextCleanup = true; } } }, {});
@@ -296,4 +329,4 @@ try {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
 }
-console.log("Visitor analytics QA passed: owner isolation, DST, distinct counts, collection-to-report flow, privacy, deduplication, rate limits, trusted countries, and retention.");
+console.log("Visitor analytics QA passed: owner isolation, DST, distinct counts, collection-to-report flow, privacy, deduplication, rate limits, trusted countries, country access, and retention.");

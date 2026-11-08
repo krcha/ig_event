@@ -25,8 +25,11 @@ export function getTrustedVisitorIp(headers: Headers, trusted: boolean): string 
 export async function getVisitorCountry(headers: Headers, env: Record<string, string | undefined> = process.env): Promise<string> {
   const header = env.VERCEL === "1" ? "x-vercel-ip-country" : env.ANALYTICS_COUNTRY_HEADER?.trim();
   const edgeCountry = header ? countryCode(headers.get(header)) : null;
-  if (edgeCountry) return edgeCountry;
+  return edgeCountry ?? getVisitorIpCountry(headers, env);
+}
 
+// Access decisions always use the trusted proxy IP and the local database.
+export async function getVisitorIpCountry(headers: Headers, env: Record<string, string | undefined> = process.env): Promise<string> {
   const path = env.ANALYTICS_COUNTRY_DB_PATH?.trim();
   const ip = getTrustedVisitorIp(headers, env.ANALYTICS_TRUST_PROXY === "true");
   if (!path || !ip) return "Unknown";

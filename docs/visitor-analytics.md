@@ -41,6 +41,13 @@ an in-memory lookup, and stores only the country code. It supports both
 requires reviewing the IP trust boundary before enabling this setting.
 Missing/invalid data returns `Unknown` without losing a page view.
 
+On the dedicated VPS, the website, social and event-export routers use Traefik
+ForwardAuth at `http://web:3000/api/internal/country-access`. Set
+`trustForwardHeader: false` so Traefik supplies the connection IP. The endpoint
+uses the local MMDB and returns 403 for `CN`. The public Convex router has its own
+configuration. Keep both parent directories traversable and the database
+readable by `nextjs`, and verify a CN denial and a non-CN allow before promotion.
+
 The production snapshot reused from the user's frame.baby deployment is
 [sapics/ip-location-db user-country](https://github.com/sapics/ip-location-db),
 under PDDL. Keep the database and its provenance outside Git; the existing
