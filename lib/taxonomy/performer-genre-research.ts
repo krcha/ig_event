@@ -9,6 +9,13 @@ export type PerformerGenreMatch = PerformerGenreSource & { genre: MusicGenre; id
 export type PerformerGenreFormat = "dj-set" | "concert" | "live-performance" | "party" | "live";
 export type PerformerGenreAct = { billedName: string; billedHandle?: string; titleOnly?: boolean };
 
+export function getEventListingResearchAct(event: { title: string }): PerformerGenreAct | undefined {
+  const title = event.title.trim();
+  if (title.length < 3 || title.length > 100 || !normalizeTaxonomyText(title)) return;
+  const handle = /^@([\w.]{2,30})$/u.exec(title)?.[1];
+  return { billedName: title, titleOnly: true, ...(handle ? { billedHandle: handle } : {}) };
+}
+
 export function getPerformerGenreResearchFormat(
   taxonomy: EventDiscoveryTaxonomy,
 ): PerformerGenreFormat | undefined {
@@ -50,8 +57,10 @@ export function getPerformerGenreResearchActs(event: {
   const normalizedTitle = normalizeTaxonomyText(title);
   if (title.length < 3 || !normalizedTitle) return [];
   if (useListingTitle) {
-    if (title.length > 100) return [];
-  } else if (title.length > 70 ||
+    const listing = getEventListingResearchAct(event);
+    return listing ? [listing] : [];
+  }
+  if (title.length > 70 ||
     /\b(?:at|vece|zur[kc]|party|program|tribute|festival|docek|night|session|open decks|matinee|svirka|koncert|show)\b/u.test(normalizedTitle) ||
     (format === "party" && !/^(?:dj\b|@)/iu.test(title))) return [];
   const handle = /^@([\w.]{2,30})$/u.exec(title)?.[1];

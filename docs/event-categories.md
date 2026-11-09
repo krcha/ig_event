@@ -1,19 +1,22 @@
 # Public Event Categories
 
-Public events have one primary category based on the event's format. Additional
-tags can describe genres, activities, and explicitly stated free admission.
+Calendar discovery assigns one primary category based on what attendees will
+do. A second category is possible when the event advertises a separate activity.
+Formats and music genres refine these groups.
 
 | Stable key | Public label | Covers |
 | --- | --- | --- |
-| `club` | Zurke | Parties, DJ sets, raves, and dance nights |
-| `live` | Live music | Concerts, live bands, solo performers, and tribute concerts |
-| `culture` | Kultura | Theatre, stand-up, exhibitions, film, performances, and discussions |
-| `event` | Ostalo | Social evenings, cocktail gatherings, after-work events, workshops, quizzes, tastings, participatory activities, sports screenings, openings, generic festivals, and other special events |
+| `party` | Na žurku | DJ sets, dance parties, raves, and club nights |
+| `live` | Na svirku | Concerts, live music, recitals, and live tribute acts |
+| `culture` | Film, scena i kultura | Film screenings, theatre, stand-up, and staged performances |
+| `exhibition` | Izložbe i sajmovi | Exhibitions, fairs, and curated markets |
+| `participate` | Kviz, igra i radionice | Quizzes, games, workshops, and other activities the audience joins |
+| `food` | Hrana i piće | Tastings, special menus, and food or drink programs |
+| `talk` | Razgovori i predavanja | Panels, lectures, discussions, and conferences |
+| `other` | Ostali događaji | Sports screenings and events without evidence for a more specific group |
 
-The `club` and `culture` keys retain their existing URLs with the shorter public
-labels. The former `social` and `experience` filter keys are aliases for `event`.
-Historical links focused on Barovi, Radionice or Ostalo now select the combined
-Ostalo group. Physical venue categories such as `bar` remain unchanged.
+The separate legacy event filters keep the `club`, `live`, `culture`, and
+`event` keys. Their older `social` and `experience` links resolve to `event`.
 
 When all categories are enabled, choosing one chip shows only that category.
 Other chips can then be added or removed from that selection. All, or clicking
@@ -22,8 +25,8 @@ in the URL while the category selection changes.
 
 ## Format And Tags
 
-The shared implementation is `lib/taxonomy/event-categories.ts`. Public pages,
-category pills, and calendar filtering use the same primary classifier.
+The discovery catalog is in `lib/taxonomy/event-discovery.ts`. Calendar filters
+and category labels use its stable keys.
 
 Explicit format evidence in the event title takes priority over an old coarse
 event type. A rock concert in a club is `live`; a rock DJ party is `club`; a
@@ -45,17 +48,23 @@ a DJ set is being performed.
 The daily ingestion launcher runs discovery once after the current day's
 ingestion and duplicate cleanup. It only considers newly created, published
 events linked to that ingestion run, and skips events already classified.
-The classifier checks the original Instagram caption
-for music advertised for that event, including what a DJ plans to play. It uses
-the fixed 20-genre list and saves the exact supporting excerpt. For a post
-listing multiple occurrences, only exact excerpts associated with the current
-occurrence are eligible. A venue's usual music, a playlist, or the lineup for
-another date does not establish the genre of the event. If a new music event
-still has no advertised genre, the model can estimate from a known billed
-performer. If it cannot identify a genre, a web search looks for a verified
-performer source or a dated listing for that exact event. The calendar labels
-estimates and links to verified web sources. A genre stays blank when the
-available evidence is inconclusive.
+Explicit evidence in the title, occurrence text, Instagram caption, and
+description can classify a row directly. Ambiguous rows go to the model with
+only distinct text and the event's identity context. Date, venue and confirmed
+start time identify an occurrence. They are insufficient to assign a category
+or genre on their own.
+
+The agent uses the fixed 20-genre list and saves the exact supporting excerpt.
+For a post listing multiple occurrences, only excerpts scoped to the current
+occurrence are eligible. If no genre is advertised, the model can estimate a
+known billed performer's style. Web research starts with the specific listing
+and billed acts, and makes a further query when the first result lacks proof.
+An event listing must match the title, venue and full date and carry the style
+claim on the same page. A cited performer profile can support typical style.
+If the category is still unknown, the agent can also look up the exact
+occurrence once and accept an activity explicitly described on that listing.
+The calendar distinguishes confirmed music sources from estimates. A genre
+stays blank when the available evidence is inconclusive.
 
 For an explicit one-time pass over existing published music events with no
 genre, run `scripts/backfill-event-genres.mjs` with the usual TypeScript loader
@@ -65,7 +74,7 @@ and skips events with an established genre.
 
 ## Legacy Data Compatibility
 
-The four categories are a public presentation taxonomy. Existing Convex fields,
+The four legacy categories are a public presentation taxonomy. Existing Convex fields,
 canonical extraction types, ingestion, and moderation keep their current
 contracts. Existing records remain readable without a migration or re-scrape.
 

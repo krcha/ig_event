@@ -3,18 +3,25 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
+import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
+import { normalizeEventTime } from "../lib/events/event-time";
 import { formatUtcDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
-import { EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
+import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
+import { classifyExplicitEventDiscovery } from "../lib/taxonomy/explicit-event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
   PERFORMER_GENRE_RESEARCH_VERSION,
   applyPerformerGenreResearch,
   canPublishPerformerGenreSource,
+  getEventListingResearchAct,
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
+import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
+import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 
 const CAPTION_MAX_LENGTH = 2200;
 const genreKeys: ReadonlySet<string> = new Set(MUSIC_GENRES.map(({ key }) => key));
@@ -30,7 +37,7 @@ const eventInputFields = {
 };
 const eventInput = v.object(eventInputFields);
 const discoveryInputFields = {
-  ...eventInputFields, date: v.string(), eventType: v.string(), sourceCaption: v.optional(v.string()),
+  ...eventInputFields, date: v.string(), time: v.optional(v.string()), eventType: v.string(), sourceCaption: v.optional(v.string()),
 };
 const dailyInput = v.object(discoveryInputFields);
 const unknownGenreInput = v.object({ ...discoveryInputFields, currentTaxonomy: eventDiscoveryTaxonomy });
@@ -42,6 +49,18 @@ const genreDiscoveryResult = v.object({
 const genreDiscoveryCounts = v.object({ written: v.number(), unchanged: v.number(), stale: v.number() });
 type GenreDiscoveryResult = Infer<typeof genreDiscoveryResult>;
 type WebGenreResult = Infer<typeof webGenreResult>;
+
+const categoryValue = v.union(...DISCOVERY_CATEGORIES.map(({ key }) => v.literal(key)));
+const formatValue = v.union(...DISCOVERY_FORMATS.map(({ key }) => v.literal(key)));
+const categoryState = v.object({ primaryCategory: categoryValue, categories: v.array(categoryValue), formats: v.array(formatValue) });
+type CategoryState = Infer<typeof categoryState>;
+const categoryRefreshFields = { eventId: v.id("events"), expectedUpdatedAt: v.number(), before: categoryState, after: categoryState };
+const categoryRefreshProposal = v.object({
+  ...categoryRefreshFields, title: v.string(), date: v.string(), evidence: v.array(v.object({
+    kind: v.union(v.literal("category"), v.literal("format"), v.literal("genre")), label: v.union(categoryValue, formatValue, musicGenre),
+    source: v.union(v.literal("title"), v.literal("description"), v.literal("occurrenceText"), v.literal("sourceCaption")), quote: v.string(),
+  })),
+});
 
 function loadLabel(ctx: Pick<QueryCtx, "db">, eventId: Id<"events">) {
   return ctx.db.query("eventDiscoveryLabels")
@@ -393,12 +412,23 @@ async function cameFromDailyRun(
   });
 }
 
-async function discoveryCandidate(ctx: QueryCtx, event: Doc<"events">) {
+function confirmedDiscoveryTime(event: Doc<"events">, evidence: Record<string, unknown>) {
+  if (event.timeStatus !== "confirmed" || event.timeEvidenceKind !== "start_time_stated" || !event.timeEvidenceText?.trim() ||
+    evidence.timeEvidenceVerified !== true || typeof evidence.time !== "string" ||
+    !["caption", "poster", "alt_text", "schedule_entry"].includes(event.timeSource ?? "") ||
+    (event.sourceConflictFields?.length ?? 0) > 0) return;
+  const time = normalizeEventTime(event.time).startLabel;
+  return time && normalizeEventTime(evidence.time).startLabel === time ? time : undefined;
+}
+
+async function discoveryCandidate(ctx: Pick<QueryCtx, "db">, event: Doc<"events">) {
   const evidence = readEventEvidenceRecord(event.normalizedFieldsJson);
   const occurrenceText = occurrenceTextFromEvidence(evidence);
   const sourceCaption = await readScopedInstagramCaption(ctx, event, evidence);
+  const time = confirmedDiscoveryTime(event, evidence);
   return { key: event._id, expectedUpdatedAt: event.updatedAt, title: event.title, venue: event.venue,
     date: event.date, eventType: event.eventType, artists: event.artists.slice(0, 20),
+    ...(time ? { time } : {}),
     ...(event.description ? { description: event.description.slice(0, 800) } : {}),
     ...(occurrenceText ? { occurrenceText } : {}), ...(sourceCaption ? { sourceCaption } : {}) };
 }
@@ -437,9 +467,10 @@ function verifiedGenreFallback(event: Doc<"events">, taxonomy: EventDiscoveryTax
   }
   const webResearch = result.webResearch;
   if (webResearch?.matches.length) {
-    const listingActs = getPerformerGenreResearchActs(event, format, true);
-    if (webResearch.matches.every(({ performer, url, identityUrl }) => listingActs.some(({ billedName, titleOnly }) =>
-      billedName === performer && (!titleOnly || url === identityUrl)))) {
+    const performerActs = getPerformerGenreResearchActs(event, format).filter(({ titleOnly }) => !titleOnly);
+    const listingAct = getEventListingResearchAct(event);
+    if (webResearch.matches.every(({ performer, url, identityUrl }) => performerActs.some(({ billedName }) => billedName === performer) ||
+      (!!listingAct && url === identityUrl && normalizeTaxonomyText(performer) === normalizeTaxonomyText(listingAct.billedName)))) {
       return { webResearch };
     }
   }
@@ -607,6 +638,134 @@ export const recordUnknownGenreBatch = mutation({
         else await ctx.db.insert("eventDiscoveryLabels", data);
       }
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
+      counts.written++;
+    }
+    return counts;
+  },
+});
+
+function categoryRefreshDate(fromDate?: string) {
+  const today = getBelgradeDayKey();
+  const date = requireUpcomingDate(fromDate ?? today);
+  if (date < today) throw new Error("Category refresh starts on the current Belgrade date or later.");
+  return date;
+}
+
+function pickCategoryState({ primaryCategory, categories, formats }: EventDiscoveryTaxonomy): CategoryState {
+  return { primaryCategory, categories, formats };
+}
+
+function sameCategoryState(first: CategoryState, second: CategoryState) {
+  return first.primaryCategory === second.primaryCategory &&
+    first.categories.length === second.categories.length && first.categories.every((category, index) => category === second.categories[index]) &&
+    first.formats.length === second.formats.length && first.formats.every((format, index) => format === second.formats[index]);
+}
+
+async function isUpcomingDiscoveryPublic(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, fromDate: string) {
+  if (event.date < fromDate || event.status !== "approved" || event.publicationState !== "publishable" ||
+    event.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION ||
+    event.publicationReason !== "canonical_source_grounding_verified" || !event.venueId) return false;
+  const venue = await ctx.db.get(event.venueId);
+  return !!venue && isVenuePublic(venue);
+}
+
+async function upcomingDiscoveryChange(ctx: Pick<QueryCtx, "db">, event: Doc<"events">) {
+  const label = await loadLabel(ctx, event._id);
+  const currentLabel = label && labelIsCurrent(label, event.updatedAt) ? label : null;
+  const current = currentLabel?.taxonomy ?? getEventDiscoveryTaxonomy(event);
+  const before = pickCategoryState(current);
+  const candidate = await discoveryCandidate(ctx, event);
+  const classified = classifyExplicitEventDiscovery(candidate);
+  if (!classified?.complete) return { outcome: "inconclusive" } as const;
+  const after = pickCategoryState(classified.taxonomy);
+  const evidence = classified.evidence.filter(({ kind }) => kind !== "genre");
+  if (!after.categories.every((category) => evidence.some(({ kind, label }) => kind === "category" && label === category)) ||
+    !after.formats.every((format) => evidence.some(({ kind, label }) => kind === "format" && label === format)) ||
+    evidence.some(({ source, quote }) => !quote.trim() || !candidate[source]?.includes(quote))) {
+    return { outcome: "inconclusive" } as const;
+  }
+  if (sameCategoryState(before, after)) return { outcome: "unchanged", after } as const;
+  // A partial excerpt may confirm one activity without describing everything
+  // on the program. Leave removals of existing specific labels for review.
+  if (before.formats.some((format) => !after.formats.includes(format)) ||
+    (before.categories.length > 1 && before.categories.some((category) => category !== "other" && !after.categories.includes(category)))) {
+    return { outcome: "needsReview" } as const;
+  }
+
+  if (!after.categories.some((category) => category === "party" || category === "live")) {
+    const hadMusic = before.categories.some((category) => category === "party" || category === "live");
+    if (current.genres.length || (hadMusic && currentLabel &&
+      projectGenreFallback(current, currentLabel, await loadGenreResearch(ctx, event._id)))) {
+      return { outcome: "needsReview" } as const;
+    }
+  }
+  return { outcome: "proposed", before, after, evidence, current, label, currentLabel } as const;
+}
+
+export const listUpcomingDiscoveryRefresh = query({
+  args: { serviceSecret: v.string(), fromDate: v.optional(v.string()), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ fromDate: v.string(), cursor: v.union(v.string(), v.null()), proposals: v.array(categoryRefreshProposal),
+    counts: v.object({ scanned: v.number(), eligible: v.number(), proposed: v.number(), unchanged: v.number(),
+      inconclusive: v.number(), needsReview: v.number() }) }),
+  handler: async (ctx, { serviceSecret, fromDate, cursor }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    const date = categoryRefreshDate(fromDate);
+    const page = await upcomingEvents(ctx, date).paginate({ cursor, numItems: 24 });
+    const changes = await Promise.all(page.page.map(async (event) =>
+      await isUpcomingDiscoveryPublic(ctx, event, date) ? { event, change: await upcomingDiscoveryChange(ctx, event) } : null));
+    const counts = { scanned: page.page.length, eligible: 0, proposed: 0, unchanged: 0, inconclusive: 0, needsReview: 0 };
+    const proposals = changes.flatMap((entry) => {
+      if (!entry) return [];
+      const { event, change } = entry;
+      counts.eligible++;
+      counts[change.outcome]++;
+      if (change.outcome !== "proposed") return [];
+      return [{ eventId: event._id, expectedUpdatedAt: event.updatedAt, title: event.title, date: event.date,
+        before: change.before, after: change.after, evidence: change.evidence }];
+    });
+    return { fromDate: date, cursor: page.isDone ? null : page.continueCursor, proposals, counts };
+  },
+});
+
+export const refreshUpcomingDiscoveryBatch = mutation({
+  args: { serviceSecret: v.string(), fromDate: v.optional(v.string()), proposals: v.array(v.object(categoryRefreshFields)) },
+  returns: v.object({ written: v.number(), unchanged: v.number(), stale: v.number(), needsReview: v.number() }),
+  handler: async (ctx, { serviceSecret, fromDate, proposals }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    const date = categoryRefreshDate(fromDate);
+    if (proposals.length > 12 || new Set(proposals.map(({ eventId }) => eventId)).size !== proposals.length) {
+      throw new Error("Invalid upcoming category refresh batch.");
+    }
+    const counts = { written: 0, unchanged: 0, stale: 0, needsReview: 0 };
+    for (const { eventId, expectedUpdatedAt, before, after } of proposals) {
+      const event = await ctx.db.get(eventId);
+      if (!event || event.updatedAt !== expectedUpdatedAt || !await isUpcomingDiscoveryPublic(ctx, event, date)) {
+        counts.stale++;
+        continue;
+      }
+      const change = await upcomingDiscoveryChange(ctx, event);
+      if (change.outcome === "needsReview") {
+        counts.needsReview++;
+        continue;
+      }
+      if (change.outcome === "unchanged" && sameCategoryState(change.after, after)) {
+        counts.unchanged++;
+        continue;
+      }
+      if (change.outcome !== "proposed" || !sameCategoryState(change.before, before) || !sameCategoryState(change.after, after)) {
+        counts.stale++;
+        continue;
+      }
+
+      const auditJson = change.currentLabel?.auditJson ?? "";
+      const estimate = readEstimatedGenres(auditJson);
+      const data = { eventId, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION,
+        model: change.currentLabel?.model ?? "explicit-category-refresh-v1",
+        taxonomy: { ...after, genres: change.current.genres },
+        auditJson: serializeGenreAudit({ ...readEventEvidenceRecord(auditJson), categoryRefresh: { evidence: change.evidence } },
+          estimate.length ? estimate : undefined) };
+      if (change.label) await ctx.db.replace(change.label._id, data);
+      else await ctx.db.insert("eventDiscoveryLabels", data);
       counts.written++;
     }
     return counts;

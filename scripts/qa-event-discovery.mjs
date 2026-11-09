@@ -8,6 +8,7 @@ import {
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
+import { classifyExplicitEventDiscovery, getExcludedDiscoveryGenres } from "../lib/taxonomy/explicit-event-discovery.ts";
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -188,11 +189,54 @@ assert.deepEqual(captionArtistBio.taxonomy.genres, ["techno"], "The advertised s
 assert.deepEqual(captionArtistBio.evidence.find(({ kind }) => kind === "genre"), {
   kind: "genre", label: "techno", source: "sourceCaption", quote: "the DJ plays techno.",
 }, "Retain the original caption quote when the summary advertises a different genre.");
-assert.deepEqual(captionCulture.taxonomy, { primaryCategory: "culture", categories: ["culture"], formats: [], genres: [] });
+assert.deepEqual(captionCulture.taxonomy, { primaryCategory: "culture", categories: ["culture", "participate"], formats: [], genres: [] },
+  "Original captions can ground non-music activities as well as music.");
 assert.deepEqual(captionVenue.taxonomy.genres, [], "Venue names and earlier nights do not supply the genre for this event.");
 
+const explicitActivities = [
+  ["DJ set", "party", "dj-set"], ["Jazz koncert", "live", "concert"], ["Projekcija filma", "culture", "screening"],
+  ["Sajam knjiga", "exhibition", "fair"], ["Rock pub quiz", "participate", "quiz"], ["Degustacija vina", "food", "tasting"],
+  ["Panel diskusija", "talk", "talk"], ["Gledanje utakmice", "other"],
+];
+for (const [title, category, format] of explicitActivities) {
+  const result = classifyExplicitEventDiscovery({ title });
+  assert.equal(result?.taxonomy.primaryCategory, category);
+  assert.deepEqual(result?.taxonomy.formats, format ? [format] : []);
+  assert.equal(result?.complete, true);
+  assert.ok(result.evidence.every(({ source, quote }) => source === "title" && title.includes(quote)));
+}
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "Rock pub quiz" }).taxonomy.genres, []);
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "Časovi salsa plesa", sourceCaption: "Salsa dance lessons." }).taxonomy.genres, []);
+assert.equal(classifyExplicitEventDiscovery({ title: "Otvoren restoran", description: "Brunch je u redovnoj ponudi svakog dana." }), null);
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "Drag Brunch" })?.taxonomy,
+  { primaryCategory: "food", categories: ["food"], formats: [], genres: [] });
+assert.equal(classifyExplicitEventDiscovery({ title: "Anniversary", sourceCaption: "Dve godine druženja, muzike, dobrih žurki i ljudi." }), null);
+assert.equal(classifyExplicitEventDiscovery({ title: "Miško Plavi Trio", date: "2026-11-26",
+  occurrenceText: "Koncert Miško Plavi Trio, planiran za 25." }), null);
+assert.equal(classifyExplicitEventDiscovery({ title: "Damir i Dragan", sourceCaption: "- Dragan Markovina (Korčula after party, Korčula)" }), null,
+  "An affiliation in a speaker bullet is not an advertised party.");
+const screeningAndTalk = classifyExplicitEventDiscovery({ title: "Thursday Program", sourceCaption: "Nakon projekcije sledi razgovor sa autorima filma." });
+assert.deepEqual(screeningAndTalk.taxonomy.categories, ["culture", "talk"]);
+assert.deepEqual(screeningAndTalk.taxonomy.formats, ["screening", "talk"]);
+assert.equal(screeningAndTalk.complete, false, "Both advertised activities survive for the ambiguous program path.");
+assert.equal(classifyExplicitEventDiscovery({ title: "Večera i DJ set uz house i techno" }).complete, false, "A mixed program needs the model.");
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "Night", sourceCaption: "Ди-џеј пушта хаус, техно и драм ен бејс." }).taxonomy.genres,
+  ["house", "techno", "drum-and-bass"]);
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "DJ set", sourceCaption: "DJ pušta breakbeat." }).taxonomy.genres, ["electronic"]);
+for (const description of ["DJ pušta muziku. Pop-up bazar.", "DJ set uz stanje trans.", "DJ set u Jazz House."]) {
+  assert.deepEqual(classifyExplicitEventDiscovery({ title: "DJ set", description, venue: "Jazz House" }).taxonomy.genres, []);
+}
+const denial = { title: "DJ set", sourceCaption: "DJ set uz disco, bez housea i techna. Prošle nedelje bez rock muzike.",
+  description: "DJ set uz house i techno." };
+assert.deepEqual([...getExcludedDiscoveryGenres(denial)], ["house", "techno"], "A local denial covers coordinated styles without vetoing another night.");
+assert.deepEqual(classifyExplicitEventDiscovery(denial).taxonomy.genres, ["disco-funk"]);
+const denied = await classifyEventDiscoveryBatch([{ ...denial, key: "denial" }], { ...options, fetch: async () => mockResponse([
+  row(0, { p: claim("party", "title", "DJ set"), g: [claim("house", "description", "house"), claim("techno", "description", "techno")] }),
+]) });
+assert.deepEqual(denied.results[0].taxonomy.genres, [], "Scoped denials override other source claims even if the quote is verbatim.");
+
 assert.equal(EVENT_DISCOVERY_BATCH_LIMIT, 20);
-const maxInputs = Array.from({ length: EVENT_DISCOVERY_BATCH_LIMIT }, (_, key) => ({ key, title: "Unclassified listing" }));
+const maxInputs = Array.from({ length: EVENT_DISCOVERY_BATCH_LIMIT }, (_, key) => ({ key, title: `Unclassified listing ${key}` }));
 const maxBatch = await classifyEventDiscoveryBatch(maxInputs, { ...options, fetch: async () => mockResponse(maxInputs.map((_, index) => row(index))) });
 assert.equal(maxBatch.results.length, 20);
 const neverTransport = () => assert.fail("Invalid batch inputs must stop before transport.");
@@ -206,6 +250,19 @@ for (const invalid of [[row(0)], [row(0), row(0)], [row(0), row(2)], [row(0), ro
     "Malformed row coverage must invalidate the batch before any result can be written.",
   );
 }
+const duplicated = { title: "Jazz koncert", sourceCaption: "Jazz koncert", description: "Jazz koncert", eventType: "live music", date: "2026-11-08", time: "22:30" };
+const duplicateResult = await classifyEventDiscoveryBatch([{ ...duplicated, key: "a" }, { ...duplicated, key: "b" },
+  { ...duplicated, key: "c", date: "2026-11-09" }], { ...options, fetch: async (_url, request) => {
+  const body = JSON.parse(request.body);
+  const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
+  assert.deepEqual(rows.map(({ row, title, description, sourceCaption, eventType, date, time }) =>
+    ({ row, title, description, sourceCaption, eventType, date, time })), [
+    { row: 0, title: undefined, description: undefined, sourceCaption: "Jazz koncert", eventType: "live music", date: "2026-11-08", time: "22:30" },
+    { row: 1, title: undefined, description: undefined, sourceCaption: "Jazz koncert", eventType: "live music", date: "2026-11-09", time: "22:30" },
+  ]);
+  return mockResponse(rows.map(({ row: index }) => row(index, { p: claim("live", "sourceCaption", "koncert") })));
+} });
+assert.deepEqual(duplicateResult.results.map(({ key, taxonomy }) => [key, taxonomy.primaryCategory]), [["a", "live"], ["b", "live"], ["c", "live"]]);
 
 const estimateInputs = [
   { key: "known", eventTitle: "Do not turn this title into an artist", acts: [{ billedName: "Laurent Garnier", billedHandle: "@laurent_garnier" }] },
@@ -252,18 +309,7 @@ const chainedInputs = [
   candidate("title-listing", { title: "Echo Archive", description: "Koncert u klubu." }),
   candidate("no-act", { title: "Saturday Night", description: "DJ set." }),
   candidate("failed-search", { artists: ["Broken Act", "Other Act"] }),
-  candidate("non-music", { title: "Projekcija", artists: ["Scena Group"] }),
-];
-const partyClaim = claim("party", "title", "DJ set");
-const classificationRows = [
-  row(0, { g: [claim("house", "sourceCaption", "puštamo house.")] }),
-  row(1, { p: partyClaim, g: [claim("techno", "description", "puštamo techno.")] }),
-  row(2, { p: partyClaim }),
-  row(3, { p: partyClaim }),
-  row(4, { p: claim("live", "description", "Koncert") }),
-  row(5, { p: claim("party", "description", "DJ set") }),
-  row(6, { p: partyClaim }),
-  row(7, { p: claim("culture", "title", "Projekcija") }),
+  candidate("non-music", { title: "Projekcija", sourceCaption: "Projekcija filma i panel diskusija.", artists: ["Scena Group"] }),
 ];
 const eventUrl = "https://ra.co/events/1234567";
 const titleUrl = "https://bridgehall.rs/events/echo-archive";
@@ -275,8 +321,9 @@ const chained = await resolveEventGenresBatch(chainedInputs, {
   fetch: async (_url, request) => {
     const body = JSON.parse(request.body);
     const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
-    assert.deepEqual(rows[0].currentCategories, ["culture", "party"]);
-    return mockResponse(classificationRows);
+    assert.deepEqual(rows.map(({ title }) => title), ["Projekcija"], "Only the mixed program needs the paid classifier.");
+    return mockResponse([row(0, { p: claim("culture", "title", "Projekcija"),
+      c: [claim("talk", "sourceCaption", "panel diskusija")] })]);
   },
   estimate: async (items) => {
     assert.deepEqual(items.map(({ key }) => key), ["estimate", "cited", "failed-search"],
@@ -285,7 +332,8 @@ const chained = await resolveEventGenresBatch(chainedInputs, {
   },
   research: async (items, webOptions) => {
     assert.equal(webOptions.singleAttempt, true);
-    assert.equal(webOptions.thorough, true);
+    assert.equal(webOptions.adaptive, true);
+    assert.equal(webOptions.thorough, undefined);
     assert.ok(items.length <= 4);
     assert.ok(items.every(({ venue, date, city }) => venue === "Bridge Hall" && date === "2026-11-08" && city === "Belgrade"));
     checkedBatches.push(items.map(({ billedName, titleOnly }) => [billedName, Boolean(titleOnly)]));
@@ -319,7 +367,7 @@ assert.deepEqual(chained.results.map(({ method, deferred }) => [method, Boolean(
 assert.deepEqual(chained.results[0].taxonomy, { ...currentTaxonomy, genres: ["house"] },
   "A backfill adds the caption genre without replacing the previously published categories or formats.");
 assert.deepEqual(JSON.parse(chained.results[0].auditJson).evidence,
-  [{ kind: "genre", label: "house", source: "sourceCaption", quote: "puštamo house." }]);
+  [{ kind: "genre", label: "house", source: "sourceCaption", quote: "Večeras puštamo house." }]);
 assert.deepEqual(chained.results[2].estimatedGenres, ["techno"]);
 assert.deepEqual(chained.results[2].taxonomy.genres, [], "An estimate is not an announced genre.");
 assert.deepEqual(chained.results[3].webResearch.matches, [{ performer: "Selka", genre: "house", url: eventUrl, identityUrl: eventUrl }]);
@@ -327,7 +375,17 @@ assert.deepEqual(chained.results[4].webResearch.matches, [
   { performer: "Echo Archive", genre: "jazz-blues", url: titleUrl, identityUrl: titleUrl },
 ], "The exact event listing, rather than a different edition, must contain the style proof for a title-only search.");
 assert.equal(chained.searchCalls, 1);
+assert.equal(chained.localClassified, 7);
 assert.deepEqual(chained.estimateUsage, estimate.usage);
+
+const allLocal = await resolveEventGenresBatch([
+  candidate("direct", { title: "Petak", sourceCaption: "DJ pušta house i techno.", artists: ["Mina"] }),
+  candidate("sports", { title: "Prenos utakmice" }),
+], { ...options, classify: neverTransport, estimate: neverTransport, research: neverTransport });
+assert.equal(allLocal.localClassified, 2);
+assert.equal(allLocal.usage.totalTokens, 0);
+assert.deepEqual(allLocal.results.map(({ method, taxonomy }) => [method, taxonomy.primaryCategory, taxonomy.genres]),
+  [["instagram", "party", ["house", "techno"]], ["unknown", "other", []]]);
 
 const fallbackInput = { key: 0, billedName: "Echo Archive", eventTitle: "Echo Archive", venue: "Bridge Hall",
   date: "2026-11-08", trustedFormat: "live", titleOnly: true };
@@ -372,5 +430,73 @@ for (const [url, quote] of [
 ]) {
   assert.equal((await resolveVenueListing(url, quote)).status, "unverified", "The translated alias needs the official site and the full date.");
 }
+
+const namedListing = { ...fallbackInput, titleOnly: false, trustedFormat: "dj-set", billedName: "DJ Ridi",
+  eventTitle: "Whitesnake Night", listingTitle: "Whitesnake Night", time: "21:00" };
+const namedListingUrl = "https://bridgehall.rs/events/whitesnake-night";
+const namedListingQuote = "Whitesnake Night with DJ Ridji at Bridge Hall on November 8, 2026. Starts at 21:00.";
+async function verifyNamedListing(quote, genreUrl = namedListingUrl) {
+  const batch = await researchPerformerGenresBatch([namedListing], {
+    ...options, adaptive: true,
+    fetch: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      assert.ok(body.max_tool_calls <= 3);
+      const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
+      assert.equal(rows[0].listingTitle, namedListing.eventTitle);
+      return Response.json({ status: "completed", output: [
+        { type: "web_search_call", status: "completed", action: { sources: [{ url: namedListingUrl }, { url: genreUrl }] } },
+        { content: [{ type: "output_text", text: JSON.stringify({ rows: [{ row: 0, status: "unverified", identity: null, genres: [],
+          listing: { identity: { url: namedListingUrl, quote },
+            genres: [{ genre: "rock", url: genreUrl, quote: "The set features melodic hard rock." }] },
+        }] }) }] },
+      ] });
+    },
+  });
+  return batch.results.get(namedListing.key);
+}
+const exactNamedListing = await verifyNamedListing(namedListingQuote);
+assert.equal(exactNamedListing.status, "unverified", "The unrelated performer spelling remains unresolved.");
+assert.equal(exactNamedListing.listing?.title, "Whitesnake Night");
+assert.deepEqual(exactNamedListing.listing?.genreEvidence.map(({ genre, url }) => [genre, url]), [["rock", namedListingUrl]],
+  "The dated listing can prove the event genre independently of the unverified billed act.");
+for (const [quote, genreUrl] of [
+  [namedListingQuote.replace("November 8", "November 9")],
+  [namedListingQuote.replace("21:00", "22:00")],
+  [namedListingQuote.replace("Bridge Hall", "Another Hall")],
+  [namedListingQuote, wrongTitleUrl],
+]) assert.equal((await verifyNamedListing(quote, genreUrl)).listing, undefined);
+
+const exhibitUrl = "https://bridgehall.rs/events/paper-city";
+let categoryLookups = 0;
+const categoryWeb = await resolveEventGenresBatch([
+  candidate("paper", { title: "Paper City", venue: "Bridge Hall", date: "2026-11-08", time: "18:00", eventType: "other" }),
+  candidate("paper-other-date", { title: "Paper City", venue: "Bridge Hall", date: "2026-11-09", time: "18:00", eventType: "other" }),
+  candidate("paper-other-source", { title: "Paper City", venue: "Bridge Hall", date: "2026-11-08", time: "18:00", eventType: "other" }),
+], {
+  ...options,
+  classify: async (rows) => ({ model: "test", usage: estimate.usage, results: rows.map(({ key }) =>
+    ({ key, taxonomy: null, credits: [], evidence: [], discardedClaims: 0 })) }),
+  estimate: neverTransport,
+  fetch: async (_url, request) => {
+    categoryLookups++;
+    const { rows } = JSON.parse(JSON.parse(request.body).input.find(({ role }) => role === "user").content);
+    assert.ok(rows.every(({ discoveryOnly, titleOnly }) => discoveryOnly && titleOnly));
+    return Response.json({ status: "completed", output: [
+      { type: "web_search_call", status: "completed", action: { sources: [{ url: exhibitUrl }, { url: wrongTitleUrl }] } },
+      { content: [{ type: "output_text", text: JSON.stringify({ rows: rows.map(({ row }) => ({
+        row, status: "unverified", identity: null, genres: [],
+        listing: {
+          identity: { url: exhibitUrl, quote: "Paper City at Bridge Hall on November 8, 2026. Starts at 18:00." },
+          genres: [], discoveryEvidence: [{ url: row === 2 ? wrongTitleUrl : exhibitUrl, quote: "Visit the exhibition of paper sculpture." }],
+        },
+      })) }) }] },
+    ] });
+  },
+});
+assert.equal(categoryLookups, 1);
+assert.equal(categoryWeb.results[0].taxonomy?.primaryCategory, "exhibition");
+assert.equal(JSON.parse(categoryWeb.results[0].auditJson).categoryListing.identity.url, exhibitUrl);
+assert.equal(categoryWeb.results[1].taxonomy, null);
+assert.equal(categoryWeb.results[2].taxonomy, null);
 
 console.log("Event discovery QA passed: exact occurrence and Instagram caption evidence, existing taxonomy, 20 genre labels, no-search estimates, cited fallback, provider isolation and strict row coverage.");

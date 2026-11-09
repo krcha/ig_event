@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       results: resolved.results.map(({ method: _method, deferred: _deferred, ...result }) => result),
     });
     return NextResponse.json({ state: "processed", cursor: page.cursor, tested: resolved.results.length,
+      localClassified: resolved.localClassified,
       estimated: resolved.results.filter(({ method }) => method === "estimate").length,
       webSourced: resolved.results.filter(({ method }) => method === "web").length,
       deferred: resolved.results.filter(({ deferred }) => deferred).length, searchCalls: resolved.searchCalls,

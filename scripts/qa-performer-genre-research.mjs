@@ -4,11 +4,13 @@ import {
   listGenreResearchInputs,
   listRecentInputs,
   listUnknownGenreInputs,
+  listUpcomingDiscoveryRefresh,
   loadPublicEventDiscoveryLabels,
   recordBatch,
   recordDailyBatch,
   recordGenreResearch,
   recordUnknownGenreBatch,
+  refreshUpcomingDiscoveryBatch,
 } from "../convex/eventDiscovery.ts";
 import {
   PERFORMER_GENRE_RESEARCH_BATCH_LIMIT,
@@ -23,6 +25,7 @@ import {
   PERFORMER_GENRE_RESEARCH_VERSION,
 } from "../lib/taxonomy/performer-genre-research.ts";
 import { EVENT_DISCOVERY_VERSION } from "../lib/taxonomy/event-discovery.ts";
+import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key.ts";
 
 const options = { apiKey: "test-only-key", model: "fixture-search-model" };
 const eventUrl = "https://ra.co/events/1234567";
@@ -392,6 +395,8 @@ function dailyQueueFixture() {
   const posts = [];
   const receipts = [];
   const pages = [];
+  const venues = new Map([["venue-fixture", { _id: "venue-fixture", publicStatus: "published" }],
+    ["venue-hidden", { _id: "venue-hidden", publicStatus: "hidden" }]]);
   const source = (postId, sourceCaption) => {
     const url = `https://www.instagram.com/p/${postId}/`;
     return { instagramPostId: postId, instagramPostUrl: url, canonicalSourceUrl: url,
@@ -400,6 +405,7 @@ function dailyQueueFixture() {
   function eventFixture(id, overrides = {}, proof = "current") {
     const event = {
       ...currentEvent, _id: id, _creationTime: startedAt + 500, createdAt: startedAt + 500,
+      publicationPolicyVersion: 1, publicationReason: "canonical_source_grounding_verified", venueId: "venue-fixture",
       ...source(`Post_${id.replaceAll("-", "_")}`, "Selka večeras pušta house i disco ploče."), ...overrides,
     };
     events.set(id, event);
@@ -417,11 +423,15 @@ function dailyQueueFixture() {
   const localDetail = "Selka večeras pušta i disco ploče.";
   const neighbor = "09.11. Drugi DJ pušta techno.";
   const sharedCaption = [localRow, localDetail, neighbor].join("\n");
-  eventFixture("single", { _creationTime: startedAt, createdAt: startedAt });
+  eventFixture("single", { _creationTime: startedAt, createdAt: startedAt, time: "22:30", timeStatus: "confirmed", timeSource: "caption",
+    timeEvidenceKind: "start_time_stated", timeEvidenceText: "Početak u 22:30",
+    normalizedFieldsJson: JSON.stringify({ time: "22:30", timeEvidenceVerified: true }) });
   eventFixture("split", { ...source("FixtureSplit", sharedCaption), normalizedFieldsJson: JSON.stringify({
     splitEventTotal: 2, rowSourceText: localRow, carouselTextEvidence: [{ source: "caption", text: localDetail }],
   }) });
-  eventFixture("ambiguous", { ...source("FixtureAmbiguous", sharedCaption), normalizedFieldsJson: JSON.stringify({ multiEventSplitCount: 2 }) });
+  eventFixture("ambiguous", { ...source("FixtureAmbiguous", sharedCaption), time: "22:30", timeStatus: "confirmed", timeSource: "caption",
+    timeEvidenceKind: "doors_open_only", timeEvidenceText: "Vrata od 22:30",
+    normalizedFieldsJson: JSON.stringify({ multiEventSplitCount: 2, time: "22:30", timeEvidenceVerified: true }) });
   eventFixture("legacy-sibling", source("FixtureSiblings", sharedCaption));
   eventFixture("legacy-sibling-pending", { ...source("FixtureSiblings", sharedCaption), status: "pending" }, "no-post");
   eventFixture("estimate", { _creationTime: finishedAt, createdAt: finishedAt }, "legacy");
@@ -449,11 +459,12 @@ function dailyQueueFixture() {
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
     by_creation_time: ["_creationTime", "_creationTime"],
+    by_publicationState_date: ["publicationState", "date"],
   };
   const dailyCtx = {
     auth: ctx.auth,
     db: {
-      get: async (...args) => runs.get(args.at(-1)) ?? events.get(args.at(-1)) ?? null,
+      get: async (...args) => runs.get(args.at(-1)) ?? events.get(args.at(-1)) ?? venues.get(args.at(-1)) ?? null,
       query(table) {
         assert.ok(table in tables);
         return { withIndex(index, range) {
@@ -476,7 +487,7 @@ function dailyQueueFixture() {
             take: async (limit) => rows.slice(0, limit),
             unique: async () => { assert.ok(rows.length < 2); return rows[0] ?? null; },
             paginate: async ({ cursor, numItems }) => {
-              assert.equal(index, "by_creation_time");
+              assert.ok(["by_creation_time", "by_publicationState_date"].includes(index));
               pages.push({ cursor, numItems });
               const start = cursor === null ? 0 : Number(cursor);
               const end = start + numItems;
@@ -624,6 +635,8 @@ try {
   assert.equal(dailyQueue.get("single").sourceCaption, daily.events.get("single").sourceCaption);
   assert.equal(dailyQueue.get("single").eventType, daily.events.get("single").eventType);
   assert.equal(dailyQueue.get("single").date, daily.events.get("single").date);
+  assert.equal(dailyQueue.get("single").time, "22:30", "Include a confirmed and source-verified start time.");
+  assert.equal(dailyQueue.get("ambiguous").time, undefined, "Doors-open time cannot stand in for the event start.");
   const splitInput = dailyQueue.get("split");
   assert.equal(splitInput.occurrenceText, daily.localRow);
   assert.ok(splitInput.sourceCaption.includes(daily.localDetail), "A shared carousel may contribute exact caption text scoped to this event.");
@@ -674,6 +687,11 @@ try {
     auditJson: JSON.stringify({ evidence: [captionClaim("techno", daily.neighbor)] }),
   })), { written: 0, unchanged: 0, stale: 1 }, "The write path verifies every original caption quote against the current scoped text.");
   assert.equal(await projection("split"), undefined);
+  assert.deepEqual(await recordDaily(dailyResult("split", { webResearch: webResult([{
+    ...researchMatches[0], performer: daily.events.get("split").title.toUpperCase(),
+  }]) })), { written: 1, unchanged: 0, stale: 0 });
+  assert.deepEqual((await projection("split")).performerGenreResearch.sources,
+    [{ url: eventUrl, performer: daily.events.get("split").title.toUpperCase() }], "An exact listing title can corroborate web genre even when the event has billed artists.");
   assert.deepEqual(await recordDaily(dailyResult("single")), { written: 0, unchanged: 1, stale: 0 }, "Replaying the daily batch cannot remove existing genres.");
   assert.ok(!(await readDaily()).has("single"));
 
@@ -749,6 +767,63 @@ try {
   assert.deepEqual((await backfillProjection("unbilled")).performerGenreResearch, { sources: [{ url: eventUrl, performer: "Saturday Night" }] });
   assert.deepEqual(await recordUnknown(dailyResult("split", { estimatedGenres: ["techno"] })), { written: 0, unchanged: 1, stale: 0 });
   assert.ok((await readUnknown()).events.every(({ key }) => !["split", "historical", "already-classified", "legacy-sibling", "unbilled"].includes(key)));
+
+  const refresh = dailyQueueFixture();
+  const refreshDate = getBelgradeDayKey();
+  for (const event of refresh.events.values()) event.date = "2000-01-01";
+  function setRefreshEvent(eventId, title, eventType, fields = {}) {
+    Object.assign(refresh.events.get(eventId), { title, eventType, date: refreshDate, sourceCaption: undefined, ...fields });
+  }
+  function setRefreshLabel(eventId, taxonomy, auditJson = "{}") {
+    refresh.labels.set(eventId, { _id: `label-${eventId}`, eventId, eventUpdatedAt: 100, version: EVENT_DISCOVERY_VERSION,
+      model: "original-fixture", taxonomy, auditJson });
+  }
+  setRefreshEvent("single", "Koncert Selke", "live music");
+  setRefreshEvent("estimate", "Koncert Selke", "live music");
+  setRefreshEvent("legacy-sibling", "DJ set uz Selku", "nightlife");
+  setRefreshEvent("ambiguous", "Radionica keramike", "learning");
+  setRefreshEvent("no-post", "Radionica keramike", "learning");
+  setRefreshEvent("unbilled", "Saturday Night", "event");
+  setRefreshEvent("hidden", "Radionica keramike", "learning");
+  setRefreshEvent("no-receipt", "Radionica keramike", "learning", { venueId: "venue-hidden" });
+  setRefreshEvent("legacy-sibling-pending", "Radionica keramike", "learning");
+  setRefreshLabel("single", { ...announced, formats: [] }, '{"originalAudit":"keep"}');
+  setRefreshLabel("estimate", { ...party, formats: [] }, '{"estimatedGenres":["techno"],"estimateModel":"original-model"}');
+  setRefreshLabel("legacy-sibling", { ...concert, formats: [] });
+  setRefreshLabel("ambiguous", announced);
+  setRefreshEvent("future", "Razgovor sa autorima filma", "arts & culture");
+  setRefreshLabel("future", { primaryCategory: "culture", categories: ["culture", "talk"], formats: ["screening"], genres: [] });
+  const preservedWeb = { _id: "web-legacy-sibling", eventId: "legacy-sibling", eventUpdatedAt: 100,
+    version: PERFORMER_GENRE_RESEARCH_VERSION, model: "web-fixture", researchedAt: 10, matches: [researchMatches[0]], auditJson: "{}" };
+  refresh.webRows.set("legacy-sibling", preservedWeb);
+  const previewRefresh = (extra = {}) => listUpcomingDiscoveryRefresh._handler(refresh.dailyCtx, { serviceSecret: "", cursor: null, ...extra });
+  const applyRefresh = (proposals) => refreshUpcomingDiscoveryBatch._handler(refresh.dailyCtx, {
+    serviceSecret: "", fromDate: refreshDate, proposals: proposals.map(({ eventId, expectedUpdatedAt, before, after }) =>
+      ({ eventId, expectedUpdatedAt, before, after })),
+  });
+  await assert.rejects(previewRefresh({ fromDate: "2000-01-01" }), /current Belgrade date/);
+  const preview = await previewRefresh();
+  assert.equal(preview.fromDate, refreshDate);
+  assert.equal(preview.counts.needsReview, 2, "Leave known genres and removals of existing formats or activities for review.");
+  assert.ok(preview.counts.inconclusive >= 1);
+  assert.deepEqual(preview.proposals.map(({ eventId }) => eventId).sort(), ["estimate", "legacy-sibling", "no-post", "single"]);
+  assert.equal(refresh.labels.has("no-post"), false, "A preview cannot change labels.");
+  const singleProposal = preview.proposals.find(({ eventId }) => eventId === "single");
+  assert.equal(singleProposal.before.primaryCategory, "party");
+  assert.equal(singleProposal.after.primaryCategory, "live");
+  assert.ok(singleProposal.evidence.some(({ source, quote }) => source === "title" && singleProposal.title.includes(quote)));
+  assert.deepEqual(await applyRefresh([{ ...singleProposal, expectedUpdatedAt: 99 },
+    { ...preview.proposals.find(({ eventId }) => eventId === "estimate"), before: concert }]),
+  { written: 0, unchanged: 0, stale: 2, needsReview: 0 }, "A changed event revision or conflicting original taxonomy fences the write.");
+  assert.deepEqual(await applyRefresh(preview.proposals), { written: 4, unchanged: 0, stale: 0, needsReview: 0 });
+  const refreshed = (eventId) => loadPublicEventDiscoveryLabels(refresh.dailyCtx, refresh.events.get(eventId), true);
+  assert.deepEqual((await refreshed("single")).eventTaxonomy.genres, ["techno"]);
+  assert.equal(JSON.parse(refresh.labels.get("single").auditJson).originalAudit, "keep");
+  assert.deepEqual((await refreshed("estimate")).performerGenreResearch, { sources: [], estimated: true });
+  assert.deepEqual((await refreshed("legacy-sibling")).performerGenreResearch.sources, [{ url: eventUrl, performer: "Selka" }]);
+  assert.equal(refresh.webRows.get("legacy-sibling"), preservedWeb);
+  assert.equal((await refreshed("no-post")).eventTaxonomy.primaryCategory, "participate");
+  assert.deepEqual(await applyRefresh(preview.proposals), { written: 0, unchanged: 4, stale: 0, needsReview: 0 });
 } finally {
   if (adminBeforeFixture === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
   else process.env.ADMIN_CLERK_USER_IDS = adminBeforeFixture;
