@@ -1,4 +1,7 @@
-import { buildPendingSourceConflictContext } from "./pending-source-conflict-reclassification.ts";
+import {
+  buildPendingSourceConflictContext,
+  readBoundExtractionSourceConflicts,
+} from "./pending-source-conflict-reclassification.ts";
 import { TBD_EVENT_TIME } from "./event-time.ts";
 import { toSearchableText } from "../domain/venues/normalization.ts";
 import { getNightlifeDefaultDateKey } from "./nightlife-date.ts";
@@ -208,23 +211,12 @@ export function getEffectiveEventEvidenceV2Conflicts(
     return null;
   }
 
-  try {
-    const rawExtraction = JSON.parse(
-      typeof eventFields.rawExtractionJson === "string" ? eventFields.rawExtractionJson : "null",
-    ) as unknown;
-    if (
-      !rawExtraction ||
-      typeof rawExtraction !== "object" ||
-      Array.isArray(rawExtraction) ||
-      !Array.isArray((rawExtraction as Record<string, unknown>).source_conflicts) ||
-      !arraysContainSameJsonValues(
-        reported,
-        (rawExtraction as Record<string, unknown>).source_conflicts as unknown[],
-      )
-    ) {
-      return null;
-    }
-  } catch {
+  const rawExtraction = parseNormalizedFields(
+    typeof eventFields.rawExtractionJson === "string" ? eventFields.rawExtractionJson : undefined,
+  );
+  if (!rawExtraction) return null;
+  const rawConflicts = readBoundExtractionSourceConflicts(eventFields, fields, rawExtraction);
+  if (!Array.isArray(rawConflicts) || !arraysContainSameJsonValues(reported, rawConflicts)) {
     return null;
   }
   return recomputed.material;

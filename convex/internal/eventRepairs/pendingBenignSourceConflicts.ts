@@ -7,6 +7,7 @@ import { nextEventUpdatedAt } from "../../../lib/events/event-update-preconditio
 import { writeEventAuditLog } from "../../eventDomain/persistence";
 import { hasCompleteAutomaticUniqueSourceProof } from "../automaticUniqueSourceProof";
 import { hasPersistedFocusedConflictReviewProof } from "../focusedConflictReviewProof";
+import { extractEventTimeFromText, normalizeEventTime } from "../../../lib/events/event-time";
 
 type ReadCtx = MutationCtx | QueryCtx;
 export async function loadPendingConflictRepairProof(ctx: ReadCtx, id: Id<"events">) {
@@ -19,14 +20,23 @@ export async function loadPendingConflictRepairProof(ctx: ReadCtx, id: Id<"event
   if (!(await hasCompleteAutomaticUniqueSourceProof(ctx, proof.event))) throw new Error("Conflict repair source topology or receipt proof failed.");
   return { ...proof, receipt };
 }
-export async function repairPendingBenignSourceConflictHandler(
-  ctx: MutationCtx, args: { id: Id<"events">; expectedUpdatedAt: number; actor: string; reviewMarker?: Record<string, unknown> },
+type ExactConflictRepair = { id: Id<"events">; expectedUpdatedAt: number; reviewMarker?: Record<string, unknown> };
+
+export async function preparePendingBenignSourceConflict(
+  ctx: ReadCtx, args: ExactConflictRepair,
 ) {
   const event = await ctx.db.get(args.id);
   if (!event || event.status !== "pending" || event.updatedAt !== args.expectedUpdatedAt)
     return { outcome: "stale" as const, reason: "event_version_changed", updatedAt: event?.updatedAt ?? args.expectedUpdatedAt, reclassifiedCount: 0 };
   if (event.reviewedAt !== undefined || event.reviewedBy !== undefined || event.humanReviewedLegacySourcePolicyVersion !== undefined || event.humanReviewedStructuredSourcePolicyVersion !== undefined) {
     return { outcome: "held" as const, reason: "human_review_preserved", updatedAt: event.updatedAt, reclassifiedCount: 0 };
+  }
+  if (event.timeStatus === "confirmed") {
+    const claimedStart = normalizeEventTime(event.time).startLabel;
+    const evidencedStart = normalizeEventTime(extractEventTimeFromText(event.timeEvidenceText)).startLabel;
+    if (claimedStart && evidencedStart && claimedStart !== evidencedStart) {
+      return { outcome: "held" as const, reason: "confirmed_start_evidence_mismatch", updatedAt: event.updatedAt, reclassifiedCount: 0 };
+    }
   }
   try {
     const fields: unknown = JSON.parse(event.normalizedFieldsJson ?? "null");
@@ -51,6 +61,15 @@ export async function repairPendingBenignSourceConflictHandler(
   } catch (error) {
     return { outcome: "held" as const, reason: error instanceof Error ? error.message : "conflict_proof_unavailable", updatedAt: event.updatedAt, reclassifiedCount: 0 };
   }
+  return { outcome: "verified" as const, event, proof, prepared };
+}
+
+export async function repairPendingBenignSourceConflictHandler(
+  ctx: MutationCtx, args: ExactConflictRepair & { actor: string },
+) {
+  const result = await preparePendingBenignSourceConflict(ctx, args);
+  if (result.outcome !== "verified") return result;
+  const { event, proof, prepared } = result;
   const updatedAt = nextEventUpdatedAt(event.updatedAt);
   await ctx.db.patch(event._id, { normalizedFieldsJson: prepared.normalizedFieldsJson, sourceConflictFields: prepared.sourceConflictFields, updatedAt });
   const before = JSON.parse(event.normalizedFieldsJson ?? "{}") as Record<string, unknown>;

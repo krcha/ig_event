@@ -1,4 +1,4 @@
-import { normalizeEventTime } from "./event-time";
+import { extractEventTimeFromText, normalizeEventTime } from "./event-time";
 
 export type ConfirmedEventSchemaFacts = {
   title: string;
@@ -62,9 +62,10 @@ export function getConfirmedEventSchemaFacts(
     event.timeStatus === "confirmed" &&
     event.timeEvidenceKind === "start_time_stated" &&
     facts.timeEvidenceVerified === true &&
+    facts.sourceConflictProvisionalStart === undefined &&
     typeof facts.time === "string" &&
     normalizeEventTime(facts.time).startLabel === start &&
-    !!event.timeEvidenceText?.trim() &&
+    normalizeEventTime(extractEventTimeFromText(event.timeEvidenceText)).startLabel === start &&
     ["caption", "poster", "alt_text", "schedule_entry"].includes(event.timeSource ?? "")
     ? start : undefined;
   return { title: event.title, date: event.date, venueId: publicVenueId, ...(time ? { time } : {}) };

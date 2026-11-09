@@ -12,6 +12,7 @@ import {
 import { eventEvidenceConflictIsBenign } from "../lib/events/event-evidence-conflict-policy.ts";
 import { getEffectiveEventEvidenceV2Conflicts } from "../lib/events/event-update-precondition.ts";
 import { repairPendingBenignSourceConflictHandler } from "../convex/internal/eventRepairs/pendingBenignSourceConflicts.ts";
+import { approveReviewedEarlierStart, previewExact, recheckExact } from "../convex/pendingSourceConflictReclassification.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 
 const conflict = {
@@ -422,3 +423,26 @@ console.log("Generic source conflict repair QA passed.");
   }
 }
 console.log("Same-occurrence named-date conflict regression QA passed.");
+
+{
+  const event = eventFixture(), state = fakeContext(event);
+  const exact = { id: event._id, expectedUpdatedAt: event.updatedAt };
+  assert.equal(previewExact.isInternal, true);
+  assert.equal(recheckExact.isInternal, true);
+  assert.equal(approveReviewedEarlierStart.isInternal, true);
+  await assert.rejects(() => approveReviewedEarlierStart._handler(state.context, { ...exact, expectedUpdatedAt: exact.expectedUpdatedAt - 1,
+    expectedVenueId: "venue-1", selectedTime: "20:00", moderationNote: "Review of the original poster and caption", dryRun: false }), /version changed/u);
+  assert.equal((await previewExact._handler(state.context, exact)).outcome, "verified");
+  assert.equal(state.audits.length, 0, "The exact preview must be read-only.");
+  assert.equal((await recheckExact._handler(state.context, { ...exact, expectedUpdatedAt: exact.expectedUpdatedAt - 1 })).outcome, "stale");
+  assert.equal(state.audits.length, 0);
+  state.records.get("source-1").analysisRevision = 2;
+  assert.equal((await recheckExact._handler(state.context, exact)).outcome, "held");
+  assert.equal(state.audits.length, 0, "A stale source must not be repaired or approved.");
+  const misbound = { ...eventFixture(), timeStatus: "confirmed", timeEvidenceText: "17:30ч" };
+  const misboundState = fakeContext(misbound);
+  const badTime = await recheckExact._handler(misboundState.context, exact);
+  assert.equal(badTime.reason, "confirmed_start_evidence_mismatch");
+  assert.equal(misboundState.audits.length, 0, "A quote for a different showtime cannot confirm this occurrence.");
+}
+console.log("Exact pending conflict operations QA passed.");

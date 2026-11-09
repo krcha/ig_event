@@ -3,9 +3,14 @@ import {
   prepareModerationDecision,
   unwrapModerationResult,
 } from "@/lib/domain/moderation/index";
-import { partitionEventEvidenceSourceConflicts } from "@/lib/events/event-evidence-conflict-policy";
+import {
+  combineEventArtistHandleAliases,
+  partitionEventEvidenceSourceConflicts,
+  selectEarlierConflictingStartTime,
+} from "@/lib/events/event-evidence-conflict-policy";
 import { isCaptionSourceCoherentWithEvent } from "@/lib/events/event-source-approval";
 import { type EventTimeProvenance, TBD_EVENT_TIME } from "@/lib/events/event-time";
+import { buildPendingSourceConflictContext } from "@/lib/events/pending-source-conflict-reclassification";
 import { isSensibleEventTitleForApproval } from "@/lib/events/event-title-approval";
 import { checkEventConsistency } from "@/lib/events/event-validation";
 import { NIGHTLIFE_LINEUP_COALESCING_POLICY_VERSION } from "@/lib/events/nightlife-lineup-coalescing";
@@ -137,7 +142,7 @@ export function finalizeStructuredFactVariants({
       ...new Set([...variant.consistencyIssues, ...eventConsistency.issues]),
     ];
     const timeEvidenceKind: EventTimeEvidenceKind = variant.timeEvidence.status;
-    const semanticTimeProvenance: EventTimeProvenance =
+    const extractedTimeProvenance: EventTimeProvenance =
       timeEvidenceKind === "start_time_stated"
         ? variant.timeProvenance
         : {
@@ -153,7 +158,7 @@ export function finalizeStructuredFactVariants({
             status: "unknown",
           };
     const timeTbdApplied = !eventConsistency.sanitizedTime && Boolean(date);
-    const safeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
+    const extractedSafeTime = eventConsistency.sanitizedTime || (timeTbdApplied ? TBD_EVENT_TIME : "");
     const timeSanitized = consistencyIssues.includes("time_is_date");
     const dateRepairReason = consistencyIssues.includes("weekday_date_mismatch")
       ? "weekday_date_mismatch_numeric_date_authoritative"
@@ -177,7 +182,7 @@ export function finalizeStructuredFactVariants({
     const approvalCaptionSourceCoherent = isCaptionSourceCoherentWithEvent({
       title: variant.title,
       date,
-      time: safeTime,
+      time: extractedSafeTime,
       venue: variant.venue,
       artists: variant.artists,
       sourceCaption: post.caption ?? "",
@@ -240,31 +245,7 @@ export function finalizeStructuredFactVariants({
       canonicalHandleEvidenceVerified: variantUsesCanonicalVenueEvidence,
       scopedBranchVenueEvidence: variant.scopedBranchVenueEvidence,
     });
-    const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
-      extracted.source_conflicts,
-      {
-        resolvedDate: date ?? "",
-        dateEvidenceVerified,
-        identityEvidenceVerified,
-        selectedTitle: variant.title,
-        artists: variant.artists,
-        selectedVenue: variant.venue ?? "",
-        venueEvidenceVerified,
-        sourceAccountRole: sourceRole,
-        sourceAccountName: configuredSourceName,
-        sourceCaption: post.caption ?? "",
-        sourcePostedAt: post.postedAt ?? undefined,
-        singleOccurrenceSource: exactSingleOccurrenceSource,
-      },
-    );
-    const sourceConflictFields = [
-      ...new Set(
-        sourceConflictPartition.material
-          .map((conflict) => normalizeString(conflict.field))
-          .filter(Boolean),
-      ),
-    ];
-    const timeEvidenceVerified = isVerifiedTimeEvidence({
+    const extractedTimeEvidenceVerified = isVerifiedTimeEvidence({
       evidence: variant.timeEvidence,
       resolvedStartTime: eventConsistency.sanitizedTime ?? null,
       post,
@@ -273,6 +254,72 @@ export function finalizeStructuredFactVariants({
       allowSessionClockList: extracted._extractionPolicyVersion === "event_quality_v1" &&
         usesSplitEventCandidates && ["arts & culture", "learning"].includes(eventType),
     });
+    const sourceConflictContext = buildPendingSourceConflictContext({
+      date,
+      title: variant.title,
+      venue: variant.venue,
+      time: extractedSafeTime,
+      artists: variant.artists,
+      sourceCaption: post.caption,
+      sourcePostedAt: post.postedAt,
+    }, {
+      extractionMode,
+      dateEvidenceVerified,
+      identityEvidenceVerified,
+      venueEvidenceVerified,
+      sourceAccountRole: sourceRole,
+      sourceAccountName: configuredSourceName,
+      time: extractedSafeTime,
+      timeEvidenceVerified: extractedTimeEvidenceVerified,
+      dateEvidenceText: variant.dateEvidence.exact_text,
+      dateEvidenceResolvedDate: variant.dateEvidence.resolved_date,
+      dateRangeExpanded: !usesSplitEventCandidates && candidateDates.length > 1,
+      splitEventTotal: eventVariants.length,
+      multiEventSplitDetected: eventVariants.length > 1,
+      rowSourceText: variant.splitSourceLine,
+      ...(carouselDateRow ? {
+        extractionCarouselContractVersion: extracted._carouselContractVersion,
+        carouselSourceRowIndexes: [0],
+        carouselSourceSlideIndexes: carouselDateRow.source_slide_indexes,
+        carouselSourceText: carouselDateRow.source_text,
+        carouselPosterEvidence: carouselDateRow.poster_evidence,
+        carouselTextEvidence: carouselDateRow.text_evidence,
+      } : {}),
+    }, extracted);
+    const sourceConflictPartition = partitionEventEvidenceSourceConflicts(
+      extracted.source_conflicts,
+      sourceConflictContext,
+    );
+    const verifiedStartEvidence = extractedTimeEvidenceVerified &&
+      variant.timeEvidence.status === "start_time_stated" &&
+      variant.timeEvidence.source !== "unknown" &&
+      sourceConflictPartition.benign.some(({ field }) => field === "time")
+      ? { source: variant.timeEvidence.source, evidenceText: normalizeString(variant.timeEvidence.exact_text) }
+      : null;
+    const timeConflicts = sourceConflictPartition.material.filter(({ field }) => field === "time");
+    const provisionalStart = usesStructuredEvidence && timeConflicts.length === 1
+      ? selectEarlierConflictingStartTime(timeConflicts[0], sourceConflictContext)
+      : null;
+    const safeTime = provisionalStart?.time ?? extractedSafeTime;
+    const semanticTimeProvenance: EventTimeProvenance = provisionalStart
+      ? {
+          status: "inferred",
+          source: provisionalStart.source,
+          evidenceText: provisionalStart.evidenceText,
+          confidence: 0,
+        }
+      : { ...extractedTimeProvenance, ...verifiedStartEvidence };
+    const timeEvidenceVerified = !provisionalStart && extractedTimeEvidenceVerified;
+    const artists = usesStructuredEvidence
+      ? combineEventArtistHandleAliases(variant.artists, sourceConflictPartition.benign, sourceConflictContext)
+      : variant.artists;
+    const sourceConflictFields = [
+      ...new Set(
+        sourceConflictPartition.material
+          .map((conflict) => normalizeString(conflict.field))
+          .filter(Boolean),
+      ),
+    ];
     const structuredEvidenceVerified =
       usesStructuredEvidence &&
       extracted.is_event === true &&
@@ -322,7 +369,7 @@ export function finalizeStructuredFactVariants({
         missingImage,
         allowMissingImage: allowMissingImageForModeration,
         titleUsedFallback: variant.titleUsedFallback,
-        missingTime: !eventConsistency.sanitizedTime,
+        missingTime: !safeTime || safeTime === TBD_EVENT_TIME,
         suspiciousYear: variant.dateNormalization.suspiciousYear,
         dateConfidence: variant.dateNormalization.confidence,
         hasDate: Boolean(date),
@@ -350,6 +397,7 @@ export function finalizeStructuredFactVariants({
       timeConfidence: semanticTimeProvenance.confidence,
       timeStatus: semanticTimeProvenance.status,
       timeEvidenceKind,
+      ...(provisionalStart ? { sourceConflictProvisionalStart: provisionalStart } : {}),
       dateEvidenceText: normalizeString(variant.dateEvidence.exact_text) || null,
       dateEvidenceSource: variant.dateEvidence.source,
       dateEvidenceIsRelative: variant.dateEvidence.is_relative,
@@ -384,7 +432,7 @@ export function finalizeStructuredFactVariants({
       dateSuspiciousYear: variant.dateNormalization.suspiciousYear,
       dateYearSelectionReason: variant.dateNormalization.yearSelectionReason,
       dateReason: variant.dateNormalization.reason ?? null,
-      artists: variant.artists,
+      artists,
       artistsWereSanitized: variant.artistsWereSanitized,
       description: variant.description,
       dateRangeExpanded: !usesSplitEventCandidates && candidateDates.length > 1,
@@ -432,7 +480,7 @@ export function finalizeStructuredFactVariants({
       sourceGroundingDateVerified: sourceGrounding.dateVerified,
       sourceGroundingIdentityVerified: sourceGrounding.identityVerified,
       sourceGroundingIdentityContextVerified: sourceGrounding.identityContextVerified,
-      sourceGroundingTimeVerified: sourceGrounding.timeVerified,
+      sourceGroundingTimeVerified: !provisionalStart && sourceGrounding.timeVerified,
       sourceGroundingArtistsVerified: sourceGrounding.artistsVerified,
       sourceGroundingRowVerified: sourceGrounding.rowVerified,
       moderationAutoApproved: moderationDecision.autoApproved,
@@ -441,7 +489,7 @@ export function finalizeStructuredFactVariants({
       moderationSignals: moderationDecision.signals,
       consistencyIssues,
       timeSanitized,
-      timeTbdApplied,
+      timeTbdApplied: !provisionalStart && timeTbdApplied,
       timeSanitizedFrom: timeSanitized
         ? normalizeString(variant.rawTime || variant.time) || null
         : null,
@@ -541,7 +589,7 @@ export function finalizeStructuredFactVariants({
     structuredResults.push({
       kind: "event",
       facts: {
-        artistClaims: variant.artists,
+        artistClaims: artists,
         evidence: [
           {
             exactText: normalizeString(variant.dateEvidence.exact_text) || undefined,
@@ -549,9 +597,9 @@ export function finalizeStructuredFactVariants({
             source: variant.dateEvidence.source,
           },
           {
-            exactText: normalizeString(variant.timeEvidence.exact_text) || undefined,
+            exactText: provisionalStart?.evidenceText || normalizeString(variant.timeEvidence.exact_text) || undefined,
             field: "start_time",
-            source: variant.timeEvidence.source,
+            source: provisionalStart?.source ?? variant.timeEvidence.source,
           },
           {
             exactText: variant.venueFromSourceAccountFallback ? undefined : variantRawVenue || undefined,
@@ -567,7 +615,7 @@ export function finalizeStructuredFactVariants({
         localDate: date,
         ...(sourceRowIdentity ? { sourceRowIdentity } : {}),
         ...(eventVariants.length > 1 ? { scheduleRole: "row" as const } : {}),
-        ...(verifiedSharedTime ? { sharedTime: true } : {}),
+        ...(verifiedSharedTime && !provisionalStart ? { sharedTime: true } : {}),
         ...(verifiedSharedVenue ? { sharedVenue: true } : {}),
         ...(hasExactStartTime
           ? { startTime: safeTime, timeRelation: "exact" as const }

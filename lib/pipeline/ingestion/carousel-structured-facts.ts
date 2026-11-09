@@ -225,7 +225,8 @@ function coalesceExplicitPartySlots(results: StructuredFactExtractionResult[]): 
         time: result.facts.startTime, venue: result.facts.venueClaim ?? "", artists: [...result.facts.artistClaims],
         sourceText: String(result.normalizedFields.splitSourceLine ?? ""), source: "poster",
         sourcePostIdentity: result.source.instagramPostId || result.source.instagramPostUrl,
-        timeEvidenceText: result.evidence.timeEvidenceText ?? "", timeEvidenceVerified: true,
+        timeEvidenceText: result.evidence.timeEvidenceText ?? "",
+        timeEvidenceVerified: result.normalizedFields.timeEvidenceVerified === true,
         timeEvidenceKind: result.evidence.timeEvidenceKind,
       })),
     });
@@ -281,8 +282,11 @@ export function produceCarouselStructuredFacts(options: {
       };
       let verifiedEvent = scoped.unboundTextEvidence
         ? holdUnverifiedCarouselEvidence(event, "carousel_unbound_text_evidence") : event;
-      if (!verifiedEvent.facts.artistClaims.every((artist) => scoped.artistEvidence.some((snippet) =>
-        artistIdentityAppearsInText(snippet.text, artist)))) {
+      if (!verifiedEvent.facts.artistClaims.every((artist) => {
+        const alias = /^(.+?) \((@[\p{L}\p{N}._-]+)\)$/u.exec(artist);
+        return (alias ? alias.slice(1) : [artist]).every((claim) =>
+          scoped.artistEvidence.some((snippet) => artistIdentityAppearsInText(snippet.text, claim)));
+      })) {
         verifiedEvent = holdUnverifiedCarouselEvidence(verifiedEvent, "carousel_unbilled_artist_evidence");
       }
       return verifiedEvent;

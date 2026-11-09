@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import "../convex/events.ts";
 import { extractEventDataFromInstagramPost, parseExtractedEventData } from "../lib/ai/extract-event-data.ts";
 import { parseCarouselMediaBinding } from "../lib/ai/carousel-media-contract.ts";
+import { getEffectiveEventEvidenceV2Conflicts } from "../lib/events/event-update-precondition.ts";
 import { bindSourceOccurrenceMetadata, prepareEventsForInsert } from "../lib/pipeline/run-instagram-ingestion.ts";
 
 const NOW = new Date("2026-10-01T12:00:00.000Z");
@@ -77,6 +78,55 @@ const complementary = prepare([row({ title: "Joint Party", artists: ["DJ One", "
   ] })]);
 assertApproved(complementary, 1);
 assert.deepEqual(events(complementary)[0].artists, ["DJ One", "DJ Two"], "A detailed lineup slide must complement its party cover.");
+
+const captionBill = "DJ @miladron performs at the residency on 17.10.2026.";
+const aliasConflict = prepare([
+  row({ title: "October Residency", artists: ["Mila Dron", "@miladron"],
+    sourceText: "17.10.2026 October Residency: DJ Mila Dron 22:00",
+    textEvidence: [{ source: "caption", text: captionBill }],
+    conflicts: [{ field: "artists", poster_value: "Mila Dron", caption_value: "@miladron",
+      reason: "The poster uses a name and the caption uses an Instagram handle." }] }),
+  row({ title: "Other Show", date: "2026-10-18", dateText: "18.10.2026", slide: 1 }),
+], post(captionBill));
+assertApproved(aliasConflict, 2);
+const aliasEvent = events(aliasConflict)[0];
+const aliasFields = JSON.parse(aliasEvent.normalizedFieldsJson);
+assert.deepEqual(aliasEvent.artists, ["Mila Dron (@miladron)"]);
+assert.deepEqual(aliasConflict.data.source_conflicts, [], "Carousel conflict evidence is scoped to its raw schedule entry.");
+assert.deepEqual(getEffectiveEventEvidenceV2Conflicts(aliasFields, aliasEvent), []);
+assert.equal(getEffectiveEventEvidenceV2Conflicts({
+  ...aliasFields, carouselSourceRowIndexes: [1],
+}, aliasEvent), null, "A different carousel row cannot supply the conflict proof.");
+
+const wednesdayCaption = "WEDNESDAY AT П45\nSaturday 11th November\n@itsrossv @alisalevic\nStart 8pm\nKralja Petra 45";
+const wednesdayRow = row({
+  title: "Wednesday", date: "2026-11-11", dateText: "11 NOV | Wednesday",
+  venue: "Kralja Petra 45", slide: 1, time: "", sourceText: "wednesday 11 NOV",
+  artists: ["@itsrossv", "@alisalevic"],
+  posterEvidence: [
+    { slide_index: 1, text: "wednesday 11 NOV | 21H" },
+    { slide_index: 1, text: "ROSSA ALISA" },
+    { slide_index: 1, text: "KRALJA PETRA 45 - 11000 BEOGRAD" },
+  ],
+  textEvidence: ["Saturday 11th November", "@itsrossv @alisalevic", "Start 8pm", "Kralja Petra 45"]
+    .map((text) => ({ source: "caption", text })),
+  conflicts: [
+    { field: "date", poster_value: "Wednesday 11 NOV", caption_value: "Saturday 11th November",
+      reason: "The weekdays differ for the same numerical date." },
+    { field: "time", poster_value: "21H", caption_value: "Start 8pm",
+      reason: "Poster and caption give different start times." },
+  ],
+});
+wednesdayRow.date_evidence.resolved_date = "";
+wednesdayRow.time_evidence = { status: "start_time_stated", exact_text: "21H", source: "poster", slide_index: 1 };
+const wednesday = prepare([wednesdayRow], { ...post(wednesdayCaption), postedAt: "2026-11-06T21:24:52Z" });
+const wednesdayEvent = events(wednesday)[0];
+assert.equal(wednesdayEvent.date, "2026-11-11");
+assert.equal(wednesdayEvent.time, "20:00");
+assert.equal(wednesdayEvent.timeSource, "caption");
+assert.equal(wednesdayEvent.timeStatus, "inferred");
+assert.deepEqual(wednesdayEvent.sourceConflictFields, ["time"]);
+assert.equal(wednesday.results[0].normalizedFields.timeEvidenceVerified, false);
 
 const offsiteVenue = prepare([row({ title: "Double Dose", venue: "UMAMI Gastrošor", sourceText: "17.10.2026 Double Dose 22:00",
   posterEvidence: [{ slide_index: 0, text: "17.10.2026 Double Dose 22:00" },

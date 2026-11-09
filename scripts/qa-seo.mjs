@@ -297,7 +297,11 @@ for (const proofOverride of [
 for (const timeOverride of [
   { timeStatus: "inferred" }, { timeStatus: undefined }, { timeSource: "model" },
   { timeEvidenceKind: "doors_open_only" }, { timeEvidenceText: " " }, { time: "21:00" },
+  { timeEvidenceText: "OD 20:30h" },
   { normalizedFieldsJson: JSON.stringify({ ...sourceProof, timeEvidenceVerified: false }) },
+  { normalizedFieldsJson: JSON.stringify({ ...sourceProof,
+    sourceConflictProvisionalStart: { time: "20:00", source: "caption", evidenceText: "20:00" },
+  }) },
 ]) {
   assert.deepEqual(confirmProof({ ...sourceProofEvent, ...timeOverride }), expectedCoreProof,
     "Unconfirmed time must not suppress a confirmed date or appear as a confirmed clock.");

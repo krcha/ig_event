@@ -13,8 +13,10 @@ import {
   titleContainsOnlyBilledArtists,
 } from "../lib/events/nightlife-lineup-coalescing.ts";
 import {
+  combineEventArtistHandleAliases,
   eventArtistHandleAliasMatches,
   eventEvidenceConflictIsBenign,
+  selectEarlierConflictingStartTime,
 } from "../lib/events/event-evidence-conflict-policy.ts";
 import {
   assertServiceUpdateEventPolicy,
@@ -1948,6 +1950,108 @@ function runSemanticNormalizationQa() {
       false,
       "Different showtime dates without a release marker remain material.",
     );
+  });
+
+  const novemberConflictContext = {
+    artists: [],
+    dateEvidenceVerified: true,
+    identityEvidenceVerified: true,
+    resolvedDate: "2026-11-12",
+    selectedTitle: "MASTER SHOW KARAOKE",
+    selectedTime: "21:00",
+    selectedVenue: "Zappa Bar",
+    singleOccurrenceSource: true,
+    sourceAccountName: "Zappa Bar",
+    sourceAccountRole: "venue",
+    sourceCaption: "MASTER SHOW KARAOKE\nČETVRTAK 12.novembar OD 20:30h\nShow kreće u 21h",
+    sourcePosterTexts: ["ON THURSDAYS AT 9 PM"],
+    timeEvidenceVerified: true,
+    venueEvidenceVerified: true,
+  };
+
+  runCase("Zappa arrival and performance are separate clocks", () => {
+    const conflict = {
+      field: "time", poster_value: "ON THURSDAYS AT 9 PM",
+      caption_value: "OD 20:30h; show kreće u 21h", reason: "Earlier arrival versus show start.",
+    };
+    assert.equal(eventEvidenceConflictIsBenign(conflict, novemberConflictContext), true);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...novemberConflictContext, selectedTime: "20:30" }), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...novemberConflictContext, sourcePosterTexts: ["ON THURSDAYS AT 8 PM"] }), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...novemberConflictContext, sourceCaption: "Početak u 20:30h" }), false);
+  });
+
+  runCase("choose the literal earlier provisional start for grounded differences up to three hours", () => {
+    const context = { ...novemberConflictContext, sourcePosterTexts: ["Show starts at 10 PM"], sourceCaption: "Početak u 19h" };
+    const conflict = { field: "time", poster_value: "10 PM", caption_value: "19h", reason: "Distinct advertised starts." };
+    assert.deepEqual(selectEarlierConflictingStartTime(conflict, context), { time: "19:00", source: "caption", evidenceText: "19h" });
+    assert.equal(eventEvidenceConflictIsBenign(conflict, context), false);
+    assert.deepEqual(selectEarlierConflictingStartTime({ ...conflict, poster_value: "20:00", caption_value: "22:00" }, {
+      ...context, sourcePosterTexts: ["Start 20:00"], sourceCaption: "Početak u 22:00",
+    }), { time: "20:00", source: "poster", evidenceText: "20:00" });
+    for (const sourceCaption of ["Ulaz od 19h", "Kraj u 19h", "Početak u 20h", "Početak u 19h UTC", "Početak u 19h; Start at 20:30"]) {
+      assert.equal(selectEarlierConflictingStartTime(conflict, { ...context, sourceCaption }), null);
+    }
+    assert.equal(selectEarlierConflictingStartTime({ ...conflict, caption_value: "18:59" }, { ...context, sourceCaption: "Početak u 18:59" }), null);
+    assert.equal(selectEarlierConflictingStartTime({ ...conflict, caption_value: "22h" }, { ...context, sourceCaption: "Početak u 22h" }), null);
+  });
+
+  runCase("Wednesday selects 20:00 provisionally without combining distinct theater showtimes or rooms", () => {
+    const conflict = { field: "time", poster_value: "21H", caption_value: "Start 8pm", reason: "Poster and caption give different start times." };
+    const context = { ...novemberConflictContext, resolvedDate: "2026-11-11", selectedTitle: "Wednesday", selectedVenue: "Kralja Petra 45",
+      sourcePosterTexts: ["WEDNESDAY 11 NOV 21H"],
+      sourceCaption: "WEDNESDAY AT П45\n\n📆 Saturday 11th November\n🎧 @itsrossv @alisalevic\n\n🏁 Start 8pm\n📞 Reservations +381652108888\n📍 Kralja Petra 45" };
+    assert.deepEqual(selectEarlierConflictingStartTime(conflict, context), { time: "20:00", source: "caption", evidenceText: "8pm" });
+    assert.equal(eventEvidenceConflictIsBenign(conflict, context), false);
+    assert.deepEqual(selectEarlierConflictingStartTime({ ...conflict, caption_value: "20:59" }, { ...context, sourceCaption: "Start 20:59" }),
+      { time: "20:59", source: "caption", evidenceText: "20:59" });
+    const theater = { ...context, selectedTitle: "Приватна прослава", selectedVenue: "Bitef teatar",
+      sourcePosterTexts: ["Приватна прослава — друга представа 21H"], sourceCaption: "Приватна прослава — прва представа, Start 8pm" };
+    assert.equal(selectEarlierConflictingStartTime(conflict, theater), null);
+    assert.equal(selectEarlierConflictingStartTime(conflict, { ...context, sourcePosterTexts: ["Black Room 21H"], sourceCaption: "Main Room, Start 8pm" }), null);
+  });
+
+  runCase("a Bitef sibling date typo does not hold an independently dated row", () => {
+    const row = "10.11. РАЊИВОСТ";
+    const context = { ...novemberConflictContext, resolvedDate: "2026-11-10", selectedTitle: "Рањивост",
+      singleOccurrenceSource: false, occurrenceSourceText: row, sourceCaption: "Novembar u Bitef teatru",
+      sourceWideScheduleConflicts: true, sourceScheduleRows: [row, "20.10. ЗАТВАРАЊЕ ЉУБАВИ", "21.10. ВРЕМЕ КАД СЕ СКУПЉА КАМЕЊЕ"] };
+    const conflict = { field: "date", poster_value: "20.10", caption_value: "Novembar", reason: "Sibling row disagrees with monthly program." };
+    assert.equal(eventEvidenceConflictIsBenign(conflict, context), true);
+    assert.equal(eventEvidenceConflictIsBenign({ ...conflict, poster_value: "10.10" }, context), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, sourceScheduleRows: [row] }), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, sourceWideScheduleConflicts: false }), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, identityEvidenceVerified: false }), false);
+  });
+
+  runCase("ŠTAB opening and explicitly daily viewing dates have different roles", () => {
+    const openingRow = "13. NOVEMBAR 2026. PETAK 19.00 — MOST.HUNGARY-SERBIA";
+    const viewingRow = "Izložba traje: 14–29. novembar 2026. Svakog dana od 12.00 do 20.00 h";
+    const context = { ...novemberConflictContext, resolvedDate: "2026-11-13", selectedTitle: "MOST.HUNGARY-SERBIA",
+      singleOccurrenceSource: false, occurrenceSourceText: openingRow,
+      sourceCaption: "MOST_HUNGARY-SERBIA\nSvečano otvaranje izložbe\nDatum: petak, 13. novembar 2026. godine, u 19.00 časova\nTrajanje izložbe: od 13. do 29. novembra 2026. godine",
+      sourceScheduleRows: [openingRow, viewingRow] };
+    const conflict = { field: "date", poster_value: "Exhibition 14–29 November 2026", caption_value: "Exhibition 13–29 November 2026", reason: "Exhibition start differs." };
+    assert.equal(eventEvidenceConflictIsBenign(conflict, context), true);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, resolvedDate: "2026-11-18", occurrenceSourceText: viewingRow }), true);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, resolvedDate: "2026-11-30", occurrenceSourceText: viewingRow }), false);
+    assert.equal(eventEvidenceConflictIsBenign(conflict, { ...context, sourceCaption: context.sourceCaption.replace("Svečano otvaranje izložbe", "Izložba") }), false);
+  });
+
+  runCase("ticket outlet and artist roles require affirmative source evidence", () => {
+    const venueConflict = { field: "venue", poster_value: "Drugstore", caption_value: "Dim", reason: "Physical event versus ticket outlet." };
+    const context = { ...novemberConflictContext, selectedTitle: "MRAK", selectedVenue: "Drugstore",
+      sourcePosterTexts: ["MRAK at Drugstore"], sourceCaption: "Karte se prodaju u Dimu." };
+    assert.equal(eventEvidenceConflictIsBenign(venueConflict, context), true);
+    assert.equal(eventEvidenceConflictIsBenign(venueConflict, { ...context, sourceCaption: "Događaj se održava u Dimu. Karte se prodaju u Dimu." }), false);
+
+    const artistConflict = { field: "artists", poster_value: "Vojkan Bećir", caption_value: "@vojislavzapravo", reason: "Name and artist tag." };
+    const artists = ["Vojkan Bećir", "@vojislavzapravo", "Drugi izvođač"];
+    const artistContext = { ...context, artists, sourcePosterTexts: ["Vojkan Bećir"], sourceCaption: "Nastupa Vojkan Bećir (@vojislavzapravo)." };
+    assert.deepEqual(combineEventArtistHandleAliases(artists, [artistConflict], artistContext), ["Vojkan Bećir (@vojislavzapravo)", "Drugi izvođač"]);
+    assert.equal(eventEvidenceConflictIsBenign(artistConflict, artistContext), true);
+    const ambiguous = { ...artistContext, sourceCaption: "Nastupaju Vojkan Bećir i @vojislavzapravo." };
+    assert.deepEqual(combineEventArtistHandleAliases(artists, [artistConflict], ambiguous), artists);
+    assert.equal(eventEvidenceConflictIsBenign(artistConflict, ambiguous), false);
   });
 
   runCase("promoter account cannot override a caption-grounded physical venue", () => {
@@ -4086,5 +4190,53 @@ try {
 }
 
 runSemanticNormalizationQa();
+
+{
+  const date = isoDateDaysFromNow(8);
+  const dateText = ddmmyyyy(date);
+  const title = "Master Show Karaoke";
+  const venue = "QA Semantic Venue";
+  const selectedImageUrl = "https://cdn.example.com/karaoke.jpg";
+  const makeKaraoke = ({ caption, posterTime, captionTime, selectedClock, selectedQuote }) => {
+    const post = makePost({ caption, postId: "qa-karaoke-time" });
+    const extracted = makeEventExtraction({
+      title, venue, date, caption, dateEvidenceText: dateText,
+      postUrl: post.instagramPostUrl,
+      time: selectedClock,
+      timeEvidence: { status: "start_time_stated", exact_text: selectedQuote, source: "caption" },
+      source_conflicts: [{
+        field: "time", poster_value: posterTime, caption_value: captionTime,
+        reason: "Different time wording in the poster and caption.",
+      }],
+    });
+    extracted.field_confirmation.start_time = confirmation(posterTime, "poster");
+    return assertSingleOk(prepare(post, extracted, { selectedImageUrl }), "karaoke time policy");
+  };
+  const conflictingStarts = makeKaraoke({
+    caption: `${title} at ${venue}, ${dateText}\nShow starts at 23:00`,
+    posterTime: "Show starts at 20:00",
+    captionTime: "Show starts at 23:00",
+    selectedClock: "23:00", selectedQuote: "Show starts at 23:00",
+  });
+  assert.equal(conflictingStarts.event.time, "20:00");
+  assert.equal(conflictingStarts.event.timeSource, "poster");
+  assert.equal(conflictingStarts.event.timeStatus, "inferred");
+  assert.equal(conflictingStarts.normalizedFields.timeEvidenceVerified, false);
+  assert.deepEqual(conflictingStarts.event.sourceConflictFields, ["time"]);
+  assert.equal(conflictingStarts.event.status, "pending");
+  assert.equal(hasEventEvidenceV2AutoApproval(conflictingStarts.event.normalizedFieldsJson, conflictingStarts.event), false);
+
+  const karaokeStartsAtNine = makeKaraoke({
+    caption: `${title} at ${venue}, ${dateText} OD 20:30h\nshow kreće u 21h`,
+    posterTime: "ON THURSDAYS AT 9 PM",
+    captionTime: "OD 20:30h; show kreće u 21h",
+    selectedClock: "21:00", selectedQuote: "show kreće u 21h",
+  });
+  assert.equal(karaokeStartsAtNine.event.time, "21:00");
+  assert.equal(karaokeStartsAtNine.event.timeStatus, "confirmed");
+  assert.equal(karaokeStartsAtNine.event.timeEvidenceText, "show kreće u 21h");
+  assert.deepEqual(karaokeStartsAtNine.event.sourceConflictFields, []);
+  assert.equal(hasEventEvidenceV2AutoApproval(karaokeStartsAtNine.event.normalizedFieldsJson, karaokeStartsAtNine.event), true);
+}
 
 console.log("Event extraction contract QA passed.");
