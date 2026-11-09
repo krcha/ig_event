@@ -441,6 +441,7 @@ async function verifyNamedListing(quote, genreUrl = namedListingUrl) {
     fetch: async (_url, request) => {
       const body = JSON.parse(request.body);
       assert.ok(body.max_tool_calls <= 3);
+      assert.equal(body.reasoning.effort, "low");
       const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
       assert.equal(rows[0].listingTitle, namedListing.eventTitle);
       return Response.json({ status: "completed", output: [

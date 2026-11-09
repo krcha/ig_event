@@ -103,8 +103,8 @@ const SYSTEM_PROMPT = [
 const THOROUGH_PROMPT = "Use two independent search passes per artist. First search the exact billed act for a profile and explicit style, then independently search the name or handle with the supplied city or venue, including earlier local lineups. If a handle search is sparse, also search the display spelling suggested by the title without treating the title as identity proof. Examine the second pass even if the first results look conclusive.";
 const STANDARD_PROMPT = "For named acts, search the exact billed act name or handle first, with artist, DJ or band and genre terms; use dates and venues to disambiguate as needed.";
 const ADAPTIVE_PROMPT = [
-  "Start with one combined search using the event title, venue, full date, and billed names or handles. Reuse evidence across rows for the same occurrence. When a confirmed start time is provided, use it to distinguish multiple performances; distinguish door times from show starts.",
-  "When listingTitle is supplied, you may return listing independently of the billed artist identity. Its identity quote must contain the exact event title, venue, and full date; its genre quotes must describe this event's advertised music and come from that same page. A translated venue name must refer to the exact venue. Return listing null in all other cases.",
+  "Start with one query per distinct occurrence combining its event title, venue, full date and billed names or handles. Reuse results for the same occurrence. Do not combine unrelated events into a query. When a confirmed start time is provided, distinguish it from doors or another show.",
+  "When listingTitle is supplied, return listing if it proves the event genre. Its identity quote must contain the exact event title, venue, and full date; the genre quotes must describe the advertised music on the same page. In that case do not duplicate the claims in main identity and genres. Otherwise return listing null and give independently verified named-act claims. A translated venue name must refer to the exact venue.",
   "For discoveryOnly rows the billed name is the event title, not a performer; ignore trustedFormat. Use one targeted search for that exact occurrence and inspect its announcement when available. Return main identity null, genres empty and status unverified. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) that explicitly describe activities the visitor can attend, such as an exhibition, screening, concert, workshop, tasting or talk. Never infer activity from the venue, date or artist profile. For all other rows leave discoveryEvidence empty.",
   "Stop once an exact listing establishes the genre, or the billed artist's identity and typical style are sufficiently verified. When the first query only finds identity or ambiguous names, make one focused second query for the missing evidence. Do not use venue profiles, adjoining events, venue-wide calendars or a different edition as proof of an event genre.",
 ].join("\n");
@@ -533,9 +533,11 @@ export async function researchPerformerGenresBatch(
   const model = options.model ?? getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
   const extraInstructions = options.adaptive ? ADAPTIVE_PROMPT : options.thorough ? THOROUGH_PROMPT : STANDARD_PROMPT;
   const body = JSON.stringify({
-    model, store: false, max_output_tokens: options.adaptive ? Math.min(4500, 800 + 850 * rows.length) : 5000,
+    model, store: false, max_output_tokens: options.adaptive ? Math.min(5000, 3000 + 500 * rows.length) : 5000,
     max_tool_calls: options.adaptive ? Math.min(8, rows.length * 3) : options.thorough ? Math.min(12, rows.length * 6) : rows.length * 3,
-    reasoning: { effort: options.thorough || options.adaptive ? "medium" : "low" },
+    // The live tool can consume the entire structured-output budget on hidden
+    // reasoning at medium effort; keep evidence requirements in the validator.
+    reasoning: { effort: options.thorough ? "medium" : "low" },
     tools: [{
       type: "web_search", search_context_size: "medium", external_web_access: true,
       filters: { ...(domains.length ? { allowed_domains: domains } : {}), blocked_domains: BLOCKED_DOMAINS },
