@@ -781,6 +781,11 @@ try {
   setRefreshEvent("single", "Koncert Selke", "live music");
   setRefreshEvent("estimate", "Koncert Selke", "live music");
   setRefreshEvent("legacy-sibling", "DJ set uz Selku", "nightlife");
+  setRefreshEvent("nonmusic", "JAZZ VEČE", "live music", {
+    artists: ["Billed Musician"], description: "Jazz uz razgovor i hranu.",
+    sourceCaption: "Još jedan lep ponedeljak za jazaa, razgovor i klopu.",
+    normalizedFieldsJson: JSON.stringify({ rowSourceText: "JAZZ VEČE; 9. NOVEMBAR; BILLED MUSICIAN" }),
+  });
   setRefreshEvent("ambiguous", "Radionica keramike", "learning");
   setRefreshEvent("no-post", "Radionica keramike", "learning");
   setRefreshEvent("unbilled", "Saturday Night", "event");
@@ -790,6 +795,8 @@ try {
   setRefreshLabel("single", { ...announced, formats: [] }, '{"originalAudit":"keep"}');
   setRefreshLabel("estimate", { ...party, formats: [] }, '{"estimatedGenres":["techno"],"estimateModel":"original-model"}');
   setRefreshLabel("legacy-sibling", { ...concert, formats: [] });
+  setRefreshLabel("nonmusic", { primaryCategory: "talk", categories: ["talk"], genres: [], formats: [] },
+    '{"evidence":[{"kind":"category","label":"talk","source":"description","quote":"razgovor"}]}');
   setRefreshLabel("ambiguous", announced);
   setRefreshEvent("future", "Razgovor sa autorima filma", "arts & culture");
   setRefreshLabel("future", { primaryCategory: "culture", categories: ["culture", "talk"], formats: ["screening"], genres: [] });
@@ -806,16 +813,18 @@ try {
   assert.equal(preview.fromDate, refreshDate);
   assert.equal(preview.counts.needsReview, 2, "Leave known genres and removals of existing formats or activities for review.");
   assert.ok(preview.counts.inconclusive >= 1);
-  assert.deepEqual(preview.proposals.map(({ eventId }) => eventId).sort(), ["estimate", "legacy-sibling", "no-post", "single"]);
+  assert.deepEqual(preview.proposals.map(({ eventId }) => eventId).sort(), ["estimate", "legacy-sibling", "no-post", "nonmusic", "single"]);
   assert.equal(refresh.labels.has("no-post"), false, "A preview cannot change labels.");
   const singleProposal = preview.proposals.find(({ eventId }) => eventId === "single");
+  const jazzProposal = preview.proposals.find(({ eventId }) => eventId === "nonmusic");
+  assert.ok(jazzProposal.evidence.some(({ kind, label, source, quote }) => kind === "genre" && label === "jazz-blues" && source === "title" && jazzProposal.title.includes(quote)));
   assert.equal(singleProposal.before.primaryCategory, "party");
   assert.equal(singleProposal.after.primaryCategory, "live");
   assert.ok(singleProposal.evidence.some(({ source, quote }) => source === "title" && singleProposal.title.includes(quote)));
   assert.deepEqual(await applyRefresh([{ ...singleProposal, expectedUpdatedAt: 99 },
     { ...preview.proposals.find(({ eventId }) => eventId === "estimate"), before: concert }]),
   { written: 0, unchanged: 0, stale: 2, needsReview: 0 }, "A changed event revision or conflicting original taxonomy fences the write.");
-  assert.deepEqual(await applyRefresh(preview.proposals), { written: 4, unchanged: 0, stale: 0, needsReview: 0 });
+  assert.deepEqual(await applyRefresh(preview.proposals), { written: 5, unchanged: 0, stale: 0, needsReview: 0 });
   const refreshed = (eventId) => loadPublicEventDiscoveryLabels(refresh.dailyCtx, refresh.events.get(eventId), true);
   assert.deepEqual((await refreshed("single")).eventTaxonomy.genres, ["techno"]);
   assert.equal(JSON.parse(refresh.labels.get("single").auditJson).originalAudit, "keep");
@@ -823,7 +832,8 @@ try {
   assert.deepEqual((await refreshed("legacy-sibling")).performerGenreResearch.sources, [{ url: eventUrl, performer: "Selka" }]);
   assert.equal(refresh.webRows.get("legacy-sibling"), preservedWeb);
   assert.equal((await refreshed("no-post")).eventTaxonomy.primaryCategory, "participate");
-  assert.deepEqual(await applyRefresh(preview.proposals), { written: 0, unchanged: 4, stale: 0, needsReview: 0 });
+  assert.deepEqual((await refreshed("nonmusic")).eventTaxonomy, { primaryCategory: "live", categories: ["live"], formats: ["live-performance"], genres: ["jazz-blues"] });
+  assert.deepEqual(await applyRefresh(preview.proposals), { written: 0, unchanged: 5, stale: 0, needsReview: 0 });
 } finally {
   if (adminBeforeFixture === undefined) delete process.env.ADMIN_CLERK_USER_IDS;
   else process.env.ADMIN_CLERK_USER_IDS = adminBeforeFixture;

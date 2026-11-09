@@ -699,7 +699,20 @@ async function upcomingDiscoveryChange(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
       return { outcome: "needsReview" } as const;
     }
   }
-  return { outcome: "proposed", before, after, evidence, current, label, currentLabel } as const;
+  // A former talk-only label with no program format can be corrected in one
+  // write when the title explicitly bills live music and names its genre.
+  // Other category refreshes continue to preserve genres as recorded.
+  const titleGenreEvidence = before.primaryCategory === "talk" && before.categories.length === 1 &&
+    !before.formats.length && !current.genres.length && classified.titleCategory === "live" &&
+    !after.categories.includes("talk")
+    ? classified.evidence.filter((claim) => claim.kind === "genre" && claim.source === "title" &&
+      claim.quote.trim() && candidate.title.includes(claim.quote))
+    : [];
+  const genres = titleGenreEvidence.length
+    ? classified.taxonomy.genres.filter((genre) => titleGenreEvidence.some(({ label }) => label === genre))
+    : current.genres;
+  const proposalEvidence = [...evidence, ...titleGenreEvidence];
+  return { outcome: "proposed", before, after, evidence: proposalEvidence, genres, label, currentLabel } as const;
 }
 
 export const listUpcomingDiscoveryRefresh = query({
@@ -761,7 +774,7 @@ export const refreshUpcomingDiscoveryBatch = mutation({
       const estimate = readEstimatedGenres(auditJson);
       const data = { eventId, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION,
         model: change.currentLabel?.model ?? "explicit-category-refresh-v1",
-        taxonomy: { ...after, genres: change.current.genres },
+        taxonomy: { ...after, genres: change.genres },
         auditJson: serializeGenreAudit({ ...readEventEvidenceRecord(auditJson), categoryRefresh: { evidence: change.evidence } },
           estimate.length ? estimate : undefined) };
       if (change.label) await ctx.db.replace(change.label._id, data);

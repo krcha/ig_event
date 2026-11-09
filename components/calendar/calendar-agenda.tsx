@@ -15,12 +15,20 @@ import { SaveEventButton } from "@/components/events/save-event-button";
 import { CALENDAR_TIME_BANDS } from "@/lib/events/calendar-time-band-definitions";
 import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/lib/events/agenda-sort-options";
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
-import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, getEventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, getEventDiscoveryTaxonomy, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
 import styles from "./mobile-events-home.module.css";
 
 const categoryLabels = new Map(DISCOVERY_CATEGORIES.map(({ key, label }) => [key, label]));
 const formatLabels = new Map(DISCOVERY_FORMATS.map(({ key, label }) => [key, label]));
 const genreLabels = new Map(MUSIC_GENRES.map(({ key, label }) => [key, label]));
+const categoryTones = {
+  party: "club", live: "live", culture: "culture", exhibition: "culture",
+  participate: "event", food: "event", talk: "culture", other: "event",
+} as const satisfies Record<DiscoveryCategory, CalendarAgendaEvent["category"]>;
+const musicFormats = {
+  live: new Set<DiscoveryFormat>(["live-performance", "concert", "tribute"]),
+  party: new Set<DiscoveryFormat>(["dj-set", "party"]),
+};
 
 type AgendaItem = { event: CalendarAgendaEvent; taxonomy: ReturnType<typeof getEventDiscoveryTaxonomy> };
 
@@ -60,16 +68,23 @@ function PerformerGenreProvenance({ genres, research }: {
 }
 
 function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean) {
-  const categoryLabel = taxonomy.primaryCategory === "party" ? "Žurke"
-    : taxonomy.primaryCategory === "live" ? "Live/Svirke"
-      : categoryLabels.get(taxonomy.primaryCategory);
-  const formatLabel = taxonomy.formats[0] ? formatLabels.get(taxonomy.formats[0]) : undefined;
+  const { primaryCategory, formats } = taxonomy;
+  const categoryLabel = primaryCategory === "party" ? "Žurke"
+    : primaryCategory === "live" ? "Live/Svirke"
+      : categoryLabels.get(primaryCategory);
+  const format = primaryCategory === "live" || primaryCategory === "party"
+    ? formats.find(key => musicFormats[primaryCategory].has(key))
+    : formats[0];
+  const formatLabel = format ? formatLabels.get(format) : undefined;
+  const primaryGenre = event.performerGenreResearch ? undefined : taxonomy.genres[0];
   const normalizedFormat = formatLabel?.toLowerCase();
   const secondaryTags = normalizedFormat ? event.tags.filter(tag => tag.trim().toLowerCase() !== normalizedFormat) : event.tags;
   const known = Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown";
-  const venueHours = !known && event.presentation.kind === "venue_hours";
-  const timeDescription = venueHours
-    ? `Radno vreme mesta: ${event.presentation.label}`
+  const venueHours = !known && event.presentation.kind === "venue_hours"
+    ? event.presentation.label === "Open 24 hours" ? "24 h" : event.presentation.label
+    : null;
+  const timeDescription = !known
+    ? calendarBandLabels["time-not-announced"]
     : event.presentation.inferredEnd
       ? `Najavljeni početak: ${event.timeParts.startLabel}. Pretpostavljeni završetak prema zatvaranju mesta: ${event.timeParts.endLabel}.`
       : event.presentation.label;
@@ -80,30 +95,22 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     data-event-time={event.displayTimeLabel ?? event.time} data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}>
     <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}>
       <LocalizedElement as="span" className={styles.eventTime} title={timeDescription} aria-label={timeDescription}
-        data-time-source={venueHours ? "venue_hours" : known ? "event" : "unknown"}>
-        {venueHours ? <>
-          {event.presentation.label.split(", ").map(window => {
-            const [start, end] = window.split("–");
-            return <span className={styles.venueHoursWindow} key={window}>
-              <span>{window === "Open 24 hours" ? "24 h" : start}</span>
-              {end ? <small>{end}</small> : null}
-            </span>;
-          })}
-        </> : <>
-          <span>{known ? event.timeParts.startLabel || "—" : "—"}</span>
-          {known && event.timeParts.endLabel ? <small data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}>{event.timeParts.endLabel}</small> : null}
-        </>}
+        data-time-source={known ? "event" : "unknown"}>
+        <span>{known ? event.timeParts.startLabel : "—"}</span>
+        {known && event.timeParts.endLabel ? <small data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}>{event.timeParts.endLabel}</small> : null}
       </LocalizedElement>
       <div className={styles.eventInfo}>
         <h3 className={styles.eventTitle}>{event.title}</h3>
         {event.venueId ? <Link className={styles.venueName} href={`/venues/${event.venueId}`} prefetch={false}>{event.venue}</Link> : <p className={styles.venueName}>{event.venue}</p>}
         {event.sessionLabel ? <span className={styles.session} data-event-session="true"><PublicText text={event.sessionLabel} /></span> : null}
         <div className={styles.rowMeta}>
-          <span className={styles.categoryLabel} data-category-tone={event.category}><span aria-hidden="true" /><PublicText text={categoryLabel} />
+          <span className={styles.categoryLabel} data-category-tone={categoryTones[primaryCategory]}><span aria-hidden="true" /><PublicText text={categoryLabel} />
             {formatLabel ? <> · <PublicText text={formatLabel} /></> : null}
           </span>
+          {primaryGenre ? <span className={styles.mobileGenre} data-calendar-genre-label={primaryGenre}><PublicText text={genreLabels.get(primaryGenre)} /></span> : null}
           <EventMetaRow event={event} presentation={{ category: event.category, tags: secondaryTags }} />
         </div>
+        {venueHours ? <p className={styles.venueHours} data-time-source="venue_hours"><PublicText text={`Radno vreme mesta: ${venueHours}`} /></p> : null}
         {event.performerGenreResearch ? <PerformerGenreProvenance genres={taxonomy.genres} research={event.performerGenreResearch} /> : null}
         <OpenNowStatus eventId={event._id} state={event.openNowState} />
       </div>

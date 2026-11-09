@@ -575,7 +575,7 @@ assert.ok(calendarSource.includes("resolveEventTimePresentation"));
 assert.ok(detailSource.includes("resolveEventTimePresentation"));
 const agendaRowSource = readFileSync("components/calendar/calendar-agenda.tsx", "utf8");
 assert.ok(agendaRowSource.includes('Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown"'), "Calendar rows require an announced event start; venue hours and unknown times cannot become a start.");
-assert.ok(agendaRowSource.includes('known ? event.timeParts.startLabel || "—" : "—"'), "Unannounced starts stay unspecified in compact rows.");
+assert.ok(agendaRowSource.includes('data-time-source={known ? "event" : "unknown"}'), "Unannounced starts are marked separately from venue hours in compact rows.");
 assert.ok(agendaRowSource.includes('data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}'), "Compact rows retain provenance when displaying the venue closing as an inferred event end.");
 assert.ok(agendaRowSource.includes('Pretpostavljeni završetak prema zatvaranju mesta'), "The time description identifies borrowed closing hours as an assumption.");
 assert.ok(detailSource.includes('eventTime.kind === "venue_hours" ? "font-normal"'), "Detail opening-hour fallbacks use regular weight.");

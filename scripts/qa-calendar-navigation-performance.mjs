@@ -137,23 +137,29 @@ assert.equal(events[0].description, "For ages 5-8. Art workshop.", "Compact proj
   });
   const tree = CalendarAgenda({ events: compact, openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
   const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
+  function row(id) {
+    return rows.find(row => row.props["data-calendar-event-id"] === id);
+  }
   function timeBlock(id) {
-    return nodes(rows.find(row => row.props["data-calendar-event-id"] === id), node => node.props?.["data-time-source"])[0];
+    return nodes(row(id), node => ["event", "unknown"].includes(node.props?.["data-time-source"]))[0];
   }
   function text(tree) {
     if (Array.isArray(tree)) return tree.map(text).join("");
     if (tree && typeof tree === "object") return text(tree.props?.children);
     return typeof tree === "string" ? tree : "";
   }
-  assert.equal(timeBlock("hours").props["data-time-source"], "venue_hours");
-  assert.equal(timeBlock("hours").props["aria-label"], "Radno vreme mesta: 20:00–02:00");
-  assert.equal(text(timeBlock("hours")), "20:0002:00");
-  assert.equal(text(timeBlock("split")), "10:0018:0020:0002:00");
-  assert.equal(text(timeBlock("all-day")), "24 h");
-  for (const id of ["missing-hours", "different-weekday"]) {
+  function venueHours(id) {
+    return text(nodes(row(id), node => node.props?.["data-time-source"] === "venue_hours"));
+  }
+  assert.equal(timeBlock("hours").props["aria-label"], "Vreme nije najavljeno");
+  assert.equal(venueHours("hours"), "Radno vreme mesta: 20:00–02:00");
+  assert.equal(venueHours("split"), "Radno vreme mesta: 10:00–18:00, 20:00–02:00");
+  assert.equal(venueHours("all-day"), "Radno vreme mesta: 24 h");
+  for (const id of ["hours", "split", "all-day", "missing-hours", "different-weekday"]) {
     assert.equal(timeBlock(id).props["data-time-source"], "unknown");
     assert.equal(text(timeBlock(id)), "—");
   }
+  for (const id of ["missing-hours", "different-weekday", "announced", "start-only"]) assert.equal(venueHours(id), "");
   assert.equal(timeBlock("announced").props["data-time-source"], "event");
   assert.equal(text(timeBlock("announced")), "21:0023:00");
   assert.equal(text(timeBlock("start-only")), "21:0002:00");
@@ -229,11 +235,11 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   });
   const hybrid = {
     ...projected[1], band: "evening",
-    eventTaxonomy: { primaryCategory: "party", categories: ["party", "live"], genres: ["house", "techno"], formats: ["dj-set", "concert"] },
+    eventTaxonomy: { primaryCategory: "party", categories: ["party", "live"], genres: ["house", "techno"], formats: ["concert", "dj-set"] },
   };
   const jazz = {
-    ...projected[2], band: "evening",
-    eventTaxonomy: { primaryCategory: "live", categories: ["live"], genres: ["jazz-blues"], formats: ["concert"] },
+    ...projected[2], band: "evening", category: "culture",
+    eventTaxonomy: { primaryCategory: "live", categories: ["live", "talk"], genres: ["jazz-blues"], formats: ["talk", "concert"] },
   };
   const late = {
     ...projected[3], band: "night",
@@ -251,8 +257,10 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   const render = (query) => {
     discoveryParams = new URLSearchParams(query);
     const tree = CalendarAgenda({ events: [hybrid, jazz, late, legacy, hybrid, standUp, film], openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+    const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
     return {
-      ids: nodes(tree, node => node.props?.["data-calendar-event-id"]).map(node => node.props["data-calendar-event-id"]),
+      ids: rows.map(node => node.props["data-calendar-event-id"]),
+      row: id => rows.find(node => node.props["data-calendar-event-id"] === id),
       facets: nodes(tree, node => node.type === "CalendarDiscoveryFilters")[0].props,
       count: nodes(tree, node => node.type === "PublicEventCount")[0].props.count,
     };
@@ -262,6 +270,12 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   assert.equal(categoriesOnly.facets.categoryCounts.get("party"), 3);
   assert.equal(categoriesOnly.facets.categoryCounts.get("live"), 2);
   assert.equal(categoriesOnly.facets.genreCounts.get("electronic"), 2, "The electronic parent genre counts each matching event once.");
+  const jazzCategory = nodes(categoriesOnly.row(jazz._id), node => node.props?.["data-category-tone"])[0];
+  assert.equal(jazzCategory.props["data-category-tone"], "live");
+  assert.match(JSON.stringify(jazzCategory.props.children), /Koncert/);
+  assert.doesNotMatch(JSON.stringify(jazzCategory.props.children), /Razgovor/);
+  assert.equal(nodes(categoriesOnly.row(jazz._id), node => node.props?.["data-calendar-genre-label"] === "jazz-blues")[0].props.children, "Džez i bluz");
+  assert.match(JSON.stringify(nodes(categoriesOnly.row(hybrid._id), node => node.props?.["data-category-tone"])[0].props.children), /DJ set/);
   const filtered = render("category=party,live&genre=electronic&time=evening");
   assert.deepEqual(filtered.ids, [hybrid._id], "Category choices are OR, with verified genre and time applied as AND.");
   assert.equal(filtered.count, 1);

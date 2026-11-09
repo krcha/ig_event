@@ -153,14 +153,16 @@ export async function resolveEventGenresBatch(
     let row = modelRow?.taxonomy ? modelRow : local ? { ...local, credits: [], discardedClaims: 0 } : modelRow;
     if (!row) throw new Error("Missing event genre classification.");
     if (!event.currentTaxonomy && local && local.taxonomy.categories.length > 1 && modelRow?.taxonomy) {
-      const primaryCategory = modelRow.taxonomy.primaryCategory === "other" ? local.taxonomy.primaryCategory : modelRow.taxonomy.primaryCategory;
+      const primaryCategory = local.titleCategory ?? (modelRow.taxonomy.primaryCategory === "other"
+        ? local.taxonomy.primaryCategory : modelRow.taxonomy.primaryCategory);
       const categories = [...new Set([primaryCategory, ...local.taxonomy.categories, ...modelRow.taxonomy.categories])]
         .filter((category) => category !== "other").slice(0, 3);
       const formats = [...new Set([...local.taxonomy.formats, ...modelRow.taxonomy.formats])];
-      const evidence = [...local.evidence.filter((claim) => claim.kind !== "genre"), ...modelRow.evidence]
+      const genres = modelRow.taxonomy.genres.length ? modelRow.taxonomy.genres : local.taxonomy.genres;
+      const evidence = [...local.evidence.filter((claim) => claim.kind !== "genre" || !modelRow.taxonomy?.genres.length), ...modelRow.evidence]
         .filter((claim, index, all) => (claim.kind !== "category" || categories.some((category) => category === claim.label)) &&
           all.findIndex((item) => item.kind === claim.kind && item.label === claim.label) === index);
-      row = { ...modelRow, evidence, taxonomy: { ...modelRow.taxonomy, primaryCategory, categories, formats } };
+      row = { ...modelRow, evidence, taxonomy: { primaryCategory, categories, formats, genres } };
     }
     const excludedGenres = getExcludedDiscoveryGenres(event);
     const directGenres = row.taxonomy?.genres.filter((genre) => !excludedGenres.has(genre)) ?? [];

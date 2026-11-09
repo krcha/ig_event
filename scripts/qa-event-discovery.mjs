@@ -219,6 +219,55 @@ const screeningAndTalk = classifyExplicitEventDiscovery({ title: "Thursday Progr
 assert.deepEqual(screeningAndTalk.taxonomy.categories, ["culture", "talk"]);
 assert.deepEqual(screeningAndTalk.taxonomy.formats, ["screening", "talk"]);
 assert.equal(screeningAndTalk.complete, false, "Both advertised activities survive for the ambiguous program path.");
+const jazzEvening = {
+  key: "jazz-evening", expectedUpdatedAt: 42, date: "2026-11-09", title: "JAZZ VEČE", eventType: "live music",
+  artists: ["DJino Maljorović"], venue: "Telma Bar&Restaurant",
+  occurrenceText: "JAZZ VEČE; 9. NOVEMBAR; DJINO MALJOROVIĆ",
+  description: "Jazz uz razgovor i hranu.", sourceCaption: "Još jedan lep ponedeljak za jazaa, razgovor i klopu. 👌🍸🎷",
+};
+const jazzTaxonomy = { primaryCategory: "live", categories: ["live"], formats: ["live-performance"], genres: ["jazz-blues"] };
+const explicitJazzEvening = classifyExplicitEventDiscovery(jazzEvening);
+assert.deepEqual(explicitJazzEvening?.taxonomy, jazzTaxonomy);
+assert.equal(explicitJazzEvening?.complete, true);
+assert.equal(explicitJazzEvening?.titleCategory, "live");
+assert.ok(explicitJazzEvening?.evidence.some(({ kind, label, source, quote }) =>
+  kind === "genre" && label === "jazz-blues" && source === "title" && quote === "JAZZ VEČE"));
+const locallyResolvedJazz = await resolveEventGenresBatch([jazzEvening], {
+  ...options, fetch: () => assert.fail("Explicit jazz billing should need no provider request."),
+});
+assert.deepEqual(locallyResolvedJazz.results[0].taxonomy, jazzTaxonomy);
+const modelJazz = await classifyEventDiscoveryBatch([jazzEvening], { ...options, fetch: async () => mockResponse([
+  row(0, {
+    p: claim("talk", "description", "razgovor"), c: [claim("live", "title", "JAZZ VEČE")],
+    f: [claim("talk", "description", "razgovor"), claim("live-performance", "title", "JAZZ VEČE")],
+    g: [claim("jazz-blues", "title", "JAZZ VEČE")],
+  }),
+]) });
+assert.deepEqual(modelJazz.results[0].taxonomy, jazzTaxonomy, "Casual conversation in the description cannot prove a talk.");
+assert.equal(modelJazz.results[0].discardedClaims, 2);
+const jazzDj = classifyExplicitEventDiscovery({ title: "Džez veče", sourceCaption: "DJ set uz džez i bluz." });
+assert.deepEqual(jazzDj?.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: ["jazz-blues"] });
+const jazzQuiz = classifyExplicitEventDiscovery({ title: "Jazz veče", sourceCaption: "Kviz o istoriji džeza." });
+assert.deepEqual(jazzQuiz?.taxonomy, { primaryCategory: "participate", categories: ["participate"], formats: ["quiz"], genres: [] });
+const jazzFilm = classifyExplicitEventDiscovery({ title: "Jazz veče", sourceCaption: "Projekcija filma o džez muzici." });
+assert.deepEqual(jazzFilm?.taxonomy, { primaryCategory: "culture", categories: ["culture"], formats: ["screening"], genres: [] });
+assert.equal(classifyExplicitEventDiscovery({ title: "Jazz veče", sourceCaption: "Slušamo jazz plejlistu." }), null);
+for (const title of ["Razgovor povodom knjige", "Разговор о менталној преоптерећености", "Panel: Sećanje na ljubav tokom Holokausta"]) {
+  assert.equal(classifyExplicitEventDiscovery({ title })?.taxonomy.primaryCategory, "talk");
+}
+const panelTitle = "Panel: Sećanje na ljubav tokom Holokausta";
+const modelPanel = await classifyEventDiscoveryBatch([{ key: "panel", title: panelTitle }], { ...options, fetch: async () => mockResponse([
+  row(0, { p: claim("talk", "title", panelTitle), f: [claim("talk", "title", panelTitle)] }),
+]) });
+assert.equal(modelPanel.results[0].taxonomy?.primaryCategory, "talk");
+assert.deepEqual(modelPanel.results[0].taxonomy?.formats, ["talk"]);
+const jazzWithPanel = { ...jazzEvening, title: "Jazz koncert", sourceCaption: "Panel diskusija o istoriji džeza." };
+const mixedJazz = await resolveEventGenresBatch([jazzWithPanel], { ...options, fetch: async () => mockResponse([
+  row(0, { p: claim("talk", "sourceCaption", "Panel diskusija"), f: [claim("talk", "sourceCaption", "Panel diskusija")] }),
+]) });
+assert.deepEqual(mixedJazz.results[0].taxonomy, {
+  primaryCategory: "live", categories: ["live", "talk"], formats: ["talk", "concert"], genres: ["jazz-blues"],
+}, "The advertised title determines the primary category while the separately announced panel remains available.");
 assert.equal(classifyExplicitEventDiscovery({ title: "Večera i DJ set uz house i techno" }).complete, false, "A mixed program needs the model.");
 assert.deepEqual(classifyExplicitEventDiscovery({ title: "Night", sourceCaption: "Ди-џеј пушта хаус, техно и драм ен бејс." }).taxonomy.genres,
   ["house", "techno", "drum-and-bass"]);

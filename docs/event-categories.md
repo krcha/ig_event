@@ -32,7 +32,10 @@ Explicit format evidence in the event title takes priority over an old coarse
 event type. A rock concert in a club is `live`; a rock DJ party is `club`; a
 creative workshop at a cultural centre is `event`. A venue's category alone
 does not establish the event's format. A genre alone does not prove that music
-will be performed live. When the title does not establish a format, the event's
+will be performed live. A named act on a jazz evening supports a live
+performance when the announcement does not identify a DJ set, playlist, or
+other program instead. Social conversation or regular food and drinks do not
+add a category; a separately announced discussion or tasting can. When the title does not establish a format, the event's
 own description can refine a coarse legacy type, such as a ceramics workshop
 stored as `arts & culture`.
 
@@ -65,6 +68,9 @@ If the category is still unknown, the agent can also look up the exact
 occurrence once and accept an activity explicitly described on that listing.
 The calendar distinguishes confirmed music sources from estimates. A genre
 stays blank when the available evidence is inconclusive.
+
+In the calendar, venue hours are shown separately from the event's announced
+start and do not determine its time group or chronological order.
 
 For an explicit one-time pass over existing published music events with no
 genre, run `scripts/backfill-event-genres.mjs` with the usual TypeScript loader
