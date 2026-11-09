@@ -362,6 +362,7 @@ export type ExistingEventRecord = {
   dateEvidenceResolvedDate?: string;
   sourceConflictFields?: string[];
   venue: string;
+  venueId?: string;
   artists: string[];
   description?: string;
   imageUrl?: string;

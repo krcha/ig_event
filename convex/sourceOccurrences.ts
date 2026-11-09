@@ -78,6 +78,7 @@ const normalizedOccurrenceCandidatesResultValidator = v.object({
   candidates: v.array(v.any()),
   complete: v.boolean(),
   limit: v.number(),
+  resolvedVenueId: v.optional(v.id("venues")),
   venueResolutionStatus: venueResolutionStatusValidator,
 });
 
@@ -541,6 +542,9 @@ export const listCandidatesForNormalizedOccurrence = query({
       candidates: result.candidates,
       complete: !result.truncated,
       limit: result.limit,
+      ...(venueResolution.venueFields.venueId
+        ? { resolvedVenueId: venueResolution.venueFields.venueId }
+        : {}),
       venueResolutionStatus:
         venueResolution.resolution.status === "resolved"
           ? ("resolved" as const)

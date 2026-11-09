@@ -1,13 +1,16 @@
-import { getEventTimeSortMinutes } from "../../events/event-time";
+import { getEventTimeSortMinutes, normalizeEventTime } from "../../events/event-time";
 import { toSearchableText } from "../venues/normalization";
+import { venuesShareReviewedOccurrenceLocation } from "../venues/reviewed-occurrence-locations";
 
 export type OccurrenceRelationshipCandidate = {
   artists?: readonly string[] | null;
+  date?: string | null;
   normalizedFieldsJson?: string | null;
   sourceAccountHandle?: string | null;
   sourceOccurrenceKey?: string | null;
   time?: string | null;
   title: string;
+  venueId?: string | null;
 };
 
 export type OccurrenceRelationshipInvariant =
@@ -90,6 +93,18 @@ const NON_DISTINCTIVE_TITLE_TOKENS = new Set([
   "u",
   "za",
 ]);
+
+const GENERIC_SLOT_TOKENS = new Set([
+  ...NON_DISTINCTIVE_TITLE_TOKENS,
+  "exhibition", "film", "gallery", "galerija", "izlozba", "opening", "otvaranje",
+  "predstava", "program", "projekcija", "radionica", "screening", "svirka", "zurka",
+]);
+
+const WEEKDAY_SCHEDULE_TOKENS = [
+  "sun|sunday|ned|nedelja", "mon|monday|pon|ponedeljak", "tue|tues|tuesday|uto|utorak",
+  "wed|wednesday|sre|sreda", "thu|thur|thurs|thursday|cet|cetvrtak",
+  "fri|friday|pet|petak", "sat|saturday|sub|subota",
+];
 
 const GENERIC_BILLED_ARTIST_TOKENS = new Set([
   "artist",
@@ -359,6 +374,55 @@ function lineupsSuggestCrossSourceCollision(
   );
 }
 
+function readConfirmedTitleSlot(candidate: OccurrenceRelationshipCandidate) {
+  const fields = parseNormalizedFields(candidate);
+  const date = fields?.normalizedDate;
+  const minutes = getEventTimeSortMinutes(candidate.time);
+  if (
+    !fields || typeof date !== "string" || date !== candidate.date || !/^\d{4}-\d{2}-\d{2}$/u.test(date) ||
+    typeof fields.title !== "string" || toSearchableText(fields.title) !== toSearchableText(candidate.title) ||
+    fields.titleUsedFallback === true || fields.titleDerivedFromContext === true ||
+    fields.sourceOccurrencePlanUnverified === true ||
+    (Array.isArray(fields.sourceConflictFields) && fields.sourceConflictFields.length > 0) ||
+    fields.timeStatus !== "confirmed" || fields.timeEvidenceKind !== "start_time_stated" ||
+    fields.timeEvidenceVerified !== true || typeof fields.time !== "string" ||
+    minutes === null || getEventTimeSortMinutes(fields.time) !== minutes
+  ) return null;
+
+  const exactDate = fields.dateEvidenceVerified === true || fields.sourceGroundingDateVerified === true;
+  if (!exactDate) {
+    // A calendar row may omit the month because the source is a monthly
+    // programme. Corroborate its inferred date with a separately dated post.
+    const civilDate = new Date(`${date}T00:00:00Z`);
+    const weekday = WEEKDAY_SCHEDULE_TOKENS[civilDate.getUTCDay()];
+    const sourceRow = typeof fields.rowSourceText === "string" ? toSearchableText(fields.rowSourceText) : "";
+    if (!weekday || !new RegExp(`^(?:${weekday}) 0?${civilDate.getUTCDate()}(?: |$)`, "u").test(sourceRow) ||
+      !` ${sourceRow} `.includes(` ${toSearchableText(candidate.title)} `)) return null;
+  }
+  return { date, exactDate, minutes, end: normalizeEventTime(fields.time).endLabel };
+}
+
+function confirmedTitleSlotMatches(
+  left: OccurrenceRelationshipCandidate,
+  right: OccurrenceRelationshipCandidate,
+): boolean {
+  const leftIdentity = comparableIdentity(left);
+  const rightIdentity = comparableIdentity(right);
+  const compactTitle = leftIdentity.title.replaceAll(" ", "");
+  if (compactTitle.length < 8 || compactTitle !== rightIdentity.title.replaceAll(" ", "") ||
+    [leftIdentity.title, rightIdentity.title].some((title) =>
+      isGenericTeaserTitle(title) || !title.split(" ").some((token) =>
+        token.length >= 4 && /\p{L}/u.test(token) && !GENERIC_SLOT_TOKENS.has(token))) ||
+    leftIdentity.artists.size !== rightIdentity.artists.size ||
+    [...leftIdentity.artists].some((artist) => !rightIdentity.artists.has(artist))) return false;
+
+  const leftSlot = readConfirmedTitleSlot(left);
+  const rightSlot = readConfirmedTitleSlot(right);
+  return Boolean(leftSlot && rightSlot && leftSlot.date === rightSlot.date &&
+    leftSlot.minutes === rightSlot.minutes && (leftSlot.exactDate || rightSlot.exactDate) &&
+    (!leftSlot.end || !rightSlot.end || leftSlot.end === rightSlot.end));
+}
+
 /**
  * Authoritative same-day occurrence relationship invariant.
  *
@@ -380,6 +444,10 @@ export function classifyOccurrenceRelationshipInvariant(options: {
     sameSource,
     unknownVenue = false,
   } = options;
+  // The reviewed venues occupy the same location, but their distinct source
+  // bindings cannot share an automatic receipt. Keep the overlap for review.
+  if (!sameSource && venuesShareReviewedOccurrenceLocation(candidate.venueId, existing.venueId) &&
+    confirmedTitleSlotMatches(candidate, existing)) return "ambiguous";
   if (!sameVenue && !sameSource && !unknownVenue) return "unrelated";
 
   const candidateKey = getNormalizedOccurrenceRelationshipKey(candidate);
@@ -447,6 +515,9 @@ export function classifyOccurrenceRelationshipInvariant(options: {
     return "ambiguous";
   }
   if (sameVenue && sameNamedOccurrence) return "proven_duplicate";
+  if (sameVenue && !sameSource && sameReliableTime &&
+    (!candidate.venueId || !existing.venueId || candidate.venueId === existing.venueId) &&
+    confirmedTitleSlotMatches(candidate, existing)) return "proven_duplicate";
   if (
     sameVenue &&
     !sameSource &&

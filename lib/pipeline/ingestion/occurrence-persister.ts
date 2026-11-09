@@ -212,24 +212,16 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
     return;
   }
 
-  let existingMatches: ExistingSourceMatch[] = [];
+  let existingMatches: ExistingSourceMatch[];
+  let resolvedVenueIds: Map<number, string>;
   try {
-    const sameDateMatches = await listExistingEventsByPreparedDates(
+    ({ matches: existingMatches, resolvedVenueIds } = await listExistingEventsByPreparedDates(
       client,
       post,
       preparedResults,
       serviceSecret,
-    );
-    const matchesById = new Map<string, ExistingSourceMatch>();
-    for (const match of sourceIdentityMatches) {
-      matchesById.set(match.existingEvent._id, match);
-    }
-    for (const match of sameDateMatches) {
-      if (!matchesById.has(match.existingEvent._id)) {
-        matchesById.set(match.existingEvent._id, match);
-      }
-    }
-    existingMatches = [...matchesById.values()];
+      sourceIdentityMatches,
+    ));
   } catch (error) {
     summary.failedExtractions += 1;
     summary.failed_extractions += 1;
@@ -286,7 +278,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
   }
   let hasDurableMediaAttachmentTarget = false;
   const claimedRepresentativeEventIds = new Set<string>();
-  for (const prepared of preparedResults) {
+  for (const [preparedIndex, prepared] of preparedResults.entries()) {
     if (prepared.kind === "skip") {
       if (prepared.reason === "missing_date") {
         summary.skipped_missing_date += 1;
@@ -327,6 +319,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
         return classifyExistingApprovedOccurrence(
           match.existingEvent,
           prepared.event,
+          resolvedVenueIds.get(preparedIndex),
         );
       });
 

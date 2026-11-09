@@ -14,7 +14,7 @@ import {
   type PerformerGenreResearchResult,
 } from "@/lib/ai/research-performer-genres";
 import { getEventDiscoveryTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
-import { classifyExplicitEventDiscovery, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
 import {
   canPublishPerformerGenreSource,
   getEventListingResearchAct,
@@ -150,10 +150,11 @@ export async function resolveEventGenresBatch(
   const results = events.map((event): EventGenreResolution => {
     const modelRow = byKey.get(event.key);
     const local = explicit.get(event.key);
+    const titledCategory = local?.titleCategory === "other" ? undefined : local?.titleCategory;
     let row = modelRow?.taxonomy ? modelRow : local ? { ...local, credits: [], discardedClaims: 0 } : modelRow;
     if (!row) throw new Error("Missing event genre classification.");
-    if (!event.currentTaxonomy && local && local.taxonomy.categories.length > 1 && modelRow?.taxonomy) {
-      const primaryCategory = local.titleCategory ?? (modelRow.taxonomy.primaryCategory === "other"
+    if (!event.currentTaxonomy && local && (titledCategory || local.taxonomy.categories.length > 1) && modelRow?.taxonomy) {
+      const primaryCategory = titledCategory ?? (modelRow.taxonomy.primaryCategory === "other"
         ? local.taxonomy.primaryCategory : modelRow.taxonomy.primaryCategory);
       const categories = [...new Set([primaryCategory, ...local.taxonomy.categories, ...modelRow.taxonomy.categories])]
         .filter((category) => category !== "other").slice(0, 3);
@@ -182,6 +183,13 @@ export async function resolveEventGenresBatch(
     };
     const fallback = taxonomy ?? getEventDiscoveryTaxonomy(event);
     const format = getPerformerGenreResearchFormat(fallback);
+    const corroborated = taxonomy && corroborateLiveProgrammeGenre(event, taxonomy);
+    if (corroborated) {
+      result.method = "estimate";
+      result.estimatedGenres = [corroborated.genre];
+      result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), programmeGenre: corroborated });
+      return result;
+    }
     if (format) {
       const acts = getPerformerGenreResearchActs(event, format, true);
       if (acts.length) lookups.push({ event, result, format, acts, excludedGenres });

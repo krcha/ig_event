@@ -28,6 +28,54 @@ const controls = [
   ["j579dvsa7dyarqhfj4nxk6qv0d8h43g9", "Buzzcocks", "2026-12-12", "20:00"],
 ];
 
+function addEarthworksScheduleSibling(seed, review) {
+  const schedule = review.rows[1];
+  const scheduledEvent = seed.events.find(({ _id }) => _id === schedule.id);
+  const scheduledLink = seed.instagramEventSources.find(({ eventId }) => eventId === schedule.id);
+  const scheduledOccurrence = seed.sourceOccurrences.find(({ canonicalEventId }) => canonicalEventId === schedule.id);
+  const scheduleReceipt = seed.instagramSourceOccurrenceReceipts.find(({ sourceIdentity }) => sourceIdentity === scheduledLink.sourceIdentity);
+  const siblingKey = `instagram-occurrence-v2:${"a".repeat(64)}`;
+  const siblingOccurrenceId = "qa-earthworks-unrelated-occurrence";
+  const sibling = {
+    ...scheduledEvent,
+    _id: "qa-earthworks-unrelated-concert",
+    title: "Hugo Race Fatalists",
+    date: "2026-11-11",
+    time: "21:00",
+    timeEvidenceText: "21:00",
+    sourceOccurrenceKey: siblingKey,
+    humanReviewedStructuredSourcePolicyVersion: 1,
+    reviewedAt: 1,
+    reviewedBy: "qa-reviewer",
+    moderationNote: "Independent concert retains its original source and receipt row.",
+  };
+  const fields = {
+    ...JSON.parse(scheduledEvent.normalizedFieldsJson),
+    title: sibling.title,
+    normalizedDate: sibling.date,
+    dateEvidenceResolvedDate: sibling.date,
+    time: sibling.time,
+    sourceOccurrenceKey: siblingKey,
+    humanReviewedStructuredSourcePolicyVersion: 1,
+  };
+  sibling.normalizedFieldsJson = JSON.stringify(fields);
+  Object.assign(sibling, buildEventOccurrenceIndexPatch(sibling));
+  seed.events.push(sibling);
+  seed.instagramEventSources.push({ ...scheduledLink, _id: "qa-earthworks-unrelated-link", eventId: sibling._id,
+    sourceOccurrenceId: siblingOccurrenceId, sourceOccurrenceKey: siblingKey });
+  seed.sourceOccurrences.push({ ...scheduledOccurrence, _id: siblingOccurrenceId, sourceOccurrenceKey: siblingKey,
+    canonicalEventId: sibling._id, occurrenceOrdinal: 2, ...buildEventOccurrenceIndexPatch(sibling),
+    normalizedOccurrenceJson: JSON.stringify({ ...JSON.parse(scheduledOccurrence.normalizedOccurrenceJson),
+      title: sibling.title, date: sibling.date, time: sibling.time }),
+    canonicalEventJson: JSON.stringify({ ...JSON.parse(scheduledOccurrence.canonicalEventJson),
+      normalizedFieldsJson: sibling.normalizedFieldsJson, time: sibling.time }) });
+  scheduleReceipt.expectedKeys.push(siblingKey);
+  scheduleReceipt.satisfiedKeys.push(siblingKey);
+  scheduleReceipt.expectedOccurrences.push({ key: siblingKey, title: sibling.title, date: sibling.date, time: sibling.time,
+    venue: sibling.venue, artists: sibling.artists });
+  scheduleReceipt.satisfiedOccurrences.push({ key: siblingKey, eventId: sibling._id });
+}
+
 export function venueLinksFixture(groupKey) {
   const review = reviews[groupKey];
   const allRows = [...review.rows, ...(review.distinctControls ?? [])];
@@ -98,12 +146,13 @@ export function venueLinksFixture(groupKey) {
   seed.userSavedEvents.push({ _id: "qa-venue-links-legacy-primary", userId: "legacy-same", eventId: review.rows[0].id, savedAt: 1 },
     { _id: "qa-venue-links-legacy-duplicate", userId: "legacy-same", eventId: review.rows[1].id, savedAt: 2 },
     { _id: "qa-venue-links-legacy-new", userId: "legacy-new", eventId: review.rows[1].id, savedAt: 2 });
+  if (groupKey === "earthworks-kcgrad-nov9") addEarthworksScheduleSibling(seed, review);
   return seed;
 }
 
 try {
-  assert.equal(Object.keys(reviews).length, 11);
-  assert.equal(Object.values(reviews).reduce((count, review) => count + review.rows.length, 0), 26);
+  assert.equal(Object.keys(reviews).length, 12);
+  assert.equal(Object.values(reviews).reduce((count, review) => count + review.rows.length, 0), 28);
   // Public URLs and guest saves contain the original event ID; rejected
   // components do not redirect. Keep these existing public cards as primary.
   for (const [groupKey, publicId] of [
@@ -137,6 +186,16 @@ try {
     for (const event of before.protectedEvents) assert.deepEqual(await h.db.get(event._id), event);
     assert.ok(after.saves.slice(1).every((refs) => !refs.canonical.length && !refs.legacy.length));
     if (review.nextTime) { assert.equal(after.events[0].timeSource, "poster"); assert.equal(after.events[0].timeEvidenceText, review.nextTime); assert.equal(after.events[0].timeStatus, "confirmed"); }
+    if (groupKey === "earthworks-kcgrad-nov9") {
+      assert.equal(after.events[0].instagramPostUrl, review.rows[0].url);
+      assert.match(after.events[0].description, /Gradska Galerija at KC Grad/u);
+      assert.equal(after.events[1].status, "rejected");
+      assert.equal(before.siblings.length, 1);
+      assert.deepEqual(after.siblings, before.siblings);
+      const getSchedule = (context) => context.receipts.find(({ sourceIdentity }) => sourceIdentity === review.rows[1].sources[0].identity);
+      assert.deepEqual(getSchedule(after).expectedOccurrences[1], getSchedule(before).expectedOccurrences[1]);
+      assert.deepEqual(getSchedule(after).satisfiedOccurrences[1], getSchedule(before).satisfiedOccurrences[1]);
+    }
     if (groupKey === "dorcoleta-nov7") {
       assert.equal(result.primaryId, "j574ydzb0sawky713cewym83n18hheds");
       assert.equal(after.events[0].timeStatus, "unknown");
@@ -180,7 +239,7 @@ try {
       moderationNote: "Only the frozen independently proved Jura performance can resolve its exact venue ambiguity.", serviceSecret: secret }), /[Dd]uplicate|[Aa]mbiguous|already exists/u,
     "The source-proved Jura exception must never override a proven duplicate or another unreviewed same-date conflict.");
   }
-  console.log("Reviewed venue-links November operator passed: 11 fixed cohorts/26 rows, retained multi-source history/pending components, exact time-donor provenance, immutable sources/facts, saved references, independent controls, auth/stale-plan/replay fences and transactional rollback.");
+  console.log("Reviewed venue-links November operator passed: 12 fixed cohorts/28 rows, retained multi-source history and schedule siblings, exact time-donor provenance, immutable sources/facts, saved references, independent controls, auth/stale-plan/replay fences and transactional rollback.");
 } finally {
   Date.now = originalNow;
   if (originalSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = originalSecret;

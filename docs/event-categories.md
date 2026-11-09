@@ -59,8 +59,10 @@ or genre on their own.
 
 The agent uses the fixed 20-genre list and saves the exact supporting excerpt.
 For a post listing multiple occurrences, only excerpts scoped to the current
-occurrence are eligible. If no genre is advertised, the model can estimate a
-known billed performer's style. Web research starts with the specific listing
+occurrence are eligible, even when two dates share a line. A dated live bill
+can support a local genre estimate when the billed act and a specialist venue
+point to the same style. If that evidence is incomplete, the model can estimate
+a known billed performer's style. Web research starts with the specific listing
 and billed acts, and makes a further query when the first result lacks proof.
 An event listing must match the title, venue and full date and carry the style
 claim on the same page. A cited performer profile can support typical style.

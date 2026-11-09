@@ -190,15 +190,14 @@ export async function listExistingEventsByPreparedDates(
   post: InstagramScrapedPost,
   preparedResults: PrepareEventResult[],
   serviceSecret: string,
-): Promise<ExistingSourceMatch[]> {
+  sourceIdentityMatches: ExistingSourceMatch[],
+): Promise<{ matches: ExistingSourceMatch[]; resolvedVenueIds: Map<number, string> }> {
   const postContext = getPostContext(normalizeHandle(post.username), post);
-  const matchesById = new Map<string, ExistingSourceMatch>();
-  const preparedOccurrences = preparedResults.filter(
-    (prepared): prepared is Extract<PrepareEventResult, { kind: "ok" }> =>
-      prepared.kind === "ok",
-  );
+  const matchesById = new Map(sourceIdentityMatches.map((match) => [match.existingEvent._id, match]));
+  const resolvedVenueIds = new Map<number, string>();
 
-  for (const prepared of preparedOccurrences) {
+  for (const [preparedIndex, prepared] of preparedResults.entries()) {
+    if (prepared.kind !== "ok") continue;
     try {
       const venueInstagramHandle = readJsonString(
         prepared.normalizedFields,
@@ -217,6 +216,7 @@ export async function listExistingEventsByPreparedDates(
       })) as {
         candidates: ExistingEventRecord[];
         complete: boolean;
+        resolvedVenueId?: string;
         venueResolutionStatus: "resolved" | "ambiguous" | "unresolved";
       };
       if (!result.complete || result.venueResolutionStatus === "ambiguous") {
@@ -225,6 +225,9 @@ export async function listExistingEventsByPreparedDates(
             ? "Venue resolution is ambiguous during indexed duplicate lookup."
             : "Indexed duplicate candidate set exceeded its safe bound.",
         );
+      }
+      if (result.resolvedVenueId && result.venueResolutionStatus === "resolved") {
+        resolvedVenueIds.set(preparedIndex, result.resolvedVenueId);
       }
       for (const existingEvent of result.candidates) {
         if (matchesById.has(existingEvent._id)) {
@@ -249,7 +252,7 @@ export async function listExistingEventsByPreparedDates(
     }
   }
 
-  return [...matchesById.values()];
+  return { matches: [...matchesById.values()], resolvedVenueIds };
 }
 
 export function normalizeTitleKey(value: string | undefined): string {

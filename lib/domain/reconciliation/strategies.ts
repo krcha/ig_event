@@ -116,19 +116,23 @@ export const semanticOccurrenceStrategy: ReconciliationStrategy = {
     const relation = classifyOccurrenceRelationshipInvariant({
       candidate: {
         artists: [...incoming.artists],
+        date: incoming.date,
         normalizedFieldsJson: incoming.normalizedFieldsJson ?? undefined,
         sourceAccountHandle: incoming.sourceAccountHandle ?? undefined,
         sourceOccurrenceKey: incoming.sourceOccurrenceKey ?? undefined,
         time: incoming.time ?? undefined,
         title: incoming.title,
+        venueId: incoming.venueId,
       },
       existing: {
         artists: [...candidate.artists],
+        date: candidate.date,
         normalizedFieldsJson: candidate.normalizedFieldsJson ?? undefined,
         sourceAccountHandle: candidate.sourceAccountHandle ?? undefined,
         sourceOccurrenceKey: candidate.sourceOccurrenceKey ?? undefined,
         time: candidate.time ?? undefined,
         title: candidate.title,
+        venueId: candidate.venueId,
       },
       sameSource: sourceMatches,
       sameVenue,

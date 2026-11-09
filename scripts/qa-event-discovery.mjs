@@ -8,7 +8,7 @@ import {
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
-import { classifyExplicitEventDiscovery, getExcludedDiscoveryGenres } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "../lib/taxonomy/explicit-event-discovery.ts";
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -272,6 +272,7 @@ assert.equal(classifyExplicitEventDiscovery({ title: "Večera i DJ set uz house 
 assert.deepEqual(classifyExplicitEventDiscovery({ title: "Night", sourceCaption: "Ди-џеј пушта хаус, техно и драм ен бејс." }).taxonomy.genres,
   ["house", "techno", "drum-and-bass"]);
 assert.deepEqual(classifyExplicitEventDiscovery({ title: "DJ set", sourceCaption: "DJ pušta breakbeat." }).taxonomy.genres, ["electronic"]);
+assert.deepEqual(classifyExplicitEventDiscovery({ title: "DJ set", sourceCaption: "DJ plays rhythm and blues." }).taxonomy.genres, ["rnb-soul"]);
 for (const description of ["DJ pušta muziku. Pop-up bazar.", "DJ set uz stanje trans.", "DJ set u Jazz House."]) {
   assert.deepEqual(classifyExplicitEventDiscovery({ title: "DJ set", description, venue: "Jazz House" }).taxonomy.genres, []);
 }
@@ -283,6 +284,47 @@ const denied = await classifyEventDiscoveryBatch([{ ...denial, key: "denial" }],
   row(0, { p: claim("party", "title", "DJ set"), g: [claim("house", "description", "house"), claim("techno", "description", "techno")] }),
 ]) });
 assert.deepEqual(denied.results[0].taxonomy.genres, [], "Scoped denials override other source claims even if the quote is verbatim.");
+
+const vox = {
+  key: "vox-dated-bill", expectedUpdatedAt: 42, date: "2026-11-09", title: "Inke i little more blues", eventType: "live music",
+  artists: ["Inke i little more blues"], venue: "Vox Blues club", sourceCaption: "Repertoar",
+  occurrenceText: "Ponedeljak 9.11. - Inke i little more blues",
+  description: "Live music event with Inke i little more blues at Vox Blues club.",
+};
+const liveWithoutGenre = { ...jazzTaxonomy, genres: [] };
+const noVoxTransport = () => assert.fail("A corroborated programme bill can be estimated without a provider call.");
+const reviewedVox = await resolveEventGenresBatch([vox, { ...vox, key: "vox-backfill", currentTaxonomy: liveWithoutGenre }],
+  { ...options, classify: noVoxTransport, estimate: noVoxTransport, research: noVoxTransport });
+for (const result of reviewedVox.results) {
+  assert.deepEqual(result.taxonomy, liveWithoutGenre, "Keep the original live classification and the announced/estimated distinction.");
+  assert.equal(result.method, "estimate");
+  assert.deepEqual(result.estimatedGenres, ["jazz-blues"]);
+  assert.equal(JSON.parse(result.auditJson).programmeGenre.occurrenceText, vox.occurrenceText);
+}
+for (const mismatch of [
+  { title: "Kiza Zoranović", artists: ["Kiza Zoranović"], occurrenceText: "Ponedeljak 9.11. - Kiza Zoranović" },
+  { venue: "Main Hall" },
+  { occurrenceText: "Utorak 10.11. - Inke i little more blues" },
+  { occurrenceText: "Utorak 9.12. - Inke i little more blues" },
+  { occurrenceText: "Ponedeljak 9.11. - Jackie Brown" },
+  { occurrenceText: "Repertoar" },
+  { sourceCaption: "Večeras bez bluza." },
+]) {
+  assert.equal(corroborateLiveProgrammeGenre({ ...vox, ...mismatch }, liveWithoutGenre), undefined);
+}
+assert.deepEqual(classifyExplicitEventDiscovery({ ...vox, title: "Rock night", artists: ["Kiza Zoranović"],
+  occurrenceText: "Utorak 10.11. - DJ plays techno.\nPonedeljak 9.11. - Nastup uživo: Rock night" }).taxonomy.genres,
+  ["rock"], "The announced music in the current bill wins over another day's genre.");
+const sameLineProgramme = { ...vox, occurrenceText: `${vox.occurrenceText}; Utorak 10.11. - DJ plays techno, bez bluza.` };
+assert.deepEqual(classifyExplicitEventDiscovery(sameLineProgramme).taxonomy, liveWithoutGenre,
+  "A semicolon between dated bills cannot add another day's format or genre.");
+assert.equal(corroborateLiveProgrammeGenre(sameLineProgramme, liveWithoutGenre)?.occurrenceText, vox.occurrenceText);
+const rejectedAdjacentProof = await classifyEventDiscoveryBatch([sameLineProgramme], { ...options, fetch: async () => mockResponse([
+  row(0, { p: claim("live", "description", "Live music event"),
+    c: [claim("party", "occurrenceText", "DJ plays techno")], g: [claim("techno", "occurrenceText", "DJ plays techno")] }),
+]) });
+assert.deepEqual(rejectedAdjacentProof.results[0].taxonomy?.categories, ["live"]);
+assert.deepEqual(rejectedAdjacentProof.results[0].taxonomy?.genres, []);
 
 assert.equal(EVENT_DISCOVERY_BATCH_LIMIT, 20);
 const maxInputs = Array.from({ length: EVENT_DISCOVERY_BATCH_LIMIT }, (_, key) => ({ key, title: `Unclassified listing ${key}` }));

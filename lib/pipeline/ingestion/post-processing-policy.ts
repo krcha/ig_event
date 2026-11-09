@@ -15,13 +15,13 @@ export const DEFAULT_PROCESS_INGESTION_POST_DEPENDENCIES: ProcessIngestionPostDe
 export function classifyExistingApprovedOccurrence(
   existing: ExistingEventRecord,
   candidate: PreparedEvent,
+  resolvedCandidateVenueId?: string,
 ) {
   const existingVenue = toSearchableText(existing.venue);
   const candidateVenue = toSearchableText(candidate.venue);
-  const sameVenue =
-    Boolean(existingVenue) &&
-    Boolean(candidateVenue) &&
-    existingVenue === candidateVenue;
+  const sameVenue = existing.venueId && resolvedCandidateVenueId
+    ? existing.venueId === resolvedCandidateVenueId
+    : Boolean(existingVenue && candidateVenue && existingVenue === candidateVenue);
   const existingShortcode = extractShortcodeFromPostUrl(existing.instagramPostUrl ?? "");
   const candidateShortcode = extractShortcodeFromPostUrl(candidate.instagramPostUrl ?? "");
   const sameSource =
@@ -29,7 +29,7 @@ export function classifyExistingApprovedOccurrence(
       existing.instagramPostId === candidate.instagramPostId) ||
     (Boolean(existingShortcode) && existingShortcode === candidateShortcode);
   return classifyApprovalOccurrenceRelation({
-    candidate,
+    candidate: { ...candidate, venueId: resolvedCandidateVenueId },
     existing,
     sameVenue,
     sameSource,

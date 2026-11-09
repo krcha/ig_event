@@ -383,7 +383,7 @@ export function sourceAsOccurrence(
 ): ReconciliationOccurrence {
   const normalizedFieldsJson = projectNormalizedFieldsForSource(
     sourceDocument,
-    occurrence.normalizedOccurrenceJson,
+    readCanonicalEventPayload(occurrence)?.normalizedFieldsJson ?? occurrence.normalizedOccurrenceJson,
   );
   return {
     artists: normalized.artists,

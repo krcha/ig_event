@@ -6,6 +6,7 @@ import {
 } from "../lib/domain/occurrences/signature.ts";
 import { reconcileOccurrence } from "../lib/domain/reconciliation/engine.ts";
 import { loadOccurrenceCandidates } from "../convex/repositories/occurrenceCandidates.ts";
+import { classifyExistingApprovedOccurrenceForTesting } from "../lib/pipeline/ingestion/post-processing-policy.ts";
 
 const signature = buildOccurrenceSignature({
   artists: ["DJ Žika", "Guest"],
@@ -105,6 +106,56 @@ const crossPost = reconcileOccurrence({
 });
 assert.equal(crossPost.decision.relation, "cross_post");
 assert.equal(crossPost.plan.action, "attach");
+
+const kcGradVenueId = "k174v2774mz14ercz82srjsxn98963p8";
+const galleryVenueId = "k178952dxvmp76gqyfa7ps65mh896a43";
+function exhibition(id, { title, venueId, venue, time = "20:00", exactDate = true, fields = {} }) {
+  const date = "2026-11-09";
+  return occurrence(id, {
+    artists: [], date, eventType: "arts & culture", status: "approved", time, title, venue, venueId,
+    instagramPostId: id, instagramPostUrl: `https://www.instagram.com/p/${id}/`,
+    normalizedFieldsJson: JSON.stringify({
+      title, normalizedDate: date, normalizedVenue: venue, artists: [], time,
+      dateEvidenceVerified: exactDate,
+      timeEvidenceKind: "start_time_stated", timeEvidenceVerified: true, timeStatus: "confirmed",
+      ...(exactDate ? {} : { rowSourceText: `MON 9 Opening of the exhibition ${title} by the artist 20:00` }),
+      ...fields,
+    }),
+  });
+}
+const schedule = exhibition("calendar-post", {
+  title: "Earthworks", venue: "KC Grad", venueId: kcGradVenueId, exactDate: false,
+});
+const poster = exhibition("gallery-post", {
+  title: "EARTH WORKS", venue: "Gradska Galerija", venueId: galleryVenueId,
+});
+const scheduleSignature = buildOccurrenceSignature({ ...schedule, localDate: schedule.date });
+const posterSignature = buildOccurrenceSignature({ ...poster, localDate: poster.date });
+assert.equal(scheduleSignature.titleFamily, posterSignature.titleFamily, "The date/title index must find the overlap across the two venue IDs.");
+assert.notEqual(scheduleSignature.venueIdentity, posterSignature.venueIdentity);
+function reconcileExhibition(incoming) {
+  return reconcileOccurrence({ candidates: [schedule], incoming: { ...incoming, eventId: undefined }, intent: "ingest_occurrence" });
+}
+assert.equal(reconcileExhibition(poster).plan.action, "manual_review", "A gallery/host overlap retains distinct source bindings and cannot publish twice.");
+assert.equal(classifyExistingApprovedOccurrenceForTesting(schedule, poster, poster.venueId), "ambiguous", "Legacy ingestion must hold a confirmed co-located overlap for review.");
+const sameVenuePoster = exhibition("same-venue-post", {
+  title: "EARTH WORKS", venue: "KC Grad", venueId: kcGradVenueId,
+});
+assert.equal(reconcileExhibition(sameVenuePoster).plan.action, "attach", "A distinctive title spacing variant and same confirmed slot share one canonical venue event.");
+assert.equal(classifyExistingApprovedOccurrenceForTesting(schedule, sameVenuePoster, sameVenuePoster.venueId), "proven_duplicate");
+assert.equal(reconcileExhibition({ ...sameVenuePoster, sourceIdentity: schedule.sourceIdentity }).plan.action, "create", "Different source occurrence keys in one source are independent.");
+for (const [title, venueId, time, fields] of [
+  ["EARTH WORKS", galleryVenueId, "21:00", {}],
+  ["EARTH WORKS", galleryVenueId, "20:00", { timeEvidenceKind: "doors_open_only" }],
+  ["EARTH WORKS", galleryVenueId, "20:00", { timeEvidenceVerified: false }],
+  ["EARTH WORKS", galleryVenueId, "20:00", { normalizedDate: "2026-11-10" }],
+  ["EARTH WORKS", "other-venue", "20:00", {}],
+  ["EARTHWORKS II", galleryVenueId, "20:00", {}],
+]) {
+  assert.equal(reconcileExhibition(exhibition("different-post", {
+    title, venue: "Gradska Galerija", venueId, time, fields,
+  })).plan.action, "create", "A different title, time, venue or unconfirmed start cannot establish the gallery/host overlap.");
+}
 
 const reliableDifferentTime = reconcileOccurrence({
   candidates: [occurrence("earlier", { time: "20:00" })],

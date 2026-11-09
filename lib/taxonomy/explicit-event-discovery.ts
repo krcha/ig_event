@@ -35,7 +35,7 @@ export const genreProof: Record<MusicGenre, RegExp> = {
   "metal-punk": /\b(?:metal|pank|punk|metalcore|thrashcore|post hardcore|screamo)\b/,
   "hip-hop": /\b(?:hip hop|hiphop|rap|rep|trap)\b/,
   "rnb-soul": /\b(?:r and b|r n b|rnb|rhythm and blues|ritam i bluz|soul)\b/,
-  "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz|blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
+  "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz)(?:a|u|om)?|(?<!rhythm and |ritam i )(?:blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
   folk: /\b(?:folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*)\b/,
   classical: /\b(?:classical|klasicn\w* muzik\w*|klassichesk\w* muzy\w*|klavirsk\w* resital\w*|piano recital|harpsichord concert|opera|baroque|barok)\b/,
   latin: /\b(?:latino|latin(?: music)?|salsa|bachata|reggaeton|flamenco|kubansk\w* muzik\w*)\b/,
@@ -61,6 +61,10 @@ const STYLE_FIELD = /^(?:music(?: policy)?|muzik\w*|genres?|zanr\w*|sound|stil(?
 const NEGATIVE_START = /\b(?:without|bez|not(?: playing)?|no|won t play|don t play|nije|nema|ne (?:pusta\w*|svira\w*|vrti\w*)|nece (?:pust\w*|svir\w*|vrt\w*))(?: (?:any|ikakv\w*|a|an))? /g;
 const NEGATIVE_END = /^ (?:is |will be |je |bice )?(?:excluded|canceled|cancelled|otkazan\w*|iskljucen\w*|not (?:played|included|on the program)|nije u programu)\b/;
 const NON_MUSIC_GENRE_PHRASES = /\b(?:blues|jazz|rock|house|techno|pop) (?:club|bar|stage|venue|wine)\b/g;
+const PROGRAMME_STYLE_SUFFIX = /\b(?:vece|evening|night|session|sesij\w*|muzik\w*|music|svirk\w*|koncert\w*|concert\w*)$/;
+const SPECIALIST_LIVE_HOST = /\b(?:jazz|dzez|dzhaz|blues|bluz|blyuz) (?:club|klub|bar)\b/;
+const DATED_PROGRAMME_ROW = /^(?:(\p{L}+)\.?\s+)?(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?\.?\s*[-–—|:]\s*(\S.*)$/u;
+const WEEKDAY = /^(?:pon|ponedeljak|uto|utorak|sre|sreda|cet|cetvrtak|pet|petak|sub|subota|ned|nedelja|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)$/;
 
 type Clause = { quote: string; words: string };
 
@@ -70,8 +74,34 @@ function activityWords(text: string): string {
   return normalizeTaxonomyText(text.replace(/\([^()]*\)|#[\p{L}\p{N}_-]+/gu, " "));
 }
 
+function readDatedProgrammeRow(quote: string) {
+  const match = DATED_PROGRAMME_ROW.exec(quote.trim());
+  if (!match || (match[1] && !WEEKDAY.test(normalizeTaxonomyText(match[1])))) return;
+  const [, , day, month, year, bill] = match;
+  if (Number(day) < 1 || Number(day) > 31 || Number(month) < 1 || Number(month) > 12) return;
+  return { day: Number(day), month: Number(month), year, bill };
+}
+
+function programmeRows(text: string): string[] {
+  return text.split(/[\r\n]+/u).flatMap((line) => {
+    const rows: string[] = [];
+    let start = 0;
+    for (const delimiter of line.matchAll(/;\s*/gu)) {
+      const next = delimiter.index + delimiter[0].length;
+      if (!readDatedProgrammeRow(line.slice(next))) continue;
+      rows.push(line.slice(start, delimiter.index));
+      start = next;
+    }
+    rows.push(line.slice(start));
+    return rows;
+  });
+}
+
 export function discoveryQuoteMatchesOccurrence(quote: string, date: string | undefined | null): boolean {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return true;
+  const scheduled = readDatedProgrammeRow(quote);
+  if (scheduled && (scheduled.day !== Number(date.slice(-2)) || scheduled.month !== Number(date.slice(5, 7)) ||
+    (scheduled.year && scheduled.year !== date.slice(0, 4)))) return false;
   const days = [...normalizeTaxonomyText(quote).matchAll(
     /\b(?:planiran\w* za|zakazan\w* za|scheduled for) (\d{1,2})(?!\d)\b/g,
   )].map(([, day]) => Number(day)).filter((day) => day >= 1 && day <= 31);
@@ -79,7 +109,9 @@ export function discoveryQuoteMatchesOccurrence(quote: string, date: string | un
 }
 
 function clauses(text: string): Clause[] {
-  return text.split(/(?<=[.!?;])\s+|[\r\n]+|\s+(?=(?:but|ali|nego|while|dok)\b)|(?<=,)\s+(?=(?:this time|ovog puta|ve[cč]eras|tonight)\b)/iu)
+  // Keep a dated programme line whole so its claims cannot lose their date.
+  return programmeRows(text).flatMap((line) => readDatedProgrammeRow(line) ? [line] :
+    line.split(/(?<=[.!?;])\s+|\s+(?=(?:but|ali|nego|while|dok)\b)|(?<=,)\s+(?=(?:this time|ovog puta|ve[cč]eras|tonight)\b)/iu))
     .map((value) => {
       const quote = value.trim();
       return { quote, words: normalizeTaxonomyText(quote.replace(/#[\p{L}\p{N}_-]+/gu, " ")) };
@@ -159,6 +191,33 @@ export function getExcludedDiscoveryGenres(input: ExplicitDiscoveryInput): Reado
     }
   }
   return excluded;
+}
+
+export function corroborateLiveProgrammeGenre(input: ExplicitDiscoveryInput, taxonomy: EventDiscoveryTaxonomy): {
+  genre: MusicGenre; occurrenceText: string;
+} | undefined {
+  if (taxonomy.primaryCategory !== "live" || taxonomy.genres.length ||
+    !taxonomy.formats.some((format) => format === "concert" || format === "live-performance") ||
+    !input.date || !/^\d{4}-\d{2}-\d{2}$/.test(input.date) || !input.occurrenceText) return;
+  const title = normalizeTaxonomyText(input.title);
+  const venue = normalizeTaxonomyText(input.venue);
+  if (title === venue || !SPECIALIST_LIVE_HOST.test(venue) || !genreProof["jazz-blues"].test(title) ||
+    GENRES.some((genre) => genre !== "jazz-blues" && genreProof[genre].test(title))) return;
+
+  // The exact dated bill must corroborate the performer and its name must
+  // carry the same genre family as the venue. This remains an estimate.
+  const hasNamedAct = input.artists?.some((artist) => {
+    const name = normalizeTaxonomyText(artist);
+    return name !== venue && containsTerm(title, name) && genreProof["jazz-blues"].test(name);
+  });
+  if (!hasNamedAct || getExcludedDiscoveryGenres(input).has("jazz-blues")) return;
+  for (const line of programmeRows(input.occurrenceText.slice(0, SOURCE_LIMIT.occurrenceText))) {
+    const quote = line.trim();
+    const scheduled = readDatedProgrammeRow(quote);
+    if (scheduled && discoveryQuoteMatchesOccurrence(quote, input.date) && normalizeTaxonomyText(scheduled.bill) === title) {
+      return { genre: "jazz-blues", occurrenceText: quote };
+    }
+  }
 }
 
 type ActivityRule = { category: DiscoveryCategory; format?: DiscoveryFormat; cue: RegExp; except?: RegExp };
@@ -281,9 +340,11 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput): {
       for (const { quote, words } of bySource[source]) {
         const context = styleWords(words, names);
         if (NON_MUSIC_CONTEXT.test(context)) continue;
+        const isStyleHeading = source === "title" && PROGRAMME_STYLE_SUFFIX.test(context) &&
+          isGenreList(context.replace(PROGRAMME_STYLE_SUFFIX, ""));
         const strong = MUSIC_CUE.test(context) || STYLE_FIELD.test(quote) ||
           (source === jazzHeadline?.source && quote === jazzHeadline.quote) ||
-          (source === "title" && (Boolean(input.currentTaxonomy) && isGenreList(context) ||
+          (source === "title" && (isStyleHeading || Boolean(input.currentTaxonomy) && isGenreList(context) ||
             ACTIVITIES.some(({ category, cue }) => (category === "party" || category === "live") && cue.test(context))));
         for (const genre of GENRES) {
           if (excluded.has(genre) || !genreProof[genre].test(context) || !hasExplicitGenreEvidence(input, source, quote, genre)) continue;
