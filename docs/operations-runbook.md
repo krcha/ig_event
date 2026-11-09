@@ -326,6 +326,25 @@ evidence, and occurrence plan must agree; a stale mapping or different named
 venue fails approval. This uses saved source and account context without
 inventing a venue quote in the source.
 
+When a source supplies a venue name, match its registered Instagram account,
+exact venue alias, or exact address. A handle must be the physical venue's
+handle or explicitly identify the place in the announcement. A publisher or
+promoter handle cannot stand in for a venue. Similar names are insufficient
+for automatic binding; add an exact alias only after checking the physical
+location. Keep separate branches and rooms separate when they identify
+different programs.
+
+To repair an upcoming event with a missing venue, use the service-only
+`upcomingVenueRepairs:preview` with its exact event version. Apply its plan
+only after reviewing the venue and Instagram account. It rechecks the saved
+source, venue, occurrence receipt and duplicate policy; an approved repair
+must pass public verification. Events on the same source share a receipt
+revision, so preview each again immediately before applying. To repair an
+approved event held by an incomplete receipt, use
+`approvedPublicationRepairs:preview` and apply only an unchanged, ready
+review digest. The existing approved records and saved references keep
+their IDs; proof and public visibility are checked again during the write.
+
 The Convex `approve server-verified unique events` cron runs every minute. It
 scans at most 60 pending event versions per tick, one version per transaction.
 The singleton `automaticUniqueApprovalState` stores its pending-index cursor,

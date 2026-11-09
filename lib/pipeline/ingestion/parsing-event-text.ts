@@ -150,6 +150,7 @@ export function buildFallbackTitle(
   if (locationName) {
     return (
       canonicalizeVenueName(locationName, canonicalVenueNamesByHandle, {
+        allowCompatible: false,
         canonicalVenueAliasesByHandle,
         preferredVenue: mappedVenue || null,
       }) ??

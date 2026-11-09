@@ -28,6 +28,7 @@ import {
   repairReviewedMultiSourceEventVenue,
   repairTrustedV2EventVenue,
   recordInstagramSourceOccurrenceSatisfaction,
+  updateEventAndRecordInstagramSourceOccurrenceSatisfaction,
 } from "../convex/events.ts";
 import { markOpenAiAnalysisAttemptStarted } from "../convex/scrapedPosts.ts";
 import { renameReferencedVenueWithReviewedEvents } from "../convex/venues.ts";
@@ -3087,6 +3088,7 @@ try {
     missingVenueCreatedEvent = missingVenueState.events.find(
       (event) => event._id === createResult.eventId,
     );
+    assert.equal(createResult.status, "pending", "Ingestion must count the actual held status.");
     if (!missingVenueCreatedEvent) {
       unresolvedBoundaryDefects.push(
         "missing-venue create returned without a persisted event",
@@ -3118,38 +3120,36 @@ try {
     };
     missingVenueState.events.push(missingVenueCreatedEvent);
   }
-  if (
-    !(await isCanonicallyGroundedApprovedEvent(
-      missingVenueCtx,
-      missingVenueCreatedEvent,
-    ))
-  ) {
-    unresolvedBoundaryDefects.push(
-      "an otherwise exact missing-venue v2 event was hidden from the public grounding surface",
-    );
-  }
+  assert.equal(missingVenueCreatedEvent.status, "pending",
+    "Source-grounded creation must hold the event until a physical venue is bound.");
+  assert.equal(await isCanonicallyGroundedApprovedEvent(missingVenueCtx, missingVenueCreatedEvent), false);
+  assert.deepEqual(JSON.parse(missingVenueCreatedEvent.normalizedFieldsJson).moderationPendingReasons,
+    ["unresolved_venue_identity"]);
+  const heldUpdate = await updateEventAndRecordInstagramSourceOccurrenceSatisfaction._handler(missingVenueCtx, {
+    id: missingVenueCreatedEvent._id,
+    expectedStatus: "pending",
+    expectedUpdatedAt: missingVenueCreatedEvent.updatedAt,
+    patch: { status: "approved", normalizedFieldsJson: firstMissingVenue.eventArgs.normalizedFieldsJson },
+    plan: firstMissingVenue.sourceOccurrencePlan,
+    satisfiedKey: firstMissingVenue.sourceOccurrenceKey,
+    processingFence: firstMissingVenue.processingFence,
+    serviceSecret: process.env.CRON_SECRET,
+  });
+  assert.equal(heldUpdate.status, "pending", "Re-ingesting the same source must report the actual held status.");
+  assert.equal(missingVenueCreatedEvent.status, "pending");
+  assert.equal(missingVenueState.receipts.length, 1);
+  assert.deepEqual(missingVenueState.receipts[0].satisfiedKeys, [firstMissingVenue.sourceOccurrenceKey]);
 
-  const eventCountBeforeCrossSourceAttempt = missingVenueState.events.length;
-  let crossSourceRejectedAsAmbiguous = false;
-  try {
-    await createEvent._handler(missingVenueCtx, {
+  await assert.rejects(
+    createEvent._handler(missingVenueCtx, {
       ...secondMissingVenue.eventArgs,
       returnCreateDisposition: true,
       serviceSecret: process.env.CRON_SECRET,
-    });
-  } catch (error) {
-    crossSourceRejectedAsAmbiguous = /ambiguous|already exists|duplicate/i.test(
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-  if (
-    !crossSourceRejectedAsAmbiguous ||
-    missingVenueState.events.length !== eventCountBeforeCrossSourceAttempt
-  ) {
-    unresolvedBoundaryDefects.push(
-      "same-day/title/time/artist events with unknown venues from different sources were not held as ambiguous",
-    );
-  }
+    }),
+    /source occurrence receipt to hold an unresolved venue/i,
+    "An unlinked requested approval without a source occurrence receipt must fail closed.",
+  );
+  assert.equal(missingVenueState.events.length, 1);
 
   const occurrencePost = {
     postId: "BOUNDARYOCCURRENCE",

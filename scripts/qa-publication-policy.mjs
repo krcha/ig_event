@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 
+import { apply, preview } from "../convex/approvedPublicationRepairs.ts";
+import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 import { evaluatePublicationEligibility } from "../lib/domain/publication/policy.ts";
 import {
   evaluateEventPublication,
@@ -609,6 +611,133 @@ function makeLegacyVenueRefreshContext() {
     true,
     "An inactive historical owner must not make one active public identity ambiguous.",
   );
+}
+
+{
+  const originalNow = Date.now;
+  const originalSecret = process.env.CRON_SECRET;
+  Date.now = () => Date.parse("2026-11-09T12:00:00.000Z");
+  process.env.CRON_SECRET = "qa-approved-publication-repair";
+  const table = (rows) => new Map(rows.map((row) => [row._id, row]));
+  const venue = { _id: "repair-venue", name: "QA Theater", instagramHandle: "qa_theater", category: "culture", publicStatus: "published", updatedAt: 1 };
+  const expected = (key, date, title, day, artists = []) => {
+    const sourceLine = `${day} November, 20:00: ${title}`;
+    return {
+      key, date, title, time: "20:00", venue: venue.name, artists,
+      factsJson: JSON.stringify({
+        localDate: date, titleClaim: title, eventTypeClaim: "arts & culture", artistClaims: artists, venueClaim: venue.name,
+        startTime: "20:00", timeRelation: "exact", sourceRowIdentity: sourceLine, evidence: [],
+        policy: { approvalDisposition: "approved", pendingReasons: [], signals: [], structuredEvidenceVerified: true },
+      }),
+      canonicalEventJson: JSON.stringify({
+        dateEvidenceResolvedDate: date, normalizedFieldsJson: "{}", requestedStatus: "approved", sourceConflictFields: [],
+        time: "20:00", timeConfidence: 1, timeSource: "caption", timeStatus: "confirmed",
+      }),
+    };
+  };
+  const expired = expected("expired", "2026-11-08", "Expired QA play", 8);
+  const primary = expected("primary", "2026-11-10", "Upcoming QA play", 10);
+  const missing = expected("missing", "2026-11-11", "Second QA play", 11);
+  const donor = expected("donor", "2026-11-11", "Second QA play", 11, ["QA Performer"]);
+  function makeSource(code, expectedRows, own, visible) {
+    const caption = expectedRows.map((row) => JSON.parse(row.factsJson).sourceRowIdentity).join("\n");
+    const sourceIdentity = `instagram-source-identity-v1:${code}`;
+    const instagramPostUrl = `https://www.instagram.com/p/${code}/`;
+    const sourceFingerprint = buildInstagramSourceOccurrenceFingerprint({ caption });
+    const rawExtractionJson = JSON.stringify({
+      extraction_contract_version: "event_evidence_v2", is_event: true,
+      schedule_entries: expectedRows.map((row) => {
+        const line = JSON.parse(row.factsJson).sourceRowIdentity;
+        return { date: row.date, source_text: line, date_evidence: { resolved_date: row.date, source: "caption", exact_text: line.split(",")[0] },
+          title: row.title, time: row.time, venue: row.venue, artists: row.artists };
+      }),
+    });
+    const post = { _id: `post-${code}`, postId: `provider-${code}`, handle: "qa_theater", username: "qa_theater", caption,
+      instagramPostUrl, sourceRevision: 1, analysisRevision: 1, analysisModel: "gpt-6-luna", analysisResultJson: rawExtractionJson,
+      analysisIsEvent: true, analysisContractVersion: "event_evidence_v2", imageUrls: [], postedAt: "2026-11-05T12:00:00Z", updatedAt: 1 };
+    const event = { _id: `event-${code}`, _creationTime: 1, status: "approved", updatedAt: 1, date: own.date, title: own.title,
+      venue: venue.name, venueId: venue._id, venueInstagramHandle: venue.instagramHandle, eventType: "arts & culture", artists: own.artists,
+      time: own.time, sourceConflictFields: [], sourceCaption: caption, sourcePostedAt: post.postedAt, instagramPostId: post.postId, instagramPostUrl,
+      sourceOccurrenceKey: own.key, rawExtractionJson, reviewedAt: 1, reviewedBy: "qa-reviewer", moderationNote: "Verified exact saved source and title.",
+      humanReviewedStructuredSourcePolicyVersion: 1, publicationPolicyVersion: 1, publicationState: visible ? "publishable" : "pending_verification",
+      publicationReason: visible ? "canonical_source_grounding_verified" : "occurrence_incomplete",
+      normalizedFieldsJson: JSON.stringify({ extractionMode: "caption", extractionContractVersion: "event_evidence_v2", extractionIsEvent: true,
+        sourceGroundingVersion: 5, sourceGroundingEvidence: "persisted_openai_event_evidence_v2", normalizedIsValid: true, dateSuspiciousYear: false,
+        title: own.title, time: own.time, artists: own.artists, normalizedDate: own.date, normalizedVenue: own.venue,
+        sourceGroundingSourceCaption: caption, sourceGroundingInstagramPostId: post.postId, sourceGroundingInstagramPostUrl: instagramPostUrl,
+        sourceGroundingInstagramHandle: post.handle, sourceOccurrenceKey: own.key, sourceOccurrenceSourceFingerprint: sourceFingerprint,
+        humanReviewedStructuredSourcePolicyVersion: 1 }) };
+    const receipt = { _id: `receipt-${code}`, sourceIdentity, sourceFingerprint, expectedKeys: expectedRows.map((row) => row.key),
+      expectedOccurrences: expectedRows, satisfiedKeys: [own.key], satisfiedOccurrences: [{ key: own.key, eventId: event._id }],
+      deferredChildCount: 0, deferredChildKeys: [], updatedAt: 1 };
+    const occurrences = expectedRows.map((row, ordinal) => ({ _id: `occurrence-${row.key}`, provider: "instagram", canonicalSourceUrl: instagramPostUrl,
+      sourceDocumentId: post._id, sourceIdentity, sourceFingerprint, sourceRevision: 1, sourceOccurrenceKey: row.key, occurrenceOrdinal: ordinal,
+      factsJson: row.factsJson, canonicalEventJson: row.canonicalEventJson, venueId: venue._id, venueResolutionStatus: "resolved",
+      state: row.key === own.key ? "satisfied" : "expected", ...(row.key === own.key ? { canonicalEventId: event._id } : {}), updatedAt: 1 }));
+    const link = { _id: `link-${code}`, eventId: event._id, sourceIdentity, sourceFingerprint, sourceOccurrenceKey: own.key,
+      sourceOccurrenceId: `occurrence-${own.key}`, instagramPostId: post.postId, instagramPostUrl, canonicalSourceUrl: instagramPostUrl, updatedAt: 1 };
+    return { post, event, receipt, occurrences, link };
+  }
+  const a = makeSource("QaVenueList", [expired, primary, missing], primary, false);
+  const b = makeSource("QaPerformerPlay", [donor], donor, true);
+  const tables = {
+    events: table([a.event, b.event]), venues: table([venue]), scrapedPosts: table([a.post, b.post]),
+    instagramSourceOccurrenceReceipts: table([a.receipt, b.receipt]), instagramEventSources: table([a.link, b.link]),
+    sourceOccurrences: table([...a.occurrences, ...b.occurrences]),
+  };
+  const getTable = (name) => tables[name] ??= new Map();
+  const rowTable = (id) => Object.values(tables).find((rows) => rows.has(id));
+  let inserted = 0;
+  function query(name, filters = []) {
+    const results = () => [...getTable(name).values()].filter((row) => filters.every(([field, value]) => row[field] === value));
+    return {
+      withIndex(_name, applyFilters) {
+        const nextFilters = [...filters];
+        const builder = { eq(field, value) { nextFilters.push([field, value]); return builder; } };
+        applyFilters(builder);
+        return query(name, nextFilters);
+      },
+      async take(limit) { return results().slice(0, limit); },
+      async unique() { const matches = results(); assert.ok(matches.length <= 1); return matches[0] ?? null; },
+    };
+  }
+  const ctx = { auth: { getUserIdentity: async () => null }, db: {
+    query,
+    async get(id) { return rowTable(id)?.get(id) ?? null; },
+    async patch(id, patch) { const rows = rowTable(id); rows.set(id, { ...rows.get(id), ...patch }); },
+    async insert(name, value) { const id = `qa-pub-insert-${++inserted}`; getTable(name).set(id, { ...value, _id: id }); return id; },
+  } };
+  try {
+    const args = { id: a.event._id, serviceSecret: process.env.CRON_SECRET };
+    await assert.rejects(() => preview._handler(ctx, { ...args, serviceSecret: "incorrect" }), /Authentication required/u);
+    const proposed = await preview._handler(ctx, args);
+    assert.deepEqual(proposed.missing.map((row) => [row.key, row.outcome, row.representativeId]),
+      [[expired.key, "expired", null], [missing.key, "attach", b.event._id]]);
+    assert.equal(proposed.ready, true);
+    assert.equal(tables.events.get(a.event._id).publicationState, "pending_verification");
+    const extra = { ...b.event, _id: "same-date-candidate" };
+    tables.events.set(extra._id, extra);
+    const ambiguous = await preview._handler(ctx, args);
+    assert.equal(ambiguous.ready, false);
+    assert.equal(ambiguous.missing[1].outcome, "missing_unique_approved_representative");
+    tables.events.delete(extra._id);
+    const applyArgs = { ...args, reviewDigest: proposed.reviewDigest, moderationNote: "Connect the missing reviewed repertory occurrence." };
+    await ctx.db.patch(b.event._id, { updatedAt: 2 });
+    await assert.rejects(() => apply._handler(ctx, applyArgs), /reviewed repair changed/u);
+    const refreshed = await preview._handler(ctx, args);
+    const result = await apply._handler(ctx, { ...applyArgs, reviewDigest: refreshed.reviewDigest });
+    assert.deepEqual([result.attachedCount, result.expiredCount], [1, 1]);
+    assert.equal(await isEventPubliclyVisible(ctx, tables.events.get(a.event._id)), true);
+    assert.equal(await isEventPubliclyVisible(ctx, tables.events.get(b.event._id)), true);
+    assert.equal(tables.sourceOccurrences.get(`occurrence-${expired.key}`).state, "superseded");
+    assert.equal(tables.sourceOccurrences.get(`occurrence-${missing.key}`).canonicalEventId, b.event._id);
+    assert.equal(tables.sourceOccurrences.get(`occurrence-${missing.key}`).factsJson, missing.factsJson);
+    assert.equal(tables.events.size, 2);
+  } finally {
+    Date.now = originalNow;
+    if (originalSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = originalSecret;
+  }
 }
 
 console.log("Publication policy QA passed.");

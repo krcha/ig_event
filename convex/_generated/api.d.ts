@@ -10,6 +10,7 @@
 
 import type * as analytics from "../analytics.js";
 import type * as analyticsValidators from "../analyticsValidators.js";
+import type * as approvedPublicationRepairs from "../approvedPublicationRepairs.js";
 import type * as authz from "../authz.js";
 import type * as automaticApprovalDiagnostics from "../automaticApprovalDiagnostics.js";
 import type * as autonomousModeration from "../autonomousModeration.js";
@@ -56,6 +57,7 @@ import type * as internal_autonomousVenueRepair from "../internal/autonomousVenu
 import type * as internal_campaignLineageReattestationProof from "../internal/campaignLineageReattestationProof.js";
 import type * as internal_carouselMediaProof from "../internal/carouselMediaProof.js";
 import type * as internal_eventRepairs_approvedLegacyVenue from "../internal/eventRepairs/approvedLegacyVenue.js";
+import type * as internal_eventRepairs_approvedPublicationRepairs from "../internal/eventRepairs/approvedPublicationRepairs.js";
 import type * as internal_eventRepairs_evidencePolicy from "../internal/eventRepairs/evidencePolicy.js";
 import type * as internal_eventRepairs_pendingBenignSourceConflicts from "../internal/eventRepairs/pendingBenignSourceConflicts.js";
 import type * as internal_eventRepairs_pendingSourceConflictReclassification from "../internal/eventRepairs/pendingSourceConflictReclassification.js";
@@ -79,6 +81,7 @@ import type * as internal_eventRepairs_reviewedVinylTavanNovember2026Split from 
 import type * as internal_eventRepairs_sourceBoundEmptyV2Venue from "../internal/eventRepairs/sourceBoundEmptyV2Venue.js";
 import type * as internal_eventRepairs_sourceGroundingReprocess from "../internal/eventRepairs/sourceGroundingReprocess.js";
 import type * as internal_eventRepairs_trustedV2VenueRepair from "../internal/eventRepairs/trustedV2VenueRepair.js";
+import type * as internal_eventRepairs_upcomingVenueRepairs from "../internal/eventRepairs/upcomingVenueRepairs.js";
 import type * as internal_eventVenueBindingCoverage from "../internal/eventVenueBindingCoverage.js";
 import type * as internal_extractionModel from "../internal/extractionModel.js";
 import type * as internal_focusedConflictReviewProof from "../internal/focusedConflictReviewProof.js";
@@ -148,6 +151,7 @@ import type * as reviewedVinylTavanNovember2026Split from "../reviewedVinylTavan
 import type * as scrapedPosts from "../scrapedPosts.js";
 import type * as sourceConflictReviews from "../sourceConflictReviews.js";
 import type * as sourceOccurrences from "../sourceOccurrences.js";
+import type * as upcomingVenueRepairs from "../upcomingVenueRepairs.js";
 import type * as users from "../users.js";
 import type * as venueHoursBackfill from "../venueHoursBackfill.js";
 import type * as venueIdentities from "../venueIdentities.js";
@@ -163,6 +167,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   analyticsValidators: typeof analyticsValidators;
+  approvedPublicationRepairs: typeof approvedPublicationRepairs;
   authz: typeof authz;
   automaticApprovalDiagnostics: typeof automaticApprovalDiagnostics;
   autonomousModeration: typeof autonomousModeration;
@@ -209,6 +214,7 @@ declare const fullApi: ApiFromModules<{
   "internal/campaignLineageReattestationProof": typeof internal_campaignLineageReattestationProof;
   "internal/carouselMediaProof": typeof internal_carouselMediaProof;
   "internal/eventRepairs/approvedLegacyVenue": typeof internal_eventRepairs_approvedLegacyVenue;
+  "internal/eventRepairs/approvedPublicationRepairs": typeof internal_eventRepairs_approvedPublicationRepairs;
   "internal/eventRepairs/evidencePolicy": typeof internal_eventRepairs_evidencePolicy;
   "internal/eventRepairs/pendingBenignSourceConflicts": typeof internal_eventRepairs_pendingBenignSourceConflicts;
   "internal/eventRepairs/pendingSourceConflictReclassification": typeof internal_eventRepairs_pendingSourceConflictReclassification;
@@ -232,6 +238,7 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/sourceBoundEmptyV2Venue": typeof internal_eventRepairs_sourceBoundEmptyV2Venue;
   "internal/eventRepairs/sourceGroundingReprocess": typeof internal_eventRepairs_sourceGroundingReprocess;
   "internal/eventRepairs/trustedV2VenueRepair": typeof internal_eventRepairs_trustedV2VenueRepair;
+  "internal/eventRepairs/upcomingVenueRepairs": typeof internal_eventRepairs_upcomingVenueRepairs;
   "internal/eventVenueBindingCoverage": typeof internal_eventVenueBindingCoverage;
   "internal/extractionModel": typeof internal_extractionModel;
   "internal/focusedConflictReviewProof": typeof internal_focusedConflictReviewProof;
@@ -301,6 +308,7 @@ declare const fullApi: ApiFromModules<{
   scrapedPosts: typeof scrapedPosts;
   sourceConflictReviews: typeof sourceConflictReviews;
   sourceOccurrences: typeof sourceOccurrences;
+  upcomingVenueRepairs: typeof upcomingVenueRepairs;
   users: typeof users;
   venueHoursBackfill: typeof venueHoursBackfill;
   venueIdentities: typeof venueIdentities;

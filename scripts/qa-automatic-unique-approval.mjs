@@ -19,6 +19,8 @@ import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurre
 import { isSupportedExtractionModel } from "../convex/internal/extractionModel.ts";
 import { buildVenueIdentityClaims } from "../lib/domain/venues/venue-resolver.ts";
 import { automaticUniqueSourceVenueClaims } from "../convex/internal/automaticUniqueVenueEvidence.ts";
+import { apply as applyVenueRepair, preview as previewVenueRepair } from "../convex/upcomingVenueRepairs.ts";
+import { readUpcomingVenueRepairClaims } from "../convex/internal/eventRepairs/upcomingVenueRepairs.ts";
 
 const supportedExtractionModels = [
   "gpt-5-mini",
@@ -859,6 +861,7 @@ function makeHappySweepContext() {
       withIndex(_index, configure) { const filters = {}; const q = { eq(field, value) { filters[field] = value; return q; } }; configure(q); return query(table, { ...criteria, ...filters }); },
       order() { return this; },
       async take(limit) { return selected().slice(0, limit); },
+      async unique() { const rows = selected(); assert.ok(rows.length <= 1); return rows[0] ?? null; },
       async paginate({ cursor, numItems }) { assert.equal(cursor, null); assert.equal(numItems, 1); return { page: selected().slice(0, numItems), isDone: true, continueCursor: "", pageStatus: "Done" }; },
     };
   }
@@ -898,6 +901,107 @@ try {
   assert.equal(happySweep.tables.get("automaticUniqueApprovalState").values().next().value.approvedCount, 1);
   assert.equal(happySweep.tables.get("automaticApprovalHolds")?.size ?? 0, 0);
   assert.equal(happySweep.writes.some((write) => ["scrapedPosts", "instagramEventSources", "instagramSourceOccurrenceReceipts"].includes(write.table)), false);
+} finally { Date.now = originalHappyNow; }
+
+const scopedVenueSource = {
+  ...JSON.parse(proofRaw),
+  venue: "Monthly promoter program",
+  schedule_entries: [
+    { source_text: "Friday venue act", venue: "Hartefakt Kuća" },
+    { source_text: "Saturday venue act", venue: "Evropska kuća" },
+  ],
+};
+assert.deepEqual(readUpcomingVenueRepairClaims({ rowSourceText: "Friday venue act" }, scopedVenueSource), ["Hartefakt Kuća"]);
+assert.equal(readUpcomingVenueRepairClaims({ rowSourceText: "An unmatched act" }, scopedVenueSource), null);
+assert.deepEqual(readUpcomingVenueRepairClaims({ rowSourceText: "Friday venue act" }, {
+  ...scopedVenueSource, schedule_entries: [...scopedVenueSource.schedule_entries, scopedVenueSource.schedule_entries[0]],
+}), ["Hartefakt Kuća"]);
+assert.equal(readUpcomingVenueRepairClaims({ rowSourceText: "Friday venue act" }, {
+  ...scopedVenueSource, schedule_entries: [...scopedVenueSource.schedule_entries, { source_text: "Friday venue act" }],
+}), null);
+assert.equal(readUpcomingVenueRepairClaims({ rowSourceText: "Friday venue act" }, {
+  ...scopedVenueSource, source_conflicts: [{ field: "venue" }],
+}), null);
+
+const repairVenue = {
+  _id: "qa-repair-venue", _creationTime: 1, updatedAt: 1,
+  name: "QA Hall", instagramHandle: "qa_hall", category: "venue", publicStatus: "published",
+  aliases: ["QA Hall Theatre"],
+};
+const repairAccount = {
+  _id: "qa-repair-account", handle: "qa_hall", role: "venue", active: true,
+  venueId: repairVenue._id, updatedAt: 1,
+};
+function makeBlankVenueRepairContext(status = "pending") {
+  const blank = makeHappySweepContext();
+  const blankEvent = blank.tables.get("events").get(blank.eventId);
+  Object.assign(blankEvent, { status, venue: "", normalizedVenueIdentity: undefined, normalizedFieldsJson: JSON.stringify({
+    ...JSON.parse(proofFields), normalizedVenue: "", rowSourceText: event.sourceCaption,
+  }) });
+  Object.assign(blank.tables.get("scrapedPosts").get(proofSource._id), { updatedAt: 2 });
+  Object.assign(blank.tables.get("instagramEventSources").get(proofLink._id), { updatedAt: 3 });
+  blank.tables.get("instagramSourceOccurrenceReceipts").get(basePartialReceipt._id).expectedOccurrences[0].venue = "";
+  blank.tables.set("venues", new Map([[repairVenue._id, repairVenue]]));
+  blank.tables.set("instagramSources", new Map([[repairAccount._id, repairAccount]]));
+  blank.tables.set("venueIdentities", new Map(buildVenueIdentityClaims(repairVenue).map((claim, index) => {
+    const _id = `qa-repair-identity-${index}`;
+    return [_id, { ...claim, _id, active: true, venueId: repairVenue._id }];
+  })));
+  return blank;
+}
+const blank = makeBlankVenueRepairContext();
+const repairArgs = { id: blank.eventId, expectedUpdatedAt: 10, serviceSecret: "qa-diagnostic-secret" };
+try {
+  Date.now = () => proofAsOfMs;
+  const repairPreview = await previewVenueRepair._handler(blank.ctx, repairArgs);
+  assert.equal(repairPreview.venue, repairVenue.name);
+  assert.equal(repairPreview.instagramHandle, repairVenue.instagramHandle);
+  assert.equal(blank.writes.length, 0);
+  const conflictingRows = makeBlankVenueRepairContext();
+  const rawWithVenueConflict = JSON.stringify({ ...JSON.parse(proofRaw), schedule_entries: [
+    ...JSON.parse(proofRaw).schedule_entries,
+    { source_text: event.sourceCaption, venue: "Another hall" },
+  ] });
+  conflictingRows.tables.get("scrapedPosts").get(proofSource._id).analysisResultJson = rawWithVenueConflict;
+  conflictingRows.tables.get("events").get(conflictingRows.eventId).rawExtractionJson = rawWithVenueConflict;
+  await assert.rejects(() => previewVenueRepair._handler(conflictingRows.ctx, repairArgs), /does not resolve to one exact venue/);
+  assert.equal(conflictingRows.writes.length, 0);
+  await assert.rejects(() => applyVenueRepair._handler(blank.ctx, {
+    plan: { ...repairPreview.plan, expectedSourceLinkUpdatedAt: 500 }, serviceSecret: repairArgs.serviceSecret,
+  }), /evidence changed after preview/);
+  assert.equal(blank.writes.length, 0);
+  const repaired = await applyVenueRepair._handler(blank.ctx, { plan: repairPreview.plan, serviceSecret: repairArgs.serviceSecret });
+  assert.equal(repaired.status, "approved");
+  assert.equal(repaired.publicationState, "publishable");
+  assert.equal(repaired.holdReason, null);
+  assert.equal(blank.tables.get("events").get(blank.eventId).venueId, repairVenue._id);
+  const receipt = blank.tables.get("instagramSourceOccurrenceReceipts").get(basePartialReceipt._id);
+  assert.equal(receipt.expectedOccurrences[0].venue, repairVenue.name);
+  assert.deepEqual(receipt.expectedOccurrences[1], pastExpected);
+  assert.deepEqual(receipt.satisfiedOccurrences, basePartialReceipt.satisfiedOccurrences);
+  assert.equal(await isCanonicallyGroundedApprovedEvent(blank.ctx, blank.tables.get("events").get(blank.eventId)), true);
+
+  const approvedBlank = makeBlankVenueRepairContext("approved");
+  const aliasSibling = { ...proofEvent, _id: "qa-same-date-alias", venue: "QA Hall Theatre", updatedAt: 14 };
+  approvedBlank.tables.get("events").set(aliasSibling._id, aliasSibling);
+  await assert.rejects(() => previewVenueRepair._handler(approvedBlank.ctx, repairArgs), /exact alias may represent the same occurrence/);
+  assert.equal(approvedBlank.writes.length, 0);
+  approvedBlank.tables.get("events").delete(aliasSibling._id);
+  const approvedPlan = await previewVenueRepair._handler(approvedBlank.ctx, repairArgs);
+  const approvedRepair = await applyVenueRepair._handler(approvedBlank.ctx, { plan: approvedPlan.plan, serviceSecret: repairArgs.serviceSecret });
+  assert.equal(approvedRepair.status, "approved");
+  assert.equal(approvedRepair.publicationState, "publishable");
+
+  const promoter = makeBlankVenueRepairContext();
+  const noExplicitVenue = JSON.stringify({
+    ...JSON.parse(proofRaw),
+    schedule_entries: JSON.parse(proofRaw).schedule_entries.map((row, index) => index === 0 ? { ...row, venue: "" } : row),
+  });
+  promoter.tables.get("scrapedPosts").get(proofSource._id).analysisResultJson = noExplicitVenue;
+  promoter.tables.get("events").get(promoter.eventId).rawExtractionJson = noExplicitVenue;
+  promoter.tables.get("instagramSources").set(repairAccount._id, { ...repairAccount, role: "promoter" });
+  await assert.rejects(() => previewVenueRepair._handler(promoter.ctx, repairArgs), /does not resolve to one exact venue/);
+  assert.equal(promoter.writes.length, 0);
 } finally { Date.now = originalHappyNow; }
 
 console.log("QA passed: automatic unique approval diagnostics are read-only, authenticated, exact-versioned, source-grounded, and match the approval sweep.");

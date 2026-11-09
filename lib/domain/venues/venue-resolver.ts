@@ -1,9 +1,11 @@
 import {
   buildCanonicalVenueAliasesByHandle,
   buildCanonicalVenueNamesByHandle,
+  findPositiveLocativeVenueHandleEvidence,
   normalizeHandle,
   normalizeVenueComparableText,
   normalizeVenueFromEvidence,
+  normalizeVenueStreetAddress,
   type CanonicalVenueAliasesByHandle,
   type VenueNormalization,
   type VenueSource,
@@ -90,6 +92,7 @@ export type VenueSnapshot = {
   canonicalVenueNamesByHandle: Record<string, string>;
   fingerprint: string;
   excludedVenueClaims: readonly string[];
+  streetAddressCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   identityCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   providerHandleCandidates: ReadonlyMap<string, readonly VenueResolverRecord[]>;
   records: readonly VenueResolverRecord[];
@@ -207,12 +210,14 @@ export function buildVenueSnapshot(options: {
   const venueById = new Map(records.map((venue) => [venue.id, venue]));
   const identityCandidates = new Map<string, VenueResolverRecord[]>();
   const providerHandleCandidates = new Map<string, VenueResolverRecord[]>();
+  const streetAddressCandidates = new Map<string, VenueResolverRecord[]>();
 
   for (const venue of records) {
     addCandidate(identityCandidates, identityKey(venue.name), venue);
     for (const alias of venue.aliases ?? []) {
       addCandidate(identityCandidates, identityKey(alias), venue);
     }
+    addCandidate(streetAddressCandidates, normalizeVenueStreetAddress(venue.location ?? ""), venue);
     if (venue.instagramHandle) {
       addCandidate(
         providerHandleCandidates,
@@ -270,6 +275,7 @@ export function buildVenueSnapshot(options: {
     ...excludedVenueClaims.map((claim) => `non-venue:${claim}`),
     ...records.flatMap((venue) => [
       `venue:${venue.id}:${venue.name}:${venue.instagramHandle ?? ""}`,
+      ...(venue.location ? [`address:${venue.id}:${normalizeVenueStreetAddress(venue.location)}`] : []),
       ...(venue.aliases ?? []).map((alias) => `alias:${venue.id}:${alias}`),
     ]),
     ...(options.identities ?? [])
@@ -289,6 +295,7 @@ export function buildVenueSnapshot(options: {
     identityCandidates,
     providerHandleCandidates,
     records,
+    streetAddressCandidates,
     venueById,
     version: VENUE_RESOLVER_POLICY_VERSION,
   };
@@ -325,6 +332,10 @@ function candidatesForHandle(
   );
 }
 
+function candidatesForStreetAddress(snapshot: VenueSnapshot, value: string): readonly VenueResolverRecord[] {
+  return snapshot.streetAddressCandidates.get(normalizeVenueStreetAddress(value)) ?? [];
+}
+
 function ambiguous(
   candidates: readonly VenueResolverRecord[],
   rawValue: string,
@@ -357,16 +368,23 @@ function resolved(
   };
 }
 
-function collectMentionedHandleCandidates(
+function collectLocativeHandleCandidates(
   snapshot: VenueSnapshot,
   evidenceTexts: readonly (string | null | undefined)[],
 ): VenueResolverRecord[] {
   const candidates: VenueResolverRecord[] = [];
   for (const text of evidenceTexts) {
     for (const match of (text ?? "").matchAll(
-      /(?:^|[^\p{L}\p{N}._])[@#]([a-z0-9_]+(?:\.[a-z0-9_]+)*)/giu,
+      /(?:^|[^\p{L}\p{N}._])@([a-z0-9_]+(?:\.[a-z0-9_]+)*)/giu,
     )) {
-      candidates.push(...candidatesForHandle(snapshot, match[1] ?? ""));
+      const handle = match[1] ?? "";
+      for (const venue of candidatesForHandle(snapshot, handle)) {
+        if (findPositiveLocativeVenueHandleEvidence({
+          evidenceText: text ?? "",
+          handle,
+          venueNames: [venue.name, ...(venue.aliases ?? [])],
+        })) candidates.push(venue);
+      }
     }
   }
   return uniqueCandidates(candidates);
@@ -378,11 +396,13 @@ function materializeEvidenceResolution(
 ): VenueResolution | null {
   if (!evidenceResolution.venue) return null;
 
-  const byName = candidatesForName(snapshot, evidenceResolution.venue);
-  const byHandle = evidenceResolution.evidenceHandle
+  const handleCandidates = evidenceResolution.evidenceHandle
     ? candidatesForHandle(snapshot, evidenceResolution.evidenceHandle)
     : [];
-  const candidates = uniqueCandidates([...byName, ...byHandle]);
+  const candidates = handleCandidates.length > 0 ? handleCandidates : uniqueCandidates([
+    ...candidatesForName(snapshot, evidenceResolution.venue),
+    ...candidatesForStreetAddress(snapshot, evidenceResolution.venue),
+  ]);
   if (candidates.length > 1) {
     return ambiguous(candidates, evidenceResolution.venue);
   }
@@ -461,12 +481,20 @@ function resolveVenueClaims(
     immutableEvidenceTexts: [...(input.evidenceTexts ?? [])],
     locationName: input.locationName,
     rawModelVenue: input.rawVenueClaim ?? "",
+    requireLocativeVenueHandle: true,
     staticVenueByHandle: { ...(input.staticVenueByHandle ?? {}) },
   });
   const selectedEvidenceVenue = materializeEvidenceResolution(
     snapshot,
     evidenceResolution,
   );
+  const locativeCandidates = collectLocativeHandleCandidates(snapshot, input.evidenceTexts ?? []);
+  if (evidenceResolution.ambiguousVenueEvidence || locativeCandidates.length > 1) {
+    return ambiguous(locativeCandidates, "conflicting explicit venue evidence");
+  }
+  if (selectedEvidenceVenue?.status === "resolved" && selectedEvidenceVenue.reason === "evidence_handle") {
+    return selectedEvidenceVenue;
+  }
   if (sourceVenue && sourceFallbackAllowed && selectedEvidenceVenue) {
     return selectedEvidenceVenue;
   }
@@ -475,24 +503,15 @@ function resolveVenueClaims(
   for (const claim of [input.rawVenueClaim, input.locationName]) {
     const value = claim?.trim() ?? "";
     if (!value) continue;
-    const byName = candidatesForName(snapshot, value);
     const byHandle = candidatesForHandle(snapshot, value);
-    const candidates = uniqueCandidates([...byName, ...byHandle]);
+    const candidates = byHandle.length > 0 && value.startsWith("@") ? byHandle : uniqueCandidates([
+      ...candidatesForName(snapshot, value),
+      ...byHandle,
+      ...candidatesForStreetAddress(snapshot, value),
+    ]);
     if (candidates.length > 1) return ambiguous(candidates, value);
     positiveClaimCandidates.push(...candidates);
   }
-
-  const mentionedHandleCandidates = collectMentionedHandleCandidates(
-    snapshot,
-    input.evidenceTexts ?? [],
-  );
-  if (mentionedHandleCandidates.length > 1) {
-    return ambiguous(
-      mentionedHandleCandidates,
-      "multiple provider-account mentions",
-    );
-  }
-  positiveClaimCandidates.push(...mentionedHandleCandidates);
 
   const independentlyResolvedCandidates = uniqueCandidates(
     positiveClaimCandidates,
@@ -514,7 +533,7 @@ function resolveVenueClaims(
   }
 
   return {
-    candidates: mentionedHandleCandidates,
+    candidates: [],
     confidence: "unknown",
     evidence: [],
     reason: "unknown",

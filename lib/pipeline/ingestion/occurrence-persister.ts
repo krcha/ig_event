@@ -694,7 +694,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
       }
 
       try {
-        let persistedUpdate: { updatedAt: number };
+        let persistedUpdate: { updatedAt: number; status?: "pending" };
         if (sourceOccurrencePlan && preparedOccurrenceKey) {
           persistedUpdate = await client.mutation(
             updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation,
@@ -719,7 +719,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
             expectedStatus: existingMatch.existingEvent.status,
             expectedUpdatedAt: existingMatch.existingEvent.updatedAt,
             serviceSecret,
-          }) as { updatedAt: number };
+          }) as { updatedAt: number; status?: "pending" };
         }
         if (durableMediaEligible) {
           hasDurableMediaAttachmentTarget = true;
@@ -736,7 +736,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
           qualityReasons: quality.reasons,
           qualityDetails: quality.details,
           materiallyChanged: updatePayload.materiallyChanged,
-          statusAutoApproved: updatePayload.statusAutoApproved,
+          statusAutoApproved: persistedUpdate.status !== "pending" && updatePayload.statusAutoApproved,
           statusResetToPending: updatePayload.statusResetToPending,
           caption: post.caption,
           postTimestamp: post.postedAt,
@@ -750,7 +750,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
           ...(clearTicketPrice ? { ticketPrice: undefined } : {}),
           timeEvidenceText: updatePayload.patch.timeEvidenceText ?? undefined,
           status:
-            updatePayload.patch.status ?? existingMatch.existingEvent.status,
+            persistedUpdate.status ?? updatePayload.patch.status ?? existingMatch.existingEvent.status,
           reviewedAt:
             updatePayload.patch.reviewedAt ?? existingMatch.existingEvent.reviewedAt,
           reviewedBy:
@@ -790,6 +790,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
         created: boolean;
         updatedAt?: number;
         disposition?: "canonical_approved_duplicate";
+        status?: "pending";
       };
       const insertedId =
         typeof createResult === "string" ? createResult : createResult.eventId;
@@ -846,15 +847,18 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
       }
       summary.insertedEvents += 1;
       summary.inserted_events += 1;
-      if (prepared.event.status === "approved") {
+      const persistedStatus = typeof createResult === "string"
+        ? prepared.event.status : createResult.status ?? prepared.event.status;
+      if (persistedStatus === "approved") {
         summary.insertedApprovedEvents += 1;
-      } else if (prepared.event.status === "pending") {
+      } else if (persistedStatus === "pending") {
         summary.insertedPendingEvents += 1;
       }
       existingMatches.push({
         existingEvent: {
           _id: insertedId,
           ...prepared.event,
+          status: persistedStatus,
           updatedAt: exactInsertedUpdatedAt,
         },
         matchedBy: "post_url",
@@ -864,6 +868,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
         ...postContext,
         extractionMode,
         selectedImageUrl,
+        status: persistedStatus,
         caption: post.caption,
         postTimestamp: post.postedAt,
         rawExtraction: extracted,

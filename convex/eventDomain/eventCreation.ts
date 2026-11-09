@@ -5,6 +5,7 @@ import { adaptInstagramScrapedPostToSourceDocument } from "../../lib/domain/sour
 import { sha256Hex } from "../../lib/domain/reconciliation/evidence-digest";
 import {
   assertServiceCreateEventPolicy,
+  deferServiceApprovalForUnresolvedVenue,
   hasEventEvidenceV2AutoApproval,
 } from "../../lib/events/event-update-precondition";
 import { assertPublicEventImageWrite } from "../../lib/images/public-event-image";
@@ -379,6 +380,7 @@ export async function createEventHandler(
     ctx,
     eventArgs.venue,
   );
+  const deferApprovalForVenue = kind === "service" && eventArgs.status === "approved" && !venueFields.venueId;
   if (kind === "service") {
     const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
       eventArgs.normalizedFieldsJson,
@@ -430,7 +432,17 @@ export async function createEventHandler(
       );
     }
   }
-  const normalizedEventArgs = normalizeEventTimeWritePatch(eventArgs);
+  if (deferApprovalForVenue && !occurrencePlan) {
+    throw new Error("Service event creation needs a source occurrence receipt to hold an unresolved venue for review.");
+  }
+  const normalizedEventArgs = normalizeEventTimeWritePatch(deferApprovalForVenue
+    ? {
+        ...eventArgs,
+        normalizedFieldsJson: deferServiceApprovalForUnresolvedVenue(eventArgs.normalizedFieldsJson),
+        status: "pending" as const,
+      }
+    : eventArgs);
+  const persistedStatus = normalizedEventArgs.status ?? "pending";
   const canonicalEventType = canonicalizeEventType(eventArgs.eventType);
   const effectiveEventForIndexes = {
     ...normalizedEventArgs,
@@ -442,7 +454,7 @@ export async function createEventHandler(
   );
   const canonicalSourceUrl =
     eventArgs.instagramPostUrl === undefined &&
-    (eventArgs.status ?? "pending") !== "approved"
+    persistedStatus !== "approved"
       ? ""
       : requireCanonicalInstagramPostUrl(
           eventArgs.instagramPostUrl,
@@ -462,14 +474,14 @@ export async function createEventHandler(
     publicationEvaluatedAt: now,
     publicationPolicyVersion: PUBLICATION_POLICY_VERSION,
     publicationReason:
-      (eventArgs.status ?? "pending") === "approved"
+      persistedStatus === "approved"
         ? "canonical_source_grounding_missing"
         : "moderation_not_approved",
     publicationState:
-      (eventArgs.status ?? "pending") === "approved"
+      persistedStatus === "approved"
         ? "pending_verification"
         : "hidden",
-    status: eventArgs.status ?? "pending",
+    status: persistedStatus,
     createdAt: now,
     updatedAt: now,
   });
@@ -502,6 +514,6 @@ export async function createEventHandler(
   });
 
   return returnCreateDisposition
-    ? { eventId, created: true, updatedAt: now }
+    ? { eventId, created: true, updatedAt: now, ...(deferApprovalForVenue ? { status: "pending" as const } : {}) }
     : eventId;
 }

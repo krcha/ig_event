@@ -313,6 +313,7 @@ export function resolveImportedEventHandle(
   handlesByVenueName: Map<string, string>,
 ): string {
   const canonicalVenueName = canonicalizeVenueName(venue, canonicalVenueNamesByHandle, {
+    allowCompatible: false,
     canonicalVenueAliasesByHandle,
   });
   if (canonicalVenueName) {

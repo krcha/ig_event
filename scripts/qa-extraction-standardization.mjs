@@ -44,7 +44,7 @@ import {
   reconcileAmbiguousOccurrenceKeysWithExistingEventsForTesting,
 } from "../lib/pipeline/run-instagram-ingestion.ts";
 import { extractModelSplitEventCandidates } from "../lib/pipeline/ingestion/parsing-schedule.ts";
-import { isVerifiedEventIdentityEvidence, isVerifiedTimeEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
+import { isVerifiedEventIdentityEvidence, isVerifiedEventVenueEvidence, isVerifiedTimeEvidence } from "../lib/pipeline/ingestion/structured-fact-verification.ts";
 import { normalizeEventTitle } from "../lib/pipeline/ingestion/parsing-event-title.ts";
 import { normalizeVenue } from "../lib/pipeline/ingestion/structured-facts.ts";
 import {
@@ -753,6 +753,18 @@ function runVenueQa() {
   });
   assert.equal(namedLocativeHandle.venue, "Klub 20/44");
   assert.equal(namedLocativeHandle.source, "evidence_handle");
+
+  for (const [sourceLine, verified] of [
+    ["Uz podršku @heartefact_", false],
+    ["📍 @heartefact_", true],
+  ]) {
+    assert.equal(isVerifiedEventVenueEvidence({
+      venue: "Heartefact | Hartefakt", rawEvidenceValue: "@heartefact_",
+      extracted: makeExtractedEvent(), splitSourceLine: sourceLine, splitEvidenceSource: "caption",
+      post: makeInstagramPost({ caption: sourceLine, locationName: "" }),
+      hasPoster: false, trustedVenueSource: false, sharedVenueVerified: false,
+    }), verified, "An extracted handle needs occurrence-local evidence that places the event at its venue.");
+  }
 
   const addressBoundDistinctVenue = normalizeVenueFromEvidence({
     handle: "samousnu_ns",
@@ -7745,6 +7757,7 @@ async function runServiceApprovalMutationBoundaryQa() {
     normalizedFieldsJson,
   };
   let inserted = false;
+  let lastInsertedEvent = null;
   let patched = false;
   let lastPatch = null;
   let lastAudit = null;
@@ -7777,6 +7790,7 @@ async function runServiceApprovalMutationBoundaryQa() {
             _id: "qa-existing-event",
             ...groundedPublicFields,
             venue: existingVenue,
+            venueId: existingVenueInstagramHandle === "qa_venue" ? "qa-venue-id" : undefined,
             venueInstagramHandle: existingVenueInstagramHandle,
             status: "pending",
             updatedAt: 1,
@@ -7787,6 +7801,7 @@ async function runServiceApprovalMutationBoundaryQa() {
         return "qa-audit-row";
       }
       inserted = true;
+      lastInsertedEvent = value;
       return "qa-created-event";
     },
     patch: async (_id, patch) => {
@@ -8266,6 +8281,8 @@ async function runServiceApprovalMutationBoundaryQa() {
       }),
     );
     assert.equal(inserted, true, "A fully bound unique service create should write.");
+    assert.equal(lastInsertedEvent.status, "approved", "A service event with an exact resolved venue still approves.");
+    assert.equal(lastInsertedEvent.venueId, "qa-venue-id");
 
     const approvedCanonicalDuplicate = {
       _id: "qa-approved-canonical-duplicate",
@@ -8706,6 +8723,7 @@ async function runServiceApprovalMutationBoundaryQa() {
       }),
     );
     assert.equal(patched, true, "A fully bound unique pending promotion should write.");
+    assert.equal(lastPatch.status, "approved");
 
     sameDateEvents = [
       {

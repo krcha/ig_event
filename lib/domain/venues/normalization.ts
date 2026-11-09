@@ -21,6 +21,7 @@ export type VenueNormalization = {
   rawModelVenue: string;
   rawLocationName: string;
   evidenceHandle?: string;
+  ambiguousVenueEvidence?: boolean;
 };
 
 type CanonicalVenueMap = Record<string, string>;
@@ -55,6 +56,7 @@ type NormalizeVenueInput = {
   handleVenueNamesByHandle?: CanonicalVenueMap;
   staticVenueByHandle?: StaticVenueMap;
   allowCanonicalHandleFallback?: boolean;
+  requireLocativeVenueHandle?: boolean;
 };
 
 const SERBIAN_CYRILLIC_TO_LATIN: Record<string, string> = {
@@ -214,6 +216,19 @@ export function normalizeVenueComparableText(value: string): string {
     .trim();
 }
 
+export function normalizeVenueStreetAddress(value: string): string {
+  const address = toSearchableText(value)
+    .replace(/^(?:ulica|ul)\s+/u, "")
+    .replace(/\s+(?:(?:\d{5}\s+)?(?:beograd|belgrade)(?:\s+\d{5})?)(?:\s+(?:srbija|serbia))?$/u, "")
+    .trim();
+  // A location needs a street and building number. City names, room labels,
+  // and coordinates alone are too broad to identify a venue.
+  return !/^(?:hangar|hall|hala|paviljon|room|sala|stage|studio)\s+\d/u.test(address) &&
+    /^[\p{L}][\p{L}\p{N} ]+\s\d{1,4}[a-z]?$/u.test(address)
+    ? address
+    : "";
+}
+
 export function normalizeVenueAliases(values: string[]): string[] {
   if (values.length > MAX_VENUE_ALIASES) {
     throw new Error(`A venue can have at most ${MAX_VENUE_ALIASES} aliases.`);
@@ -363,19 +378,19 @@ function areVenueNamesCompatible(left: string, right: string): boolean {
   return ` ${longer} `.includes(` ${shorter} `);
 }
 
-function canExpandVenueClaim(candidate: string, canonicalName: string): boolean {
+function canExpandVenueClaim(candidate: string, canonicalName: string, allowLongerClaim = true): boolean {
   if (!areVenueNamesCompatible(candidate, canonicalName)) return false;
   const claim = normalizeVenueComparableText(candidate);
   const canonical = normalizeVenueComparableText(canonicalName);
-  if (claim.length >= canonical.length) return true;
-  // A parent complex must not resolve to an unrelated business inside it.
-  // Ordinary venue/city qualifiers remain harmless; a missing brand needs
-  // an explicitly configured alias rather than substring compatibility.
+  if (allowLongerClaim && claim.length >= canonical.length) return true;
+  const [longer, shorter] = claim.length >= canonical.length ? [claim, canonical] : [canonical, claim];
+  // Ordinary venue and city qualifiers can refine a confirmed account name.
+  // An extra brand or room label still needs a registered identity.
   const qualifiers = new Set([
     "bar", "beograd", "belgrade", "cafe", "club", "events", "kafe", "klub",
     "nightclub", "pub", "restaurant", "restoran",
   ]);
-  return canonical.replace(claim, " ").split(" ").filter(Boolean)
+  return longer.replace(shorter, " ").split(" ").filter(Boolean)
     .every((token) => qualifiers.has(token));
 }
 
@@ -455,6 +470,7 @@ export function canonicalizeVenueNameDetailed(
   candidate: string,
   canonicalVenueNamesByHandle: CanonicalVenueMap,
   options?: {
+    allowCompatible?: boolean;
     preferredVenue?: string | null;
     staticVenueByHandle?: StaticVenueMap;
     handleVenueNamesByHandle?: CanonicalVenueMap;
@@ -478,7 +494,7 @@ export function canonicalizeVenueNameDetailed(
     canonicalVenueAliasesByHandle,
   );
 
-  if (preferredVenue && canExpandVenueClaim(candidate, preferredVenue)) {
+  if (preferredVenue && canExpandVenueClaim(candidate, preferredVenue, options?.allowCompatible !== false)) {
     const preferredEntry = findEntryByVenueName(
       preferredVenue,
       canonicalVenueEntries,
@@ -531,7 +547,7 @@ export function canonicalizeVenueNameDetailed(
       exactMatch.matchedAlias,
     );
   }
-  if (exactMatches.length > 0) {
+  if (exactMatches.length > 0 || options?.allowCompatible === false) {
     return null;
   }
 
@@ -563,6 +579,7 @@ export function canonicalizeVenueName(
   candidate: string,
   canonicalVenueNamesByHandle: CanonicalVenueMap,
   options?: {
+    allowCompatible?: boolean;
     preferredVenue?: string | null;
     staticVenueByHandle?: StaticVenueMap;
     handleVenueNamesByHandle?: CanonicalVenueMap;
@@ -627,7 +644,7 @@ function pickExplicitVenueCandidate(
     modelVenue.length > 0 && !isLowConfidenceVenue(modelVenue);
 
   if (hasLocationName && hasModelVenue) {
-    if (areVenueNamesCompatible(locationName, modelVenue)) {
+    if (normalizeVenueComparableText(locationName) === normalizeVenueComparableText(modelVenue)) {
       return {
         venue: locationName,
         source: "location_name",
@@ -822,9 +839,10 @@ function findUniqueCanonicalVenueHandleMention(
   staticVenueByHandle: StaticVenueMap,
   handleVenueNamesByHandle: CanonicalVenueMap,
   canonicalVenueAliasesByHandle: CanonicalVenueAliasesByHandle,
+  requireLocativeVenueHandle: boolean,
 ):
   | { kind: "none" }
-  | { kind: "ambiguous" }
+  | { kind: "ambiguous"; locative: boolean }
   | { kind: "unique"; handle: string; venue: string; locative: boolean } {
   const normalizedPostingHandle = normalizeHandle(postingHandle);
   const matchedHandles = new Set<string>();
@@ -838,7 +856,7 @@ function findUniqueCanonicalVenueHandleMention(
 
     for (const match of evidence.matchAll(exactHandlePattern)) {
       const handle = normalizeHandle(match[1] ?? "");
-      if (!handle || handle === normalizedPostingHandle) continue;
+      if (!handle) continue;
       if (
         !getPreferredVenueNameForHandle(
           handle,
@@ -849,8 +867,9 @@ function findUniqueCanonicalVenueHandleMention(
       ) {
         continue;
       }
-      matchedHandles.add(handle);
       const rawMatch = match[0] ?? "";
+      if (requireLocativeVenueHandle && !rawMatch.includes("@")) continue;
+      if (handle !== normalizedPostingHandle) matchedHandles.add(handle);
       const sigilOffset = Math.max(
         rawMatch.indexOf("@"),
         rawMatch.indexOf("#"),
@@ -872,9 +891,17 @@ function findUniqueCanonicalVenueHandleMention(
     }
   }
 
-  if (matchedHandles.size === 0) return { kind: "none" };
-  if (matchedHandles.size > 1) return { kind: "ambiguous" };
-  const handle = [...matchedHandles][0];
+  const eligibleHandles = locativeHandles.size ? locativeHandles : matchedHandles;
+  if (eligibleHandles.size === 0) return { kind: "none" };
+  if (eligibleHandles.size > 1) {
+    const names = new Set([...eligibleHandles].map((handle) => getPreferredVenueNameForHandle(
+      handle, canonicalVenueNamesByHandle, staticVenueByHandle, handleVenueNamesByHandle,
+    )));
+    if (names.size > 1 || !locativeHandles.size) {
+      return { kind: "ambiguous", locative: Boolean(locativeHandles.size) };
+    }
+  }
+  const handle = [...eligibleHandles][0];
   const venue = getPreferredVenueNameForHandle(
     handle,
     canonicalVenueNamesByHandle,
@@ -930,23 +957,9 @@ function hasShortVenueNameContext(
   if (venueTokens.length !== 1 || compactName.length > 4) {
     return true;
   }
-  const nearbyPrefix = evidenceTokens.slice(
-    Math.max(0, startToken - 2),
-    startToken,
-  );
-  return nearbyPrefix.some((token) =>
-    new Set([
-      "at",
-      "basta",
-      "club",
-      "klub",
-      "location",
-      "lokacija",
-      "na",
-      "u",
-      "venue",
-    ]).has(token),
-  );
+  return new Set([
+    "at", "basta", "club", "klub", "location", "lokacija", "na", "u", "venue",
+  ]).has(evidenceTokens[startToken - 1] ?? "");
 }
 
 function findUniqueCanonicalVenueNameMention(
@@ -1106,36 +1119,42 @@ export function normalizeVenueFromEvidence(
     staticVenueByHandle,
     handleVenueNamesByHandle,
     canonicalVenueAliasesByHandle,
+    input.requireLocativeVenueHandle === true,
   );
   const addressBoundVenue = findAddressBoundVenueName(
     input.immutableEvidenceTexts ?? [],
   );
+  const ambiguousVenue: VenueNormalization = {
+    ambiguousVenueEvidence: true,
+    venue: null,
+    source: null,
+    wasFallback: true,
+    rawModelVenue: modelVenue,
+    rawLocationName: locationName,
+  };
+  if (addressBoundVenue.kind === "ambiguous" ||
+    (canonicalHandleMention.kind === "ambiguous" && canonicalHandleMention.locative)) {
+    return ambiguousVenue;
+  }
   if (addressBoundVenue.kind === "unique") {
     const canonical = canonicalizeVenueNameDetailed(
       addressBoundVenue.venue,
       input.canonicalVenueNamesByHandle,
       {
+        allowCompatible: false,
         staticVenueByHandle,
         handleVenueNamesByHandle,
         canonicalVenueAliasesByHandle,
       },
     );
-    const venue = canonical && canonical.reason !== "compatible"
-      ? canonical.venue
-      : addressBoundVenue.venue;
+    const venue = canonical?.venue ?? addressBoundVenue.venue;
     if (
       canonicalHandleMention.kind === "unique" &&
       canonicalHandleMention.locative &&
       normalizeVenueComparableText(canonicalHandleMention.venue) !==
         normalizeVenueComparableText(venue)
     ) {
-      return {
-        venue: null,
-        source: null,
-        wasFallback: true,
-        rawModelVenue: modelVenue,
-        rawLocationName: locationName,
-      };
+      return ambiguousVenue;
     }
     return {
       venue,
@@ -1146,13 +1165,12 @@ export function normalizeVenueFromEvidence(
     };
   }
 
-  // A uniquely named canonical venue is authoritative for promoters and
-  // unknown sources. A configured physical venue account retains precedence
-  // over a casual tag, unless the immutable text explicitly places the event
-  // at the tagged venue (for example, "at @kcgrad" or "vidimo se @kcgrad").
+  // A locative tag can identify a venue even on a promoter's post. A casual
+  // tag cannot replace a configured physical venue account.
   if (
     canonicalHandleMention.kind === "unique" &&
-    (!hardMappedVenue || canonicalHandleMention.locative)
+    (canonicalHandleMention.locative ||
+      (!hardMappedVenue && !input.requireLocativeVenueHandle))
   ) {
     return {
       venue: canonicalHandleMention.venue,
@@ -1170,6 +1188,7 @@ export function normalizeVenueFromEvidence(
         hardMappedVenue,
         input.canonicalVenueNamesByHandle,
         {
+          allowCompatible: false,
           preferredVenue: mappedVenue || null,
           staticVenueByHandle,
           handleVenueNamesByHandle,
@@ -1188,22 +1207,26 @@ export function normalizeVenueFromEvidence(
   const explicitVenue = pickExplicitVenueCandidate(locationName, modelVenue);
   if (explicitVenue) {
     const canonicalExplicitVenue =
-      canonicalizeVenueName(
+      canonicalizeVenueNameDetailed(
         explicitVenue.venue,
         input.canonicalVenueNamesByHandle,
         {
+          allowCompatible: false,
           preferredVenue: mappedVenue || null,
           staticVenueByHandle,
           handleVenueNamesByHandle,
           canonicalVenueAliasesByHandle,
         },
-      ) ?? explicitVenue.venue;
+      );
     return {
-      venue: canonicalExplicitVenue,
+      venue: canonicalExplicitVenue?.venue ?? explicitVenue.venue,
       source: explicitVenue.source,
       wasFallback: explicitVenue.wasFallback,
       rawModelVenue: modelVenue,
       rawLocationName: locationName,
+      ...(canonicalExplicitVenue?.reason === "handle" && canonicalExplicitVenue.handle
+        ? { evidenceHandle: canonicalExplicitVenue.handle }
+        : {}),
     };
   }
 

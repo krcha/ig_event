@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import "./register-ts-paths.mjs";
+import { eventDocument } from "../convex/eventDomain/contracts.ts";
 import {
   MAX_MODERATION_DUPLICATE_CONTEXT_DATES,
   getModerationDuplicateContextDates,
   loadModerationDuplicateContextWithFallback,
   mergeModerationDuplicateContextEvents,
 } from "../lib/events/moderation-duplicate-context.ts";
+
+// Date-window moderation reads return stored event documents unchanged.
+// A missing optional field in the return contract makes the entire page fail
+// when even one row has a newer approval or provenance marker.
+const { _id, _creationTime, ...returnedEventFields } = eventDocument.fields;
+const { default: schema } = await import("../convex/schema.ts");
+assert.deepEqual(
+  Object.fromEntries(Object.entries(returnedEventFields).map(([field, validator]) => [field, validator.json])),
+  Object.fromEntries(Object.entries(schema.tables.events.validator.fields).map(([field, validator]) => [field, validator.json])),
+);
+assert.equal(_id.json.tableName, "events");
+assert.equal(_creationTime.json.type, "number");
 
 function read(path) {
   return readFileSync(path, "utf8");

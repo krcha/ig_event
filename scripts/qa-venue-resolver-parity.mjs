@@ -359,6 +359,46 @@ assert.deepEqual(
   })?.venue, "Dolly Bell Sava Centar", "An explicit historical alias remains authoritative.");
 }
 
+{
+  const recordStore = { id: "kuca-records", name: "Кућа", instagramHandle: "kuca_record_store" };
+  const heartefact = { id: "heartefact", name: "Heartefact | Hartefakt", instagramHandle: "heartefact_",
+    aliases: ["Hartefakt Kuća"], location: "Bulevar despota Stefana 7, Beograd" };
+  const venueOnly = buildIngestionVenueResolver({ canonicalVenueNamesByHandle: {},
+    venueResolverSnapshot: { venues: [recordStore], identities: [] } });
+  for (const venue of ["Hartefakt Kuća", "Evropska kuća"]) {
+    assert.equal(resolveIngestionVenue(venueOnly, {
+      postingProviderHandle: "other.promoter", sourceRole: "promoter", rawVenueClaim: venue, locationName: "Кућа",
+    }).venue, venue, "A generic substring or conflicting generic location label cannot bind a different venue.");
+    assert.equal(resolveIngestionVenue(venueOnly, {
+      postingProviderHandle: "other.promoter", sourceRole: "promoter", evidenceTexts: [`Vidimo se u ${venue}`],
+    }).venue, null, "A short venue token within a longer brand name is not locative evidence.");
+  }
+  const directory = buildVenueSnapshot({ venues: [recordStore, heartefact] });
+  assert.equal(resolveVenue(directory, { rawVenueClaim: "Hartefakt Kuća" }).venue?.id, heartefact.id,
+    "An exact registered alias binds a similar venue name to its own record.");
+  assert.equal(resolveVenue(directory, { locationName: "Ul. Bulevar despota Stefana 7, 11000 Beograd" }).venue?.id,
+    heartefact.id, "An exact registered street address can identify the venue.");
+  assert.equal(resolveVenue(directory, { locationName: "Bulevar despota Stefana 17, Beograd" }).status, "unresolved",
+    "A similar street address must keep the exact building number.");
+  const sharedAddress = buildVenueSnapshot({ venues: [heartefact,
+    { ...recordStore, location: heartefact.location }] });
+  assert.equal(resolveVenue(sharedAddress, { locationName: heartefact.location }).status, "ambiguous",
+    "An address shared by more than one venue does not bind any of them.");
+  assert.equal(resolveVenue(directory, { sourceRole: "promoter", postingProviderHandle: "other.promoter",
+    evidenceTexts: ["Organizator @kuca_record_store", "Lokacija: @heartefact_"] }).venue?.id, heartefact.id,
+    "The venue-role handle wins when another account is credited as organizer.");
+  for (const evidence of ["Organizator @kuca_record_store", "Lokacija: #heartefact_"]) {
+    assert.equal(resolveVenue(directory, { evidenceTexts: [evidence] }).status, "unresolved",
+      "A promoter credit or hashtag by itself does not establish the physical venue.");
+  }
+  const sameName = buildVenueSnapshot({ venues: [heartefact,
+    { ...recordStore, name: heartefact.name }] });
+  assert.equal(resolveVenue(sameName, { rawVenueClaim: "@heartefact_" }).venue?.id, heartefact.id,
+    "An exact provider handle identifies its own venue even when display names collide.");
+  assert.equal(resolveVenue(directory, { evidenceTexts: ["at @heartefact_", "at @kuca_record_store"] }).status,
+    "ambiguous", "Two distinct explicitly named locations need occurrence-level evidence.");
+}
+
 function makeIndexedResolverDb({ identities, migrationReady = true, venueRows, sources = [] }) {
   const venuesById = new Map(venueRows.map((venue) => [venue._id, venue]));
   const queryCounts = { eventDomainMigrationState: 0, venueIdentities: 0, venues: 0, instagramSources: 0 };

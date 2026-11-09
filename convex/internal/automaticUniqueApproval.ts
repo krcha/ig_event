@@ -1,8 +1,9 @@
-import { evaluateAutomaticUniqueApproval } from "./automaticUniqueApprovalPreflight";
+import { evaluateAutomaticUniqueApproval, type AutomaticUniqueApprovalPreflight } from "./automaticUniqueApprovalPreflight";
 import { attemptAutomaticPendingRepair } from "./autonomousModerationRepair";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
-import { internalAction, internalMutation } from "../_generated/server";
+import type { Doc } from "../_generated/dataModel";
+import { internalAction, internalMutation, type MutationCtx } from "../_generated/server";
 import {
   AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
   AUTOMATIC_UNIQUE_APPROVAL_RULE,
@@ -33,6 +34,35 @@ const sweepPageReference =
       scannedCount: number;
     }
   >;
+
+export async function persistAutomaticUniqueApproval(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+  preflight: NonNullable<AutomaticUniqueApprovalPreflight["approval"]>,
+): Promise<Doc<"events">> {
+  const { approved, nextCandidate } = preflight;
+  await ctx.db.patch(event._id, {
+    ...approved.prepared.venuePatch,
+    automaticUniqueApprovalPolicyVersion: AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
+    normalizedFieldsJson: nextCandidate.normalizedFieldsJson,
+    ...buildEventOccurrenceIndexPatch(nextCandidate),
+    status: "approved",
+    updatedAt: nextEventUpdatedAt(event.updatedAt),
+  });
+  await refreshCanonicalEventDerivedStates(ctx, [event._id]);
+  const persisted = await ctx.db.get(event._id);
+  if (!persisted || !(await isCanonicallyGroundedApprovedEvent(ctx, persisted))) {
+    throw new Error("Automatic unique approval failed final public source proof.");
+  }
+  await writeEventAuditLog(ctx, event._id, "approved", {
+    actor: SYSTEM_ACTOR,
+    patch: {
+      policy: AUTOMATIC_UNIQUE_APPROVAL_RULE,
+      sourceOccurrenceKey: event.sourceOccurrenceKey,
+    },
+  });
+  return persisted;
+}
 
 /** One transaction owns a single queue position and one possible approval. */
 export const sweepPage = internalMutation({
@@ -101,29 +131,7 @@ export const sweepPage = internalMutation({
         await attemptAutomaticPendingRepair(ctx, event, evaluation.diagnostic);
       }
       if (preflight) {
-        const { approved, nextCandidate } = preflight;
-        const now = Date.now();
-        await ctx.db.patch(event._id, {
-          ...approved.prepared.venuePatch,
-          automaticUniqueApprovalPolicyVersion:
-            AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
-          normalizedFieldsJson: nextCandidate.normalizedFieldsJson,
-          ...buildEventOccurrenceIndexPatch(nextCandidate),
-          status: "approved",
-          updatedAt: nextEventUpdatedAt(event.updatedAt, now),
-        });
-        await refreshCanonicalEventDerivedStates(ctx, [event._id]);
-        const persisted = await ctx.db.get(event._id);
-        if (!persisted || !(await isCanonicallyGroundedApprovedEvent(ctx, persisted))) {
-          throw new Error("Automatic unique approval failed final public source proof.");
-        }
-        await writeEventAuditLog(ctx, event._id, "approved", {
-          actor: SYSTEM_ACTOR,
-          patch: {
-            policy: AUTOMATIC_UNIQUE_APPROVAL_RULE,
-            sourceOccurrenceKey: event.sourceOccurrenceKey,
-          },
-        });
+        await persistAutomaticUniqueApproval(ctx, event, preflight);
         approvedCount = 1;
       }
     }

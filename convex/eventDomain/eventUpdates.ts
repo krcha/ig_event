@@ -7,6 +7,7 @@ import {
   assertExpectedEventStatus,
   assertExpectedEventUpdatedAt,
   assertServiceUpdateEventPolicy,
+  deferServiceApprovalForUnresolvedVenue,
   hasEventEvidenceV2AutoApproval,
   hasExplicitNonEventEvidence,
   nextEventUpdatedAt,
@@ -55,7 +56,7 @@ export async function applyEventUpdate(
   args: EventUpdateArgs,
   authorization: Authorization,
   options: { occurrenceRebindFollows?: boolean } = {},
-): Promise<{ updatedAt: number }> {
+): Promise<{ updatedAt: number; status?: "pending" }> {
   const existingEvent = await ctx.db.get(args.id);
   if (!existingEvent) {
     throw new Error("Event not found.");
@@ -205,15 +206,17 @@ export async function applyEventUpdate(
     }
   }
   const updatedAt = nextEventUpdatedAt(existingEvent.updatedAt);
-  const effectiveEvent = { ...existingEvent, ...patch };
+  const requestedEvent = { ...existingEvent, ...patch };
+  const deferApprovalForVenue = authorization.kind === "service" &&
+    patch.status === "approved" && !requestedEvent.venueId;
   if (authorization.kind === "service") {
     const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
-      effectiveEvent.normalizedFieldsJson,
-      effectiveEvent,
+      requestedEvent.normalizedFieldsJson,
+      requestedEvent,
     );
     if (
       patch.status === "approved" &&
-      !effectiveEvent.venueInstagramHandle &&
+      !requestedEvent.venueInstagramHandle &&
       !structuredEvidenceApproval
     ) {
       throw new Error(
@@ -222,33 +225,41 @@ export async function applyEventUpdate(
     }
     assertServiceUpdateEventPolicy(existingEvent.status, patch, existingEvent);
     if (patch.status === "approved") {
-      await assertPersistedServiceSourcePolicy(ctx, effectiveEvent);
+      await assertPersistedServiceSourcePolicy(ctx, requestedEvent);
     }
   }
-  if (effectiveEvent.status === "approved") {
+  if (requestedEvent.status === "approved") {
     requireCanonicalInstagramPostUrl(
-      effectiveEvent.instagramPostUrl,
+      requestedEvent.instagramPostUrl,
       `Approved event update ${existingEvent._id}`,
     );
     await assertApprovalCandidatePolicy(
       ctx,
       {
-        title: effectiveEvent.title,
-        date: effectiveEvent.date,
-        venue: effectiveEvent.venue,
-        venueId: effectiveEvent.venueId,
-        venueInstagramHandle: effectiveEvent.venueInstagramHandle,
-        instagramPostId: effectiveEvent.instagramPostId,
-        instagramPostUrl: effectiveEvent.instagramPostUrl,
-        time: effectiveEvent.time,
-        artists: effectiveEvent.artists,
-        sourceOccurrenceKey: effectiveEvent.sourceOccurrenceKey,
-        normalizedFieldsJson: effectiveEvent.normalizedFieldsJson,
-        rawExtractionJson: effectiveEvent.rawExtractionJson,
+        title: requestedEvent.title,
+        date: requestedEvent.date,
+        venue: requestedEvent.venue,
+        venueId: requestedEvent.venueId,
+        venueInstagramHandle: requestedEvent.venueInstagramHandle,
+        instagramPostId: requestedEvent.instagramPostId,
+        instagramPostUrl: requestedEvent.instagramPostUrl,
+        time: requestedEvent.time,
+        artists: requestedEvent.artists,
+        sourceOccurrenceKey: requestedEvent.sourceOccurrenceKey,
+        normalizedFieldsJson: requestedEvent.normalizedFieldsJson,
+        rawExtractionJson: requestedEvent.rawExtractionJson,
       },
       [args.id],
     );
   }
+  if (deferApprovalForVenue) {
+    if (!options.occurrenceRebindFollows) {
+      throw new Error("Service event approval needs a source occurrence receipt to hold an unresolved venue for review.");
+    }
+    patch.status = "pending";
+    patch.normalizedFieldsJson = deferServiceApprovalForUnresolvedVenue(patch.normalizedFieldsJson);
+  }
+  const effectiveEvent = deferApprovalForVenue ? { ...existingEvent, ...patch } : requestedEvent;
   const occurrenceIndexPatch = materialChange
     ? buildEventOccurrenceIndexPatch(effectiveEvent)
     : {};
@@ -272,7 +283,7 @@ export async function applyEventUpdate(
     actor: authorization.actor,
     patch: auditPatch,
   });
-  return { updatedAt };
+  return { updatedAt, ...(deferApprovalForVenue ? { status: "pending" as const } : {}) };
 }
 
 export async function updateEventHandler(
@@ -337,5 +348,5 @@ export async function updateEventAndRecordInstagramSourceOccurrenceSatisfactionH
     satisfaction.sourceOccurrenceId,
     "update",
   );
-  return { updated: true, recorded: true, updatedAt: updateResult.updatedAt };
+  return { updated: true, recorded: true, ...updateResult };
 }

@@ -208,7 +208,7 @@ export async function repairTrustedV2EventVenueHandler(
   const rawVenueCanonicalization = canonicalizeVenueNameDetailed(
     rawVenue,
     canonicalVenueNamesByHandle,
-    { canonicalVenueAliasesByHandle },
+    { allowCompatible: false, canonicalVenueAliasesByHandle },
   );
   if (
     (!rawVenue && !exactCanonicalVenueSource) ||

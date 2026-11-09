@@ -2,7 +2,7 @@ import { type ExtractedEventData } from "@/lib/ai/extract-event-data";
 import { extractEventTimeEvidenceFromText, extractEventTimeFromText, normalizeEventTime } from "@/lib/events/event-time";
 import { type NightlifeLineupCoalescingPlan, type NightlifeLineupSource, titleContainsOnlyBilledArtists } from "@/lib/events/nightlife-lineup-coalescing";
 import { sourceEvidenceNamesSupportedUnnamedEventKind, specificVenueValueAppearsInUnnamedEventEvidence, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
-import { normalizeExtractedArtists, toSearchableText } from "@/lib/pipeline/venue-normalization";
+import { findPositiveLocativeVenueHandleEvidence, normalizeExtractedArtists, normalizeHandle, toSearchableText } from "@/lib/pipeline/venue-normalization";
 import { type InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
 import type { EventDateEvidenceSource } from "@/lib/pipeline/ingestion/contracts";
 import { expandNormalizedDateRange, hasExplicitDateText, normalizeEventDate } from "@/lib/pipeline/ingestion/parsing-date";
@@ -191,6 +191,10 @@ export function isVerifiedTimeEvidence(options: {
   );
 }
 
+function explicitVenueHandle(value: string): string | undefined {
+  return /^@([a-z0-9_]+(?:\.[a-z0-9_]+)*)$/iu.exec(value.trim())?.[1];
+}
+
 export function hasVerifiedSharedScheduleContext(
   value: ExtractedEventData["shared_schedule_context"]["venue" | "time"],
   post: InstagramScrapedPost,
@@ -199,8 +203,11 @@ export function hasVerifiedSharedScheduleContext(
 ): boolean {
   const normalizedValue = toSearchableText(value.value);
   const normalizedEvidence = toSearchableText(value.evidence);
+  const venueHandle = field === "venue" ? explicitVenueHandle(value.value) : undefined;
   const evidenceSupportsValue =
-    field === "venue"
+    venueHandle
+      ? Boolean(findPositiveLocativeVenueHandleEvidence({ evidenceText: value.evidence, handle: venueHandle, venueNames: [] }))
+      : field === "venue"
       ? venueValueAppearsInEventEvidence(value.value, value.evidence)
       : normalizedEvidence.includes(normalizedValue);
   return (
@@ -237,7 +244,13 @@ export function isVerifiedEventVenueEvidence(options: {
   const evidenceValues = [options.venue, options.rawEvidenceValue]
     .map((value) => normalizeString(value))
     .filter(Boolean);
+  const venueHandle = explicitVenueHandle(options.rawEvidenceValue) ?? explicitVenueHandle(options.venue);
   const supportsVenue = (text: string): boolean => {
+    if (venueHandle) {
+      return Boolean(findPositiveLocativeVenueHandleEvidence({
+        evidenceText: text, handle: venueHandle, venueNames: [options.venue],
+      }));
+    }
     return Boolean(
       normalizeString(text) &&
         evidenceValues.some((value) =>
@@ -304,7 +317,8 @@ export function isVerifiedEventVenueEvidence(options: {
   }
   if (
     options.post.locationName &&
-    supportsVenue(options.post.locationName)
+    (supportsVenue(options.post.locationName) ||
+      (venueHandle && normalizeHandle(options.post.locationName.trim()) === normalizeHandle(venueHandle)))
   ) {
     return true;
   }
