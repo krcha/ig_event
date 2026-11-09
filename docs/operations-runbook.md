@@ -377,6 +377,11 @@ category. Admin rows show the latest matching diagnostic/recovery state from
 `automaticApprovalHolds`; recording this state does not change event versions.
 Human-ready approval remains a separate, weaker policy than machine approval.
 
+Event details and moderation show separately billed artist names and Instagram
+handles even when the source does not establish that they belong to the same
+person. These display credits do not change the stored lineup, source conflict,
+duplicate checks, or structured data.
+
 After failed preflight, the sweep can repair a uniquely resolved active venue
 account alias through certified provenance rebinding, or reclassify a benign
 source conflict while retaining all public facts and raw extraction bytes.

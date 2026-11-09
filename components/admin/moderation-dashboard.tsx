@@ -76,6 +76,7 @@ type ModerationEvent = {
   timeStatus: EventTimeStatus;
   venue: string;
   artists: string[];
+  artistDisplayCredits?: string[];
   description: string | null;
   imageUrl: string | null;
   instagramPostUrl: string | null;
@@ -204,6 +205,7 @@ type FieldConfirmationRow = {
 };
 
 type DecoratedEvent = ModerationEvent & {
+  artistDisplayCredits: string[];
   normalizedFields: Record<string, unknown> | null;
   rawExtraction: Record<string, unknown> | null;
   rawExtractedDateText: string | null;
@@ -639,6 +641,7 @@ function buildFieldConfirmationRows(
   event: ModerationEvent,
   normalizedFields: Record<string, unknown> | null,
   rawExtraction: Record<string, unknown> | null,
+  artistDisplayCredits: string[],
 ): FieldConfirmationRow[] {
   const fieldConfirmation =
     readObjectField(normalizedFields, "fieldConfirmation") ??
@@ -656,7 +659,7 @@ function buildFieldConfirmationRows(
     .filter((value): value is string => Boolean(value))
     .join(" ");
   const extractedArtists =
-    event.artists.length > 0 ? event.artists : readStringArrayField(rawExtraction, "artists");
+    artistDisplayCredits.length > 0 ? artistDisplayCredits : readStringArrayField(rawExtraction, "artists");
 
   return [
     {
@@ -733,14 +736,17 @@ function decorateEvent(event: ModerationEvent): DecoratedEvent {
     suspectedDuplicateCount: 0,
     hasResolvedDuplicate: false,
   });
+  const artistDisplayCredits = event.artistDisplayCredits ?? event.artists;
   const fieldConfirmationRows = buildFieldConfirmationRows(
     event,
     normalizedFields,
     rawExtraction,
+    artistDisplayCredits,
   );
 
   return {
     ...event,
+    artistDisplayCredits,
     normalizedFields,
     rawExtraction,
     rawExtractedDateText:
@@ -2212,10 +2218,10 @@ export function ModerationDashboard() {
                   </div>
                 </div>
 
-                {event.artists.length > 0 ? (
+                {event.artistDisplayCredits.length > 0 ? (
                   <p className="text-sm leading-5">
                     Artists:{" "}
-                    <span className="text-muted-foreground">{event.artists.join(", ")}</span>
+                    <span className="text-muted-foreground">{event.artistDisplayCredits.join(", ")}</span>
                   </p>
                 ) : null}
 

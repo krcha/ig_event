@@ -25,6 +25,7 @@ import {
 } from "../publicationCutover";
 import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy";
 import { getConfirmedEventSchemaFacts } from "../../lib/events/confirmed-event-schema-facts";
+import { getEventArtistDisplayCredits } from "../../lib/events/event-artist-display-credits";
 import { loadPublicEventDiscoveryLabels } from "../eventDiscovery";
 
 // Live publication validation can touch persisted source evidence, venue
@@ -448,9 +449,13 @@ export async function getPublicApprovedEventHandler(
     : projectLegacyCompatiblePublicEventPage(ctx, [event]));
   if (!projected) return null;
   const structuredDataFacts = getConfirmedEventSchemaFacts(event, projected.venueId);
+  const artistDisplayCredits = getEventArtistDisplayCredits(event);
   return {
     ...projected,
     ...(structuredDataFacts ? { structuredDataFacts } : {}),
+    ...(artistDisplayCredits.some((credit, index) => credit !== projected.artists[index])
+      ? { artistDisplayCredits }
+      : {}),
   };
 }
 

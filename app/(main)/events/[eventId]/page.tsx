@@ -91,6 +91,7 @@ type EventRecord = {
   venueLocation?: string;
   venueLongitude?: number;
   artists: string[];
+  artistDisplayCredits?: string[];
   description?: string;
   reviewedSourceUpdate?: ReviewedSourceUpdate;
   sourceCaption?: string;
@@ -329,6 +330,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   if (!event) {
     notFound();
   }
+  const artistCredits = event.artistDisplayCredits ?? event.artists;
   const eventTime = resolveEventTimePresentation(event);
   const preferredText = event.sourceCaption?.trim() || event.description?.trim() || "";
   const localizedDescription = getLocalizedEventDescription({ ...event, description: preferredText }, locale);
@@ -475,17 +477,17 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   </section>
                 ) : null}
 
-                {event.artists.length > 0 ? (
+                {artistCredits.length > 0 ? (
                   <details className="group rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-2.5">
                     <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
                       <span><PublicText text={"Artists"} /></span>
                       <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                        {event.artists.length}
+                        {event.artistDisplayCredits ? null : event.artists.length}
                         <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
                       </span>
                     </summary>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {event.artists.map((artist) => (
+                      {artistCredits.map((artist) => (
                         <span className="app-chip bg-card/95" key={artist}>
                           {artist}
                         </span>

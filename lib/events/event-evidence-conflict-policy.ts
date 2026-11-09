@@ -549,7 +549,7 @@ function venueConflictIsBenign(
   );
 }
 
-function scopedConflictSources(context: EventEvidenceConflictContext): [string, string] | null {
+export function scopedConflictSources(context: EventEvidenceConflictContext): [string, string] | null {
   const poster = context.sourcePosterTexts?.join("\n") ?? "";
   if (!poster) return null;
   if (context.singleOccurrenceSource) return [poster, context.sourceCaption];

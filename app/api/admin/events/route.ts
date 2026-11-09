@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireAdminApiAccess } from "@/lib/auth/admin-api";
 import { createAuthenticatedConvexHttpClient } from "@/lib/convex/server";
 import type { EventTimeSource, EventTimeStatus } from "@/lib/events/event-time";
+import { getEventArtistDisplayCredits } from "@/lib/events/event-artist-display-credits";
 import {
   getModerationDuplicateContextDates,
   loadModerationDuplicateContextWithFallback,
@@ -81,6 +82,7 @@ type EventRecord = {
   ticketPrice?: string;
   eventType: string;
   sourceCaption?: string;
+  sourceConflictFields?: string[];
   sourcePostedAt?: string;
   rawExtractionJson?: string;
   normalizedFieldsJson?: string;
@@ -133,6 +135,9 @@ const updateEventMutation =
 const getAutomaticHoldsQuery = "autonomousModeration:getHolds" as unknown as FunctionReference<"query">;
 
 function mapEventRecord(event: EventRecord) {
+  const artistDisplayCredits = event.sourceConflictFields?.includes("artists")
+    ? getEventArtistDisplayCredits(event)
+    : event.artists;
   return {
     id: event._id,
     title: event.title,
@@ -144,6 +149,7 @@ function mapEventRecord(event: EventRecord) {
     timeStatus: event.timeStatus ?? "unknown",
     venue: event.venue,
     artists: event.artists,
+    ...(artistDisplayCredits.length > event.artists.length ? { artistDisplayCredits } : {}),
     description: event.description ?? null,
     imageUrl: event.imageUrl ?? null,
     instagramPostUrl: event.instagramPostUrl ?? null,

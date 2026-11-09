@@ -5,6 +5,7 @@ import {
   OPENAI_REQUEST_TIMEOUT_MS,
   parseExtractedEventData,
 } from "../lib/ai/extract-event-data.ts";
+import { getEventArtistDisplayCredits } from "../lib/events/event-artist-display-credits.ts";
 import { TBD_EVENT_TIME } from "../lib/events/event-time.ts";
 import { venueValueAppearsInEventEvidence } from "../lib/events/unnamed-schedule-fallback.ts";
 import {
@@ -1166,6 +1167,7 @@ function runSemanticNormalizationQa() {
     );
     assert.equal(unrelatedPrepared.event.status, "pending");
     assert.deepEqual(unrelatedPrepared.event.sourceConflictFields, ["artists"]);
+    assert.deepEqual(unrelatedPrepared.event.artists, ["NENI", "@other_artist"]);
 
     const nearPrefixAlias = parseExtractedEventData({
       ...structuredClone(extracted),
@@ -2052,6 +2054,40 @@ function runSemanticNormalizationQa() {
     const ambiguous = { ...artistContext, sourceCaption: "Nastupaju Vojkan Bećir i @vojislavzapravo." };
     assert.deepEqual(combineEventArtistHandleAliases(artists, [artistConflict], ambiguous), artists);
     assert.equal(eventEvidenceConflictIsBenign(artistConflict, ambiguous), false);
+  });
+
+  runCase("display adds separately billed names and handles without changing the recorded lineup", () => {
+    const conflict = {
+      field: "artists", poster_value: "Nick Freerider", caption_value: "@nick.makrame",
+      reason: "The instructor identity differs between poster and caption.",
+    };
+    const fixture = (sourceCaption, scheduleRows = []) => {
+      const event = { title: "Exploring shibari harnesses", date: "2026-11-27", venue: "Studio kinkylab",
+        artists: ["Nick Freerider"], sourceCaption, sourceConflictFields: ["artists"] };
+      return { ...event, normalizedFieldsJson: JSON.stringify({
+        extractionContractVersion: "event_evidence_v2", extractionSourceConflicts: [conflict],
+        title: event.title, normalizedDate: event.date, normalizedVenue: event.venue,
+        sourceGroundingSourceCaption: sourceCaption, dateEvidenceVerified: true,
+        splitEventTotal: scheduleRows.length || 1, multiEventSplitDetected: scheduleRows.length > 1,
+      }), rawExtractionJson: JSON.stringify({ is_event: true, source_caption: sourceCaption,
+        source_conflicts: [conflict], schedule_entries: scheduleRows,
+        field_confirmation: { artists: confirmation("Nick Freerider", "poster") } }) };
+    };
+
+    const workshop = fixture("@nick.makrame\n\nI am an engineer.\n\nIn this workshop, we will explore harnesses.");
+    assert.deepEqual(getEventArtistDisplayCredits(workshop), ["Nick Freerider", "@nick.makrame"]);
+    assert.deepEqual(workshop.artists, ["Nick Freerider"]);
+    assert.deepEqual(workshop.sourceConflictFields, ["artists"]);
+    assert.deepEqual(getEventArtistDisplayCredits(fixture("DJ @nick.makrame")), ["Nick Freerider", "@nick.makrame"]);
+    assert.deepEqual(getEventArtistDisplayCredits({ ...workshop, artists: ["@nick.makrame"] }),
+      ["@nick.makrame", "Nick Freerider"]);
+    assert.deepEqual(getEventArtistDisplayCredits({ ...workshop, artists: ["Nick Freerider (@nick.makrame)"] }),
+      ["Nick Freerider (@nick.makrame)"]);
+    for (const sourceCaption of ["Venue: @nick.makrame", "Sponsor: DJ @nick.makrame", "DJ @nick.makrame_other"]) {
+      assert.deepEqual(getEventArtistDisplayCredits(fixture(sourceCaption)), ["Nick Freerider"]);
+    }
+    assert.deepEqual(getEventArtistDisplayCredits(fixture("DJ @nick.makrame", [{}, {}])), ["Nick Freerider"]);
+    assert.deepEqual(getEventArtistDisplayCredits({ ...workshop, title: "Sibling program" }), ["Nick Freerider"]);
   });
 
   runCase("promoter account cannot override a caption-grounded physical venue", () => {
