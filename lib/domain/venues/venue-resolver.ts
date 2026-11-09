@@ -371,13 +371,15 @@ function resolved(
 function collectLocativeHandleCandidates(
   snapshot: VenueSnapshot,
   evidenceTexts: readonly (string | null | undefined)[],
+  postingProviderHandle: string,
 ): VenueResolverRecord[] {
   const candidates: VenueResolverRecord[] = [];
   for (const text of evidenceTexts) {
     for (const match of (text ?? "").matchAll(
       /(?:^|[^\p{L}\p{N}._])@([a-z0-9_]+(?:\.[a-z0-9_]+)*)/giu,
     )) {
-      const handle = match[1] ?? "";
+      const handle = normalizeHandle(match[1] ?? "");
+      if (handle === postingProviderHandle) continue;
       for (const venue of candidatesForHandle(snapshot, handle)) {
         if (findPositiveLocativeVenueHandleEvidence({
           evidenceText: text ?? "",
@@ -488,7 +490,7 @@ function resolveVenueClaims(
     snapshot,
     evidenceResolution,
   );
-  const locativeCandidates = collectLocativeHandleCandidates(snapshot, input.evidenceTexts ?? []);
+  const locativeCandidates = collectLocativeHandleCandidates(snapshot, input.evidenceTexts ?? [], postingProviderHandle);
   if (evidenceResolution.ambiguousVenueEvidence || locativeCandidates.length > 1) {
     return ambiguous(locativeCandidates, "conflicting explicit venue evidence");
   }

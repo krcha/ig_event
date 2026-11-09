@@ -1,6 +1,7 @@
 import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { SourceOccurrencePlan } from "@/lib/pipeline/source-occurrence-planning";
 import type {
+  IngestionCreateEventResult,
   IngestionPostContext,
   IngestionStep,
   PrepareEventResult,
@@ -55,14 +56,9 @@ export async function persistCachedCanonicalApprovedDuplicateForRepair(input: {
       returnCreateDisposition: true,
       requireCanonicalApprovedDuplicate: true,
       serviceSecret: input.serviceSecret,
-    })) as {
-      eventId?: string;
-      created?: boolean;
-      disposition?: string;
-      updatedAt?: number;
-    };
+    })) as IngestionCreateEventResult;
     if (
-      createResult.created !== false ||
+      typeof createResult === "string" || createResult.created !== false ||
       createResult.disposition !== "canonical_approved_duplicate" ||
       !createResult.eventId ||
       !Number.isSafeInteger(createResult.updatedAt)

@@ -178,6 +178,13 @@ export type InstagramIngestionSourceContext = {
 
 export type EventStatus = "pending" | "approved" | "rejected";
 
+export type IngestionCreateEventResult = string | {
+  eventId: string;
+  created: boolean;
+  updatedAt?: number;
+  disposition?: "canonical_approved_duplicate";
+  status?: "pending";
+};
 
 export type EventDateEvidenceSource = "caption" | "poster" | "alt_text" | "unknown";
 

@@ -1,6 +1,6 @@
 import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { SourceOccurrenceReceipt } from "@/lib/pipeline/source-occurrence-planning";
-import type { ExistingSourceMatch, IngestionPostContext, IngestionStep, PrepareEventResult, ProcessIngestionPostOptions } from "@/lib/pipeline/ingestion/contracts";
+import type { ExistingSourceMatch, IngestionCreateEventResult, IngestionPostContext, IngestionStep, PrepareEventResult, ProcessIngestionPostOptions } from "@/lib/pipeline/ingestion/contracts";
 import { createEventMutation, getEventQuery, reconcileIngestionPlanMutation, reconcileInstagramSourceOccurrenceReceiptMutation, recordInstagramSourceOccurrenceSatisfactionMutation, updateEventAndRecordInstagramSourceOccurrenceSatisfactionMutation, updateEventMutation, updateSourceOccurrenceExpectedCountMutation } from "@/lib/pipeline/ingestion/convex-bindings";
 import { isLowQualityExistingEvent, mapDuplicateReasonToLogEvent } from "@/lib/pipeline/ingestion/existing-source-policy";
 import { hasDurableMediaEligibleNormalizedFields, persistInstagramMediaCandidates } from "@/lib/pipeline/ingestion/media-durability";
@@ -785,13 +785,7 @@ export async function persistStructuredFactOccurrences(input: PersistStructuredF
           returnCreateDisposition: true,
           serviceSecret,
         },
-      )) as string | {
-        eventId: string;
-        created: boolean;
-        updatedAt?: number;
-        disposition?: "canonical_approved_duplicate";
-        status?: "pending";
-      };
+      )) as IngestionCreateEventResult;
       const insertedId =
         typeof createResult === "string" ? createResult : createResult.eventId;
       const wasCreated =

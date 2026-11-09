@@ -533,9 +533,18 @@ export function canonicalizeVenueNameDetailed(
     );
   }
 
-  const exactMatches = canonicalVenueEntries.filter(
-    (entry) => normalizeVenueComparableText(entry.name) === normalizedCandidate,
+  const exactMatches = canonicalVenueEntries.filter((entry) =>
+    normalizeVenueComparableText(entry.name) === normalizedCandidate,
   );
+  if (exactMatches.length === 0 && options?.allowCompatible === false) {
+    // A registered display name can carry a decorative "& Events" suffix.
+    // Compare the entire remaining name, preserving every identifying word.
+    exactMatches.push(...canonicalVenueEntries.filter((entry) => {
+      const base = entry.name.replace(/\s+&\s+events$/iu, "");
+      return !entry.matchedAlias && base !== entry.name &&
+        normalizeVenueComparableText(base) === normalizedCandidate;
+    }));
+  }
   const exactMatch = findUniqueVenueEntry(exactMatches);
   if (exactMatch) {
     return buildCanonicalizationResult(
@@ -856,7 +865,7 @@ function findUniqueCanonicalVenueHandleMention(
 
     for (const match of evidence.matchAll(exactHandlePattern)) {
       const handle = normalizeHandle(match[1] ?? "");
-      if (!handle) continue;
+      if (!handle || handle === normalizedPostingHandle) continue;
       if (
         !getPreferredVenueNameForHandle(
           handle,
@@ -869,7 +878,7 @@ function findUniqueCanonicalVenueHandleMention(
       }
       const rawMatch = match[0] ?? "";
       if (requireLocativeVenueHandle && !rawMatch.includes("@")) continue;
-      if (handle !== normalizedPostingHandle) matchedHandles.add(handle);
+      matchedHandles.add(handle);
       const sigilOffset = Math.max(
         rawMatch.indexOf("@"),
         rawMatch.indexOf("#"),
