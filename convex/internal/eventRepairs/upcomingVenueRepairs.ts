@@ -12,6 +12,7 @@ import { rebindCanonicalVenueProvenance } from "../../eventDomain/moderationVenu
 import { refreshCanonicalEventDerivedStates, writeEventAuditLog } from "../../eventDomain/persistence";
 import { assertApprovalCandidatePolicy, assertPersistedServiceSourcePolicy, classifyApprovalCandidates } from "../../eventDomain/sourceApproval";
 import { isCanonicallyGroundedApprovedEvent } from "../../publicEventGrounding";
+import { refreshEventPublicationStates } from "../../publicationPolicy";
 import { sourceOccurrenceProvenanceRepository } from "../../repositories/sourceOccurrenceProvenance";
 import { buildEventOccurrenceIndexPatch } from "../../sourceOccurrences";
 import { resolveVenueClaimsForWrite } from "../../venueResolver";
@@ -210,8 +211,14 @@ export async function persistUpcomingVenueRepair(
     updatedAt: nextEventUpdatedAt(event.updatedAt),
   });
   await refreshCanonicalEventDerivedStates(ctx, affectedRepresentativeIds);
+  let repaired = await ctx.db.get(event._id);
+  if (event.status === "approved" && repaired?.publicationReason === "derived_state_refresh_deferred") {
+    // Large receipts still defer their siblings. This exact repair must pass
+    // the same publication evaluator before the transaction can commit.
+    await refreshEventPublicationStates(ctx, [event._id]);
+    repaired = await ctx.db.get(event._id);
+  }
   if (topologyMutated) await markSourceOccurrenceTopologyMutation(ctx, { verified: true });
-  const repaired = await ctx.db.get(event._id);
   if (!repaired || (event.status === "approved" &&
       (repaired.publicationState !== "publishable" || !(await isCanonicallyGroundedApprovedEvent(ctx, repaired))))) {
     throw new ConvexError(`Repaired approved event does not pass current publication proof (${repaired?.publicationReason ?? "missing"}).`);

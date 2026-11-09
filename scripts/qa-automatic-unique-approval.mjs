@@ -992,6 +992,36 @@ try {
   assert.equal(approvedRepair.status, "approved");
   assert.equal(approvedRepair.publicationState, "publishable");
 
+  const largeReceipt = makeBlankVenueRepairContext("approved");
+  const largeSourceReceipt = largeReceipt.tables.get("instagramSourceOccurrenceReceipts").get(basePartialReceipt._id);
+  const siblingIds = [];
+  for (let index = 0; index < 6; index += 1) {
+    const id = `qa-receipt-sibling-${index}`;
+    const key = `qa-occurrence-sibling-${index}`;
+    const title = `Sibling show ${index}`;
+    const date = `2035-01-${16 + index}`;
+    const sibling = { ...proofEvent, _id: id, sourceOccurrenceKey: key, title, date,
+      normalizedFieldsJson: JSON.stringify({ ...JSON.parse(proofFields), title, normalizedDate: date, sourceOccurrenceKey: key }),
+    };
+    largeReceipt.tables.get("events").set(id, sibling);
+    largeSourceReceipt.expectedKeys.push(key);
+    largeSourceReceipt.expectedOccurrences.push({ ...ownExpected, key, date: sibling.date, title: sibling.title });
+    largeSourceReceipt.satisfiedKeys.push(key);
+    largeSourceReceipt.satisfiedOccurrences.push({ key, eventId: id });
+    siblingIds.push(id);
+  }
+  const deferred = [];
+  largeReceipt.ctx.scheduler = {
+    async runAfter(_delay, _reference, args) { deferred.push(structuredClone(args)); },
+  };
+  const largePlan = await previewVenueRepair._handler(largeReceipt.ctx, repairArgs);
+  const largeResult = await applyVenueRepair._handler(largeReceipt.ctx, { plan: largePlan.plan, serviceSecret: repairArgs.serviceSecret });
+  const repairedEvent = largeReceipt.tables.get("events").get(largeReceipt.eventId);
+  assert.equal(largeResult.publicationState, "publishable", "The exact repair must be visible even when sibling refresh is deferred.");
+  assert.equal(await isCanonicallyGroundedApprovedEvent(largeReceipt.ctx, repairedEvent), true);
+  assert.deepEqual(deferred, [{ eventIds: [largeReceipt.eventId, ...siblingIds], offset: 0 }]);
+  assert.ok(siblingIds.every((id) => largeReceipt.tables.get("events").get(id).publicationReason === "derived_state_refresh_deferred"));
+
   const promoter = makeBlankVenueRepairContext();
   const noExplicitVenue = JSON.stringify({
     ...JSON.parse(proofRaw),
