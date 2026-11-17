@@ -17,6 +17,7 @@ export const accountMessages = {
     "sr": "Mapa",
     "ru": "Карта"
   },
+  "nav.next": { "en": "Where next?", "sr": "Gde dalje?", "ru": "Куда дальше?" },
   "nav.saved": {
     "en": "Saved",
     "sr": "Sačuvano",

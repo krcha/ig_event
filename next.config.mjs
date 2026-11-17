@@ -107,7 +107,7 @@ const nextConfig = {
     return {
       beforeFiles: ["en", "ru"].flatMap((locale) => [
         { source: `/${locale}`, destination: "/" },
-        ...["discover", "map", "saved", "you", "install", "venues/directory"].map((page) => ({
+        ...["discover", "next", "map", "saved", "you", "install", "venues/directory"].map((page) => ({
           source: `/${locale}/${page}`, destination: `/${page}`,
         })),
         { source: `/${locale}/events/:eventId`, destination: "/events/:eventId" },

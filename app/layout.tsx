@@ -9,6 +9,7 @@ import { UserLibraryProvider } from "@/components/providers/user-library-provide
 import { SITE_ORIGIN } from "@/lib/seo/site";
 import { SITE_COPY, OG_LOCALES, localizedAbsoluteUrl } from "@/lib/i18n/seo";
 import { EventsUiProvider } from "@/components/calendar/events-ui-provider";
+import { UserLocationProvider } from "@/components/travel/user-location";
 import { InstallPrompt } from "@/components/install/install-prompt";
 import { LocaleProvider } from "@/i18n/client";
 import { LOCALE_LANGUAGE_TAGS, type Locale } from "@/i18n/config";
@@ -126,10 +127,10 @@ function AppDocument({
         <LocaleProvider locale={locale}>
           {authEnabled ? (
             <AuthUserProvider>
-              <UserLibraryProvider>{appContent}</UserLibraryProvider>
+              <UserLibraryProvider><UserLocationProvider>{appContent}</UserLocationProvider></UserLibraryProvider>
             </AuthUserProvider>
           ) : (
-            <UserLibraryProvider authEnabled={false}>{appContent}</UserLibraryProvider>
+            <UserLibraryProvider authEnabled={false}><UserLocationProvider>{appContent}</UserLocationProvider></UserLibraryProvider>
           )}
         </LocaleProvider>
       </body>

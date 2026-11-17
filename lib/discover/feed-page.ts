@@ -7,6 +7,9 @@ import { getDiscoverDisplayImageUrl } from "@/lib/discover/discover-image-source
 import { loadPublicCalendarEventsWindow, type PublicEvent } from "@/lib/events/public-events";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import { projectMobileDiscoverEvent, type MobileDiscoverEvent } from "@/lib/discover/mobile-event";
+import { getEventPrimaryCategory } from "@/lib/taxonomy/event-categories";
+import { getEventSessionLabel } from "@/lib/events/event-session";
+import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 
 export const DISCOVER_PAGE_SIZE = 12;
 
@@ -31,6 +34,8 @@ function mapPublicEvent(event: PublicEvent): DiscoverFeedEvent {
     ...(event.time ? { time: event.time } : {}),
     title: event.title,
     venue: event.venue,
+    ...(event.venueLatitude !== undefined ? { venueLatitude: event.venueLatitude } : {}),
+    ...(event.venueLongitude !== undefined ? { venueLongitude: event.venueLongitude } : {}),
     ...(event.venueId ? { venueId: event.venueId } : {}),
     ...(event.venueHours ? { venueHours: event.venueHours } : {}),
   };
@@ -40,6 +45,23 @@ function mapMobileEvent(event: PublicEvent): MobileDiscoverEvent {
   // Only deck metadata is hydrated for the whole day. Original captions and
   // media still resolve on demand through the existing public post/image APIs.
   return projectMobileDiscoverEvent(event);
+}
+
+function mapDistanceEvent(event: PublicEvent): DiscoverFeedEvent {
+  const projected = mapPublicEvent(event);
+  // The complete day's spatial index stays light. Original captions resolve
+  // through the same eligibility-checked endpoint when a card is inspected.
+  delete projected.description;
+  delete projected.sourceCaption;
+  delete projected.venueHours;
+  const sessionLabel = getEventSessionLabel(event);
+  return {
+    ...projected,
+    primaryCategory: getEventPrimaryCategory(event),
+    displayTimeLabel: resolveEventTimePresentation(event).label,
+    ...(sessionLabel ? { sessionLabel } : {}),
+    captionDeferred: true,
+  };
 }
 
 async function loadDiscoverDayEvents(date: string): Promise<{
@@ -73,6 +95,7 @@ export async function loadDiscoverEventsPage(date: string, requestedPage: number
   currentPage: number;
   error?: string;
   events: DiscoverFeedEvent[];
+  distanceEvents: DiscoverFeedEvent[];
   mobileEvents: MobileDiscoverEvent[];
   firstEventNumber: number;
   lastEventNumber: number;
@@ -91,6 +114,7 @@ export async function loadDiscoverEventsPage(date: string, requestedPage: number
     currentPage,
     ...(result.error ? { error: result.error } : {}),
     events: await enrichBatch(pageEvents),
+    distanceEvents: result.events.map(mapDistanceEvent),
     mobileEvents: result.events.map(mapMobileEvent),
     firstEventNumber: pageEvents.length > 0 ? startIndex + 1 : 0,
     lastEventNumber: startIndex + pageEvents.length,

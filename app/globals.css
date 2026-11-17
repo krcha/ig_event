@@ -266,6 +266,30 @@
     @apply fixed inset-x-0 bottom-0 z-50 px-3 pt-2 md:hidden;
     padding-bottom: calc(0.65rem + env(safe-area-inset-bottom));
   }
+
+  .mobile-nav-shell [data-compass-tab="true"] {
+    position: relative;
+    background: transparent;
+    color: var(--foreground);
+    box-shadow: none;
+  }
+  .mobile-nav-shell [data-compass-tab="true"] > span:first-child {
+    display: grid;
+    place-items: center;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    margin-top: -23px;
+    margin-bottom: 1px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: 0 0 0 5px var(--background);
+    transition: transform 180ms ease-out;
+  }
+  .mobile-nav-shell [data-compass-tab="true"] > span:first-child svg { width: 22px; height: 22px; }
+  .mobile-nav-shell [data-compass-tab="true"]:active > span:first-child { transform: scale(.94); }
 }
 
 @media (min-width: 768px) {

@@ -13,6 +13,7 @@ import { calendarBandLabels, useCalendarDiscoveryFilters } from "./calendar-disc
 import { replaceCalendarDiscoveryFilters } from "./calendar-discovery-query";
 import { useLocale } from "@/i18n/client";
 import { publicText } from "@/lib/i18n/public-messages";
+import { useUserLocation } from "@/components/travel/user-location";
 import styles from "./mobile-events-home.module.css";
 
 export function EventsToolbar({ query, sortMode, openNowActive, openNowHref, now }: {
@@ -21,6 +22,7 @@ export function EventsToolbar({ query, sortMode, openNowActive, openNowHref, now
   const { filtersOpen, setFiltersOpen } = useEventsUi();
   const { time } = useCalendarDiscoveryFilters();
   const locale = useLocale();
+  const { position, requestLocation } = useUserLocation();
   const [selectedSort, setSelectedSort] = useState(sortMode);
   useEffect(() => setSelectedSort(sortMode), [sortMode]);
   const input = useRef<HTMLInputElement>(null);
@@ -48,7 +50,11 @@ export function EventsToolbar({ query, sortMode, openNowActive, openNowHref, now
     <div className={styles.extraFilters} id="events-extra-filters" hidden={!filtersOpen}>
       <OpenNowFilter active={openNowActive} appearance="events" href={openNowHref} initialNow={now} />
       <div className={styles.sortForm}>
-        <label><span className="sr-only"><PublicText text={"Sortiranje"} /></span><LocalizedElement as="select" aria-label="Sortiranje" className={styles.sort} name="sort" data-calendar-sort-select="true" value={selectedSort} onChange={event => setSelectedSort(event.target.value as AgendaSortMode)}>
+        <label><span className="sr-only"><PublicText text={"Sortiranje"} /></span><LocalizedElement as="select" aria-label="Sortiranje" className={styles.sort} name="sort" data-calendar-sort-select="true" value={selectedSort} onChange={event => {
+          const next = event.target.value as AgendaSortMode;
+          setSelectedSort(next);
+          if (next === "distance" && !position) requestLocation();
+        }}>
           {AGENDA_SORT_OPTIONS.map(option => <option key={option.value} value={option.value}><PublicText text={option.label} /></option>)}
         </LocalizedElement></label>
       </div>

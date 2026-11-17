@@ -7,6 +7,8 @@ export type MobileDiscoverEvent = {
   date: string;
   title: string;
   venue: string;
+  venueLatitude?: number;
+  venueLongitude?: number;
   ticketPrice?: string;
   primaryCategory: EventPrimaryCategory;
   tags: string[];
@@ -21,6 +23,8 @@ export function projectMobileDiscoverEvent(event: PublicEvent): MobileDiscoverEv
     date:event.date,
     title:event.title,
     venue:event.venue,
+    ...(event.venueLatitude !== undefined ? {venueLatitude:event.venueLatitude} : {}),
+    ...(event.venueLongitude !== undefined ? {venueLongitude:event.venueLongitude} : {}),
     ...(event.ticketPrice ? {ticketPrice:event.ticketPrice} : {}),
     primaryCategory:getEventPrimaryCategory(event),
     tags,

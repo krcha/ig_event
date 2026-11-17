@@ -113,11 +113,14 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"], locale = "en" 
         if (name === "react") return react;
         if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
         if (name === "@/components/i18n/public-text") return publicTextComponents;
-        if (name === "lucide-react") return Object.fromEntries(["ChevronDown", "ExternalLink", "ImageOff", "Instagram", "LoaderCircle", "X"].map((key) => [key, key]));
+        if (name === "lucide-react") return Object.fromEntries(["Clock3", "ChevronDown", "ExternalLink", "ImageOff", "Instagram", "LoaderCircle", "X"].map((key) => [key, key]));
         if (name === "next/image") return { default: "next-image" };
         if (name === "@/components/events/responsive-event-image") return { ResponsiveEventImage: "next-image" };
         if (name === "next/link") return { default: "next-link" };
         if (name === "@/components/ui/read-more-text") return { ReadMoreText: "read-more-text" };
+        if (name === "@/components/travel/event-travel") return { EventTravel: "event-travel" };
+        if (name === "@/components/travel/yandex-taxi-button") return { YandexTaxiButton: "yandex-taxi-button" };
+        if (name === "./event-post-preview.module.css") return { default: new Proxy({}, { get: (_, key) => String(key) }) };
         if (name === "@/lib/utils") return { cn: (...values) => values.filter(Boolean).join(" ") };
         if (name === "@/components/calendar/calendar-event-preview") return modules.get("controller");
         throw new Error(`Unexpected preview component import: ${name}`);
@@ -134,6 +137,10 @@ function createHarness({ fetchPost, ids = ["event-a", "event-b"], locale = "en" 
   const rows = new Map(ids.map((id) => [id, scope(controller.CalendarEventPreviewRow, {
     eventId: id,
     title: `Title ${id}`,
+    venueHoursLabel: "17:00–04:00",
+    venueLatitude: 44.81,
+    venueLongitude: 20.46,
+    venueName: `Venue ${id}`,
     children: [
       jsx("a", { href: `/venues/${id}`, onClick: () => actionCalls.push(`venue:${id}`), children: "Venue" }),
       jsx("button", { type: "button", onClick: (event) => { event.stopPropagation(); actionCalls.push(`save:${id}`); }, children: "Save" }),
@@ -278,17 +285,29 @@ function deferred() { let resolve; const promise = new Promise((finish) => { res
   assert.equal(caption.props.text, "Original caption event-a");
   assert.ok(caption.props.lines >= 1 && caption.props.lines <= 4, "Long captions remain compact until deliberately expanded.");
   const image = find(h.panel(), (node) => node.type === "next-image");
-  assert.ok(image.props.className.includes("object-contain"), "Posters must remain uncropped.");
+  const previewCss = readFileSync("components/calendar/event-post-preview.module.css", "utf8");
+  assert.match(previewCss, /\.poster\s*\{[^}]*width:\s*100%;[^}]*height:\s*auto;[^}]*object-fit:\s*contain;/,
+    "Mobile posters retain their full natural aspect ratio and card width.");
+  assert.equal(image.props.fill, undefined, "Natural poster height must not be replaced by a cropped fill box.");
   assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-heading"]).props.className, /hidden.*md:flex/,
     "The repeated Instagram heading is removed on mobile while desktop keeps its existing header.");
   const overlayClose = find(h.panel(), (node) => node.props["data-calendar-event-post-close"] === "overlay");
   assert.equal(overlayClose.props["aria-label"], "Close Instagram post");
-  assert.match(overlayClose.props.className, /absolute.*right-2.*top-2.*md:hidden/,
+  assert.match(overlayClose.props.className, /close.*md:hidden/,
     "Mobile posters retain an accessible close control over the image.");
-  assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-image"]).props.className, /38svh_\+_66px/,
-    "Mobile posters gain the freed heading space without cropping.");
-  assert.match(find(h.panel(), (node) => node.props["data-calendar-event-post-image"]).props.className, /h-\[min\(\d+(?:s|d)?vh,[\d.]+rem\)\]/,
-    "The active poster has a viewport-relative maximum height.");
+  assert.match(previewCss, /\.body\s*\{[^}]*margin-top:\s*-176px;[\s\S]*?background:\s*linear-gradient/,
+    "Caption, arrival and actions overlap the lower poster with a continuous readable gradient.");
+  assert.match(previewCss, /@media\s*\(min-width:\s*768px\)[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/,
+    "Desktop keeps its existing two-column preview.");
+  assert.ok(find(h.panel(), (node) => node.props["data-calendar-event-post-hours"]), "Factual venue hours remain available above the poster.");
+  const travel = find(h.panel(), (node) => node.type === "event-travel");
+  assert.equal(travel.props.venueLatitude, 44.81);
+  assert.equal(travel.props.venueLongitude, 20.46);
+  assert.equal(travel.props.showTaxi, false, "The arrival row must not duplicate the separate action shortcut.");
+  const taxi = find(h.panel(), (node) => node.type === "yandex-taxi-button");
+  assert.equal(taxi.props.latitude, 44.81);
+  assert.equal(taxi.props.longitude, 20.46);
+  assert.equal(taxi.props.venueName, "Venue event-a");
   h.click("event-b");
   assert.equal(h.activeId(), "event-b");
   assert.equal(find(h.row("event-a"), (node) => node.props.role === "region").props.hidden, true);

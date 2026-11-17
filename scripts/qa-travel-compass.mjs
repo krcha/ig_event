@@ -1,0 +1,63 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { bearingDegrees, estimateTravel, haversineMeters, isCoordinates, yandexDestinationHref } from "../lib/travel/location.ts";
+import { matchesVibe, compassCandidates, eventEndedBeforeArrival } from "../lib/travel/compass.ts";
+import { sortDiscoverByDistance } from "../lib/discover/distance-sort.ts";
+
+const origin = { latitude: 44.8125, longitude: 20.4612 };
+const point = { latitude: 44.8135, longitude: 20.4612 };
+assert.equal(isCoordinates({ latitude: "44", longitude: 20 }), false);
+assert.equal(isCoordinates({ latitude: 91, longitude: 20 }), false);
+assert.equal(haversineMeters(origin, origin), 0);
+assert.ok(Math.abs(haversineMeters(origin, point) - 111.195) < .1);
+assert.equal(bearingDegrees(origin, point), 0);
+assert.equal(estimateTravel(origin, point).walkMinutes, 2);
+assert.equal(estimateTravel(origin, { latitude: 44.83, longitude: 20.49 }).walkMinutes > 10, true);
+assert.equal(yandexDestinationHref({ latitude: NaN, longitude: 20 }), null);
+const taxi = new URL(yandexDestinationHref(point));
+assert.equal(taxi.protocol, "https:");
+assert.equal(taxi.searchParams.get("end-lat"), String(point.latitude));
+assert.equal(taxi.searchParams.get("end-lon"), String(point.longitude));
+assert.equal(taxi.searchParams.has("start-lat"), false);
+assert.equal(taxi.searchParams.has("start-lon"), false);
+assert.equal([...taxi.searchParams.keys()].length, 3);
+const deck = [{ _id: "unknown" }, { _id: "far", venueLatitude: 45, venueLongitude: 20 },
+  { _id: "near", venueLatitude: point.latitude, venueLongitude: point.longitude },
+  { _id: "tie", venueLatitude: point.latitude, venueLongitude: point.longitude }];
+assert.deepEqual(sortDiscoverByDistance(deck, origin).map(event => event._id), ["near", "tie", "far", "unknown"]);
+
+const now = Date.parse("2026-11-17T20:00:00Z");
+const hours = { hoursSource: "manual", hoursTimezone: "Europe/Belgrade", hoursJson: JSON.stringify({ version: 1, timezone: "Europe/Belgrade", source: "manual", generatedAt: "2026-11-17T00:00:00Z", weekly: Array.from({ length: 7 }, (_, day) => ({ day, closed: false, windows: [{ day, start: "18:00", end: "04:00", spansNextDay: true }] })) }) };
+const place = (id, genres, primaryCategory = "party", coords = point) => ({ id, name: id, ...coords, hours, event: { id, title: id, date: "2026-11-17", time: "20:00", taxonomy: { primaryCategory, categories: [primaryCategory], genres, formats: [] } } });
+const source = place("source", ["house"]);
+const techno = place("techno", ["techno"]);
+const rock = place("rock", ["rock"]);
+const unknown = place("unknown", []);
+assert.equal(matchesVibe(source, techno, "same"), true);
+assert.equal(matchesVibe(source, techno, "different"), false);
+assert.equal(matchesVibe(source, rock, "different"), true);
+assert.equal(matchesVibe(source, unknown, "same"), false);
+assert.equal(matchesVibe(source, unknown, "different"), false);
+assert.equal(matchesVibe(source, place("film", [], "culture"), "different"), true);
+assert.equal(matchesVibe({ ...source, event: undefined }, rock, "different"), false);
+assert.equal(eventEndedBeforeArrival({ ...source.event, time: "20:00–21:00" }, now), true);
+assert.equal(eventEndedBeforeArrival({ ...source.event, time: "20:00–04:00" }, now), false);
+assert.equal(eventEndedBeforeArrival({ ...source.event, time: "20:00–04:00" }, Date.parse("2026-11-18T03:00:00Z")), true);
+const far = place("far", ["techno"], "party", { latitude: 44.82, longitude: 20.49 });
+const closed = { ...techno, id: "closed", hours: undefined };
+const expired = { ...techno, id: "expired", hours: { ...hours, hoursExpiresAt: now - 1 } };
+assert.deepEqual(compassCandidates([far, source, closed, expired, rock, techno], source, origin, "same", now).map(x => x.id), ["techno", "far"]);
+assert.deepEqual(compassCandidates([far, source, closed, rock, techno], source, origin, "different", now).map(x => x.id), ["rock"]);
+assert.deepEqual(compassCandidates([techno], source, origin, "same", Date.parse("2026-11-18T08:00:00Z")), []);
+
+const locationSource = await readFile(new URL("../components/travel/user-location.tsx", import.meta.url), "utf8");
+assert.doesNotMatch(locationSource, /localStorage|sessionStorage|console\.|sendBeacon/);
+const yandexSource = await readFile(new URL("../components/travel/yandex-taxi-button.tsx", import.meta.url), "utf8");
+assert.doesNotMatch(yandexSource, /target=["']_blank/);
+assert.match(yandexSource, /width=\{32\}/);
+assert.match(yandexSource, /h-11 w-11/);
+const flowSource = await readFile(new URL("../components/travel/compass-flow.tsx", import.meta.url), "utf8");
+assert.match(flowSource, /function showRoute/);
+assert.match(flowSource, /onClick=\{showRoute\}/);
+assert.doesNotMatch(flowSource, /Heineken|heineken|demoOrigin|demo location/);
+console.log("Travel compass QA passed: GPS distance, genre families/unknowns, confirmed hours/arrival, nearest order and destination-only taxi.");
