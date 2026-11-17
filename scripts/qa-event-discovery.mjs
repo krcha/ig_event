@@ -8,7 +8,8 @@ import {
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
-import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasExplicitGenreEvidence } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -24,6 +25,54 @@ const mockResponse = (rows) => Response.json({
   usage: { input_tokens: 73, output_tokens: 44, total_tokens: 117 },
 });
 const options = { apiKey: "test-only-key", model: "fixture-model" };
+
+const currentParty = { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: [] };
+const auralQuote = "- u Nassau - AURAL APOTHECARY pušta Post Punk, Dark Disco & Weird Folk!";
+const aural = { key: "aural-post-punk-proof", expectedUpdatedAt: 42, title: "AURAL APOTHECARY", venue: "Nassau",
+  date: "2026-11-17", artists: [], eventType: "nightlife", sourceCaption: auralQuote, currentTaxonomy: currentParty };
+const auralExplicit = classifyExplicitEventDiscovery(aural);
+assert.deepEqual(auralExplicit.taxonomy.genres, ["disco-funk", "indie-alternative"],
+  "Post-punk is alternative, dark disco remains disco, and qualified Weird Folk does not prove regional folk/narodna.");
+assert.equal(auralExplicit.complete, true);
+for (const claim of auralExplicit.evidence.filter(value => value.kind === "genre")) {
+  assert.equal(claim.quote, auralQuote, "Disambiguation must preserve the exact original source quote.");
+  assert.equal(claim.source, "sourceCaption");
+}
+assert.equal(hasExplicitGenreEvidence(aural, "sourceCaption", auralQuote, "metal-punk"), false);
+assert.equal(hasExplicitGenreEvidence(aural, "sourceCaption", auralQuote, "folk"), false);
+const validatedAural = await classifyEventDiscoveryBatch([aural], { ...options, fetch: async () => mockResponse([row(0, { g: [
+  claim("disco-funk", "sourceCaption", auralQuote), claim("indie-alternative", "sourceCaption", auralQuote),
+  claim("metal-punk", "sourceCaption", auralQuote), claim("folk", "sourceCaption", auralQuote),
+] })]) });
+assert.deepEqual(validatedAural.results[0].taxonomy.genres, ["disco-funk", "indie-alternative"],
+  "The same proof guards must reject incorrect model genre claims, not merely fix the deterministic fast path.");
+const resolvedAural = await resolveEventGenresBatch([aural], { ...options,
+  classify: async () => assert.fail("A complete literal post-punk source must not need the classifier."),
+  estimate: async () => assert.fail("Announced genres must not become performer estimates."),
+  research: async () => assert.fail("An explicit source must not trigger paid research."),
+  fetch: async () => assert.fail("This deterministic regression test must never make a paid request."),
+});
+assert.equal(resolvedAural.model, "explicit-event-evidence");
+assert.equal(resolvedAural.results[0].method, "instagram");
+assert.deepEqual(resolvedAural.results[0].taxonomy.genres, ["disco-funk", "indie-alternative"]);
+for (const style of ["postpunk", "post-punk", "post punk", "postpank", "post-pank", "post pank", "póst-pánk", "пост-панк"]) {
+  const input = { ...aural, sourceCaption: `Večeras puštamo ${style}.` };
+  assert.deepEqual(classifyExplicitEventDiscovery(input).taxonomy.genres, ["indie-alternative"], `Normalize ${style} without manufacturing punk/metal.`);
+}
+for (const style of ["punk", "pank", "metal", "hardcore punk", "post hardcore"]) {
+  assert.deepEqual(classifyExplicitEventDiscovery({ ...aural, sourceCaption: `Večeras puštamo ${style}.` }).taxonomy.genres, ["metal-punk"],
+    `Independently advertised ${style} must retain the existing metal/punk bucket.`);
+}
+for (const style of ["weird folk", "Weird-Folk", "freak folk", "freak-folk"]) {
+  assert.deepEqual(classifyExplicitEventDiscovery({ ...aural, sourceCaption: `Večeras puštamo ${style}.` }).taxonomy.genres, [],
+    `${style} alone must not invent regional folk or indie labels.`);
+}
+assert.deepEqual(classifyExplicitEventDiscovery({ ...aural, sourceCaption: "Večeras puštamo indie folk." }).taxonomy.genres, ["indie-alternative"],
+  "An explicit indie cue remains valid while the qualified folk term does not imply narodna.");
+assert.deepEqual(classifyExplicitEventDiscovery({ ...aural, sourceCaption: "Večeras puštamo post-punk, punk, metal i narodnu muziku." }).taxonomy.genres,
+  ["indie-alternative", "metal-punk", "folk"], "Separate punk, metal and narodna claims remain valid next to post-punk.");
+assert.deepEqual(classifyExplicitEventDiscovery({ ...aural, sourceCaption: "Večeras puštamo weird folk, a zatim folk i narodnu muziku." }).taxonomy.genres,
+  ["folk"], "A qualified folk term must not erase a separate valid regional folk claim.");
 
 const inputs = [
   {
@@ -99,6 +148,11 @@ const result = await classifyEventDiscoveryBatch(inputs, {
     assert.equal(request.method, "POST");
     assert.equal(request.cache, "no-store");
     const body = JSON.parse(request.body);
+    const system = body.input.find(({ role }) => role === "system").content;
+    assert.ok(system.includes(getMusicGenreGuide()), "The actual classifier request includes the shared canonical genre and relationship guide.");
+    assert.match(system, /Use no outside knowledge or tools/);
+    assert.match(system, /Every claim requires an exact verbatim quote/);
+    assert.match(system, /Use the event's exact advertised genre words/);
     assert.equal(body.store, false);
     assert.equal(body.text.format.strict, true);
     assert.deepEqual(body.text.format.schema.properties.rows.items.properties.g.items.properties.label.enum, expectedGenres);
@@ -365,6 +419,11 @@ const estimate = await estimatePerformerGenresBatch(estimateInputs, {
   ...options,
   fetch: async (_url, request) => {
     const body = JSON.parse(request.body);
+    const system = body.input.find(({ role }) => role === "system").content;
+    assert.ok(system.includes(getMusicGenreGuide()), "The actual no-search estimator request uses the identical canonical guide.");
+    assert.match(system, /clearly recognize that exact musical performer/);
+    assert.match(system, /return recognizedAct null and genres \[\]/);
+    assert.match(system, /Do not invent subgenres, sources, URLs, or anything about the advertised program/);
     assert.equal(body.store, false);
     assert.equal(body.tools, undefined);
     assert.equal(body.text.format.strict, true);

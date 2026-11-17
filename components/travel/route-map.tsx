@@ -30,5 +30,5 @@ export function RouteMap({ origin, destination, coordinates }: {
     });
     return () => { cancelled = true; cleanup?.(); };
   }, [coordinates, originLat, originLon, destinationLat, destinationLon]);
-  return <div ref={container} aria-label="OpenStreetMap" className="relative z-0 h-64 w-full overflow-hidden rounded-2xl bg-card" />;
+  return <div ref={container} aria-label="OpenStreetMap" className="relative z-0 h-full min-h-0 w-full overflow-hidden rounded-2xl bg-card" />;
 }

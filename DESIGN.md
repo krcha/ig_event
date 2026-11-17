@@ -197,6 +197,8 @@ Expanded Events retain a complete uncropped poster at full available width. Fact
 
 Mobile Discover contains the full original poster while retaining its header and Like/Skip controls within the viewport. Metadata and actions overlay the lower fade. The central Gde dalje compass rises subtly above the bottom bar in a 42px lime circle. Yandex uses its 32px square Go asset inside a transparent 44px target, without a text wordmark. Motion respects reduced-motion and pauses in background tabs.
 
+Gde dalje uses one compact viewport on phones: venue facts, programme/genre provenance, a flexible compass or map, approximate travel times and the primary controls remain visible together. Opening a route replaces the compass area; it does not append a map below the page. Recent venue context and performer estimates are labeled explicitly. Loading, missing research and network failures have separate compact states, and primary navigation remains usable during lookup.
+
 ## Do's and Don'ts
 
 ### Do:

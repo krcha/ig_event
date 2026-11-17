@@ -99,6 +99,8 @@ const checks = [
   { script: "qa:public-search", timeoutMs: 60_000 },
   { script: "qa:public-sort", timeoutMs: 60_000 },
   { script: "qa:travel", timeoutMs: 60_000 },
+  { script: "qa:music-genre-relations", timeoutMs: 60_000 },
+  { script: "qa:venue-music-profile", timeoutMs: 60_000 },
   { script: "qa:public-performance", timeoutMs: 60_000 },
   { script: "qa:calendar-navigation-performance", timeoutMs: 60_000 },
   { script: "qa:json-compression", timeoutMs: 60_000 },
