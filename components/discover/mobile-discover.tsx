@@ -8,7 +8,7 @@ import { publicText } from "@/lib/i18n/public-messages";
 
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowDownWideNarrow, ArrowLeft, CalendarDays, Check, ExternalLink, Heart, Info, Instagram, LoaderCircle, MapPin, RotateCcw, Sparkles, Undo2, X } from "lucide-react";
 import { EVENT_CATEGORY_TONES, EventPriceChip } from "@/components/events/event-meta";
 import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
@@ -23,6 +23,7 @@ import { useUserLocation } from "@/components/travel/user-location";
 import { YandexTaxiButton } from "@/components/travel/yandex-taxi-button";
 import { useDiscoverSelections } from "./use-discover-selections";
 import { useDiscoverSwipeHint } from "./use-discover-swipe-hint";
+import { useDiscoverViewportFit } from "./use-discover-viewport-fit";
 import styles from "./mobile-discover.module.css";
 
 type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:MobileDiscoverEvent[]; selectedDate:string; today:string};
@@ -91,32 +92,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     const requested = new URLSearchParams(window.location.search).get("category");
     if (DISCOVER_SCOPES.includes(requested as DiscoverScope)) setScope(requested as DiscoverScope);
   },[]);
-  // Size the complete deck between the actual header and navigation, including
-  // mobile browser chrome changes. The source poster and decisions share it.
-  useLayoutEffect(()=>{
-    const surface = stage.current;
-    if (!surface || showSummary) return;
-    function fitDeck() {
-      if (!surface) return;
-      const viewportBottom = window.visualViewport
-        ? window.visualViewport.offsetTop + window.visualViewport.height
-        : window.innerHeight;
-      const nav = document.querySelector<HTMLElement>(".mobile-nav-shell");
-      const bottom = Math.min(viewportBottom,nav?.getBoundingClientRect().top ?? viewportBottom - 88);
-      const available = Math.floor(bottom - surface.getBoundingClientRect().top - 18);
-      // Very short/zoomed viewports keep usable content and can scroll naturally.
-      surface.style.setProperty("--discover-stage-height",`${Math.max(240,available)}px`);
-    }
-    fitDeck();
-    const resize = new ResizeObserver(fitDeck);
-    const toolbar = document.querySelector<HTMLElement>(".mobile-topbar");
-    const navigation = document.querySelector<HTMLElement>(".mobile-nav-shell");
-    if (toolbar) resize.observe(toolbar);
-    if (navigation) resize.observe(navigation);
-    window.addEventListener("resize",fitDeck);
-    window.visualViewport?.addEventListener("resize",fitDeck);
-    return ()=>{resize.disconnect();window.removeEventListener("resize",fitDeck);window.visualViewport?.removeEventListener("resize",fitDeck);};
-  },[showSummary,sort,location.status]);
+  useDiscoverViewportFit(stage,!showSummary);
   useDiscoverSwipeHint(stage, !locked && !showSummary && !detail && cards.length > 0);
   useEffect(()=>{
     const chip = categories.current?.querySelector<HTMLElement>(`[data-category="${scope}"]`);
