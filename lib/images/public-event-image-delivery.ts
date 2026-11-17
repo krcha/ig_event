@@ -1,4 +1,5 @@
 import { fetchPublicEventRaster, type PublicEventImageSource } from "@/lib/images/public-event-raster";
+import { createPublicEventRasterCache } from "@/lib/images/public-event-raster-cache";
 import { getCachedResponsiveImage } from "@/lib/images/responsive-image-cache";
 import { OriginalRasterRequired, renderResponsiveImage } from "@/lib/images/responsive-image-render";
 import { parseResponsiveImageRequest } from "@/lib/images/responsive-image-url";
@@ -27,6 +28,9 @@ function rasterImageResponse(bytes: Buffer, contentType: string, source: "stored
 }
 
 export function createPublicEventImageHandler(dependencies: ImageDeliveryDependencies) {
+  // Blur, display and full-poster requests share original bytes, while each
+  // request still resolves its own live public/source eligibility below.
+  const rasterCache = createPublicEventRasterCache();
   return async function publicEventImage(request: Request, eventId: string): Promise<Response> {
     let variant: ReturnType<typeof parseResponsiveImageRequest>;
     try { variant = parseResponsiveImageRequest(request); }
@@ -42,7 +46,7 @@ export function createPublicEventImageHandler(dependencies: ImageDeliveryDepende
     const fetchRaster = dependencies.fetchRaster ?? fetchPublicEventRaster;
     try {
       if (variant.width === undefined) {
-        const image = await fetchRaster(source);
+        const image = await rasterCache(source, fetchRaster);
         return rasterImageResponse(image.bytes, image.contentType, source.kind);
       }
       const { width, format } = variant;
@@ -51,7 +55,7 @@ export function createPublicEventImageHandler(dependencies: ImageDeliveryDepende
         { source, width },
         format,
         source.kind === "stored" ? 3_600_000 : 300_000,
-        async () => (dependencies.renderVariant ?? renderResponsiveImage)(await fetchRaster(source), width, format),
+        async () => (dependencies.renderVariant ?? renderResponsiveImage)(await rasterCache(source, fetchRaster), width, format),
       );
       return rasterImageResponse(bytes, `image/${format}`, source.kind);
     } catch (error) {

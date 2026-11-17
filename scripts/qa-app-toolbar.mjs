@@ -230,14 +230,16 @@ assert.ok(source.includes("canPrefetchMobileNavigation(href)") && source.include
   "Public prefetch must be based on sustained intent, not all mounted tabs.");
 assert.ok(
   source.includes('className="flex w-full items-center gap-1"') &&
-    source.includes("inline-flex min-w-0 flex-1 flex-col") &&
-    source.includes('className="max-w-full truncate"'),
-  "Mobile primary navigation should keep five flexible, truncating tabs while allowing the compass to rise above the bar.",
+    source.includes('"mobile-compass-tab" : "min-w-0 flex-1"') &&
+    source.includes('"mobile-compass-label" : "max-w-full truncate"'),
+  "Mobile primary navigation retains flexible tabs and gives the compass a complete translated label.",
 );
 assert.match(source, /data-compass-tab=\{item.href === "\/next" \? "true" : undefined\}/u,
   "Only the compass tab receives the raised affordance.");
-assert.match(globalsSource, /\[data-compass-tab="true"\] > span:first-child\s*\{[\s\S]*?width: 42px;[\s\S]*?height: 42px;/u,
-  "The compass keeps the approved subtle 42px diameter inside its flexible tap target.");
+assert.match(globalsSource, /\[data-compass-tab="true"\] > span:first-child\s*\{[\s\S]*?width: 48px;[\s\S]*?height: 48px;/u,
+  "The compass uses the requested raised 48px diameter inside its flexible tap target.");
+assert.match(globalsSource, /\.mobile-compass-label\s*\{[^}]*overflow:visible;[^}]*white-space:nowrap;/u,
+  "The central translated label must remain complete rather than ellipsized.");
 
 assert.ok(
   layoutSource.includes("<Suspense fallback={null}>") && layoutSource.includes("<NavigationFeedback />"),

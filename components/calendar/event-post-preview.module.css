@@ -16,9 +16,12 @@
   pointer-events: none;
 }
 
-.close { position: absolute; right: 7px; top: 7px; z-index: 4; background: rgb(12 17 29 / .78); }
 .layout { position: relative; }
 .image { position: relative; min-height: 220px; }
+.posterButton { display:block; width:calc(100% - 10px); min-height:44px; margin-inline:auto; padding:0; border:0; background:transparent; cursor:zoom-in; }
+.posterButton:focus-visible { outline:2px solid var(--primary); outline-offset:-3px; }
+.expand { position:absolute; z-index:4; top:10px; right:10px; display:grid; place-items:center; width:32px; height:32px; border-radius:8px; background:rgb(10 15 25 / .55); color:var(--foreground); }
+.posterButton:hover .expand { background:rgb(10 15 25 / .8); }
 .poster { display: block; width: 100%; height: auto; object-fit: contain; }
 .hours {
   position: absolute;
@@ -28,7 +31,7 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 16px 59px 32px 14px;
+  padding: 16px 48px 32px 14px;
   background: linear-gradient(180deg, rgb(10 15 25 / .93), rgb(10 15 25 / .65) 48%, transparent);
   font-size: 11px;
   line-height: 18px;
@@ -36,6 +39,7 @@
   color: #f5f4f0;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 1px 4px #0a0f19;
+  pointer-events: none;
 }
 .hours svg { flex: none; margin-top: 2px; }
 .body {
@@ -63,8 +67,8 @@
   .post { border-top: 1px solid rgb(209 255 74 / .15); }
   .backdrop { display: none; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .image { height: min(38svh, 18rem); min-height: 192px; background: rgb(0 0 0 / .4); }
-  .poster { height: 100%; width: 100%; }
+  .image { --poster-height:min(38svh,18rem); display:flex; align-items:center; justify-content:center; height:var(--poster-height); min-height:192px; background:rgb(0 0 0 / .4); }
+  .posterButton { flex:none; width:min(calc(100% - 10px),calc(var(--poster-height) * var(--poster-ratio,1) - 10px)); }
   .hours { padding-right: 12px; font-size: 10px; }
   .body { margin: 0; min-height: 0; padding: 12px 12px 7px; background: none; text-shadow: none; }
   .travel { margin-top: auto; }

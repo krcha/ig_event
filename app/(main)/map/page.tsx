@@ -71,31 +71,31 @@ async function EventMapResults({ initialNow, openNowActive, selectedDate, todayD
   // Before 06:00 the display date is yesterday, but current civil-day starts
   // still belong to Open now. Use the clock-derived window, not display date.
   const eventWindow = openNowActive ? openNowWindow : getEventMapEventWindow(selectedDate, false);
-  const [eventResult, overviewResult] = await Promise.all([
-    loadPublicCalendarEventsWindow(eventWindow),
-    loadPublicCalendarOverviewWindow({ beforeDate, fromDate }),
-  ]);
+  const eventRequest = loadPublicCalendarEventsWindow(eventWindow);
+  // Pins depend on the selected day, not on the slower weekly count action.
+  // React streams this promise into the separate day-count boundaries below.
+  const daysPromise = loadPublicCalendarOverviewWindow({ beforeDate, fromDate }).then(result => {
+    if (result.error) return null;
+    const counts = new Map<string, number>();
+    for (const group of result.groups) counts.set(group.date, (counts.get(group.date) ?? 0) + group.count);
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = addDaysToDateKey(fromDate, index);
+      return { date, eventCount: counts.get(date) ?? 0 };
+    });
+  }).catch(() => null);
+  const eventResult = await eventRequest;
 
   if (eventResult.error) {
     throw new Error(`Failed to load event map: ${eventResult.error}`);
   }
-  if (overviewResult.error) {
-    throw new Error(`Failed to load map day counts: ${overviewResult.error}`);
-  }
-
-  const countsByDate = new Map<string, number>();
-  for (const group of overviewResult.groups) {
-    countsByDate.set(group.date, (countsByDate.get(group.date) ?? 0) + group.count);
-  }
   const selectedDayEvents = eventResult.events.filter((event) => event.date === selectedDate);
   // Reconcile the active chip with this response's detail snapshot when the
   // independent overview and detail caches refresh at different moments.
-  countsByDate.set(selectedDate, selectedDayEvents.length);
   const days = Array.from({ length: 7 }, (_, index) => {
     const date = addDaysToDateKey(fromDate, index);
     return {
       date,
-      eventCount: countsByDate.get(date) ?? 0,
+      eventCount: date === selectedDate ? selectedDayEvents.length : undefined,
     };
   });
   const events = attachReviewedEventMapAddresses(
@@ -108,6 +108,7 @@ async function EventMapResults({ initialNow, openNowActive, selectedDate, todayD
   return (
     <EventCalendarMap
       days={days}
+      daysPromise={daysPromise}
       events={events}
       initialNow={initialNow}
       openNowActive={openNowActive}

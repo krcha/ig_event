@@ -36,6 +36,8 @@ const messages = {
   musicLookup: ["Proveravamo istražene žanrove…", "Checking researched genres…", "Проверяем исследованные жанры…"],
   musicLookupFailed: ["Žanrovi trenutno nisu dostupni. Pokušaj ponovo.", "Genre data is unavailable. Please retry.", "Данные о жанрах недоступны. Повтори попытку."],
   routeLoading: ["Učitavamo rutu…", "Loading route…", "Загружаем маршрут…"],
+  mapLoading: ["Učitavamo mapu…", "Loading map…", "Загружаем карту…"],
+  mapTilesError: ["Mapa nije učitana. Možeš da otvoriš navigaciju.", "Map tiles unavailable. You can open navigation.", "Карта недоступна. Можно открыть навигацию."],
   routeError: ["Ruta trenutno nije dostupna. Pokušaj ponovo ili otvori navigaciju.", "Route unavailable. Retry or open navigation.", "Маршрут недоступен. Повтори или открой навигацию."],
   navigation: ["Otvori navigaciju", "Open navigation", "Открыть навигацию"],
   nextPlace: ["Sledeće mesto", "Next place", "Следующее место"],
@@ -52,6 +54,7 @@ const messages = {
   compassOn: ["Kompas je uključen", "Compass enabled", "Компас включён"],
   compassUnavailable: ["Kompas nije dostupan. Strelica pokazuje smer od severa.", "Compass unavailable. The arrow shows the bearing from north.", "Компас недоступен. Стрелка показывает направление от севера."],
   details: ["Detalji događaja", "Event details", "О событии"],
+  venueDetails: ["Detalji lokala", "Venue details", "О месте"],
   musicUnknown: ["Za ovaj lokal još nemamo potvrđene žanrove. Predlozi koriste poznatu vrstu događaja.", "Genres are not confirmed here yet. Suggestions use the known event category.", "Жанры пока не подтверждены. Подбор основан на известной категории события."],
 } as const;
 

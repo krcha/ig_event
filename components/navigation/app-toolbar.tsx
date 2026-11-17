@@ -321,7 +321,8 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   aria-current={active ? "page" : undefined}
                   aria-busy={pending || undefined}
                   className={cn(
-                    "inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-[1rem] px-0.5 py-2 text-[11px] font-semibold",
+                    "inline-flex flex-col items-center gap-1 rounded-[1rem] px-0.5 py-2 text-[11px] font-semibold",
+                    item.href === "/next" ? "mobile-compass-tab" : "min-w-0 flex-1",
                     selected
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
@@ -340,7 +341,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                   prefetch={false}
                 >
                   <span className="relative inline-flex">
-                    {pending ? <Loader2 aria-hidden="true" className="h-4 w-4 motion-safe:animate-spin" /> : <Icon className="h-4 w-4" />}
+                    {pending ? <Loader2 aria-hidden="true" className={cn(item.href === "/next" ? "h-6 w-6" : "h-4 w-4", "motion-safe:animate-spin")} /> : <Icon className={item.href === "/next" ? "h-6 w-6" : "h-4 w-4"} />}
                     {badgeCount > 0 ? (
                       <span
                         className={cn(
@@ -354,7 +355,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       </span>
                     ) : null}
                   </span>
-                  <span className="max-w-full truncate">{itemLabel(item)}</span>
+                  <span className={item.href === "/next" ? "mobile-compass-label" : "max-w-full truncate"}>{itemLabel(item)}</span>
                 </Link>
               );
             })}

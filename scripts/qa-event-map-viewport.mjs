@@ -69,6 +69,7 @@ for (const desktop of [false, true]) for (const pins of [[], locations]) {
     },
     "lucide-react": { Expand: "expand", LoaderCircle: "loader", LocateFixed: "locate", MapPin: "pin" },
     leaflet,
+    "@/lib/maps/leaflet-loader": { loadLeaflet: async () => leaflet },
     "@/lib/events/event-session": { getEventSessionLabel: () => "" },
     "@/lib/events/event-time-presentation": { resolveEventTimePresentation: () => ({ label: "Unknown" }) },
     "@/components/events/open-now-status": { OPEN_NOW_POSSIBLE_LABEL: "Possible" },

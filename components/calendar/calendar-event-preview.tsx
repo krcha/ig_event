@@ -10,6 +10,7 @@ import {
   Suspense,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -20,7 +21,16 @@ import { ChevronDown } from "lucide-react";
 import type { PublicEventPostPreview } from "@/lib/events/public-event-post";
 import { cn } from "@/lib/utils";
 
-const EventPostPreview = lazy(() => import("./event-post-preview"));
+let previewModule: Promise<typeof import("./event-post-preview")> | null = null;
+function loadEventPostPreview() {
+  previewModule ??= import("./event-post-preview").catch((cause: unknown) => {
+    previewModule = null;
+    throw cause;
+  });
+  return previewModule;
+}
+function warmEventPostPreview() { void loadEventPostPreview().catch(() => {}); }
+const EventPostPreview = lazy(loadEventPostPreview);
 const PREVIEW_CACHE_LIMIT = 12;
 const PREVIEW_CACHE_TTL_MS = 60_000;
 
@@ -37,6 +47,30 @@ export function CalendarEventPreviews({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const cache = useRef(new Map<string, { expiresAt: number; post: PublicEventPostPreview }>());
   const anchor = useRef<{ element: HTMLButtonElement; top: number } | null>(null);
+
+  useEffect(() => {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    if (connection?.saveData || /^(slow-)?2g$/u.test(connection?.effectiveType ?? "")) return;
+    let timer: number | null = null;
+    let idle: number | null = null;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        timer = null;
+        if ("requestIdleCallback" in window) idle = window.requestIdleCallback(() => {
+          idle = null;
+          if (!document.hidden) warmEventPostPreview();
+        }, { timeout: 1_500 });
+        else if (!document.hidden) warmEventPostPreview();
+      }, 750);
+    };
+    if (document.readyState === "complete") schedule();
+    else window.addEventListener("load", schedule, { once: true });
+    return () => {
+      window.removeEventListener("load", schedule);
+      if (timer !== null) window.clearTimeout(timer);
+      if (idle !== null) window.cancelIdleCallback(idle);
+    };
+  }, []);
 
   const toggle = useCallback((eventId: string, element: HTMLButtonElement) => {
     anchor.current = { element, top: element.getBoundingClientRect().top };
@@ -138,6 +172,9 @@ export function CalendarEventPreviewRow({
           data-calendar-event-preview-toggle={eventId}
           id={triggerId}
           onClick={(event) => toggle(eventId, event.currentTarget)}
+          onFocus={warmEventPostPreview}
+          onPointerDown={warmEventPostPreview}
+          onPointerEnter={warmEventPostPreview}
           onKeyDown={(event) => {
             if (event.key === "Escape" && open) closePost();
           }}

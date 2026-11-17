@@ -33,7 +33,8 @@
   object-fit: cover;
   object-position: center;
   filter: blur(26px);
-  opacity: .13;
+  mix-blend-mode: color;
+  opacity: .72;
   pointer-events: none;
 }
 

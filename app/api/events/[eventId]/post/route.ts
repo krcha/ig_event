@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
+import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 import {
   createPublicEventPostHandler,
   type PublicEventPostRecord,
@@ -22,7 +23,7 @@ export async function GET(request: Request, context: RouteContext) {
   let convex: ConvexHttpClient | undefined;
   function getClient(): ConvexHttpClient {
     if (!convex) {
-      const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+      const convexUrl = getCalendarConvexUrl();
       if (!convexUrl) throw new Error("Public data is not configured.");
       convex = new ConvexHttpClient(convexUrl);
     }
