@@ -100,4 +100,6 @@ assert.match(guide, /one-hop/);
 assert.match(guide, /NOT genres/);
 assert.match(guide, /not proof of what is playing at a venue now/);
 assert.match(guide, /Preserve empty results and abstention/);
+assert.match(guide, /Post-punk\/post-pank belongs here, not automatically in metal-punk/);
+assert.match(guide, /Weird Folk, Freak Folk and Indie Folk do not establish this regional\/narodna bucket/);
 console.log("Music genre relations QA passed: exhaustive canonical guide, symmetric one-hop edges, explicit contrasts, mixed/unknown abstention and immutable normalization.");

@@ -22,6 +22,9 @@ export type ExplicitDiscoveryEvidence = {
   quote: string;
 };
 
+// Inputs are normalized (hyphens/diacritics included). Named compound styles
+// must not independently prove a broader token's bucket: post-punk is not punk,
+// and qualified experimental/indie folk is not this taxonomy's regional folk.
 export const genreProof: Record<MusicGenre, RegExp> = {
   electronic: /\b(?:electronic(?:a)?|elektronsk\w* muzik\w*|elektronik\w*|elektronn\w* muzy\w*|edm|electro|idm|hardstyle|hardcore techno|breakcore|breakbeat|break beat)\b/,
   house: /\b(?:house|haus)(?:a|u|om)?\b/,
@@ -31,12 +34,12 @@ export const genreProof: Record<MusicGenre, RegExp> = {
   "disco-funk": /\b(?:disco|disko|funk|fank|funky|fanki)\b/,
   pop: /\b(?:pop(?! up\b)|britpop|electropop|synthpop|hyperpop|schlager)\b/,
   rock: /\b(?:rock|rok|rokenrol\w*|rockabilly|r n r)\b/,
-  "indie-alternative": /\b(?:indie|indi|alternativ\w*|emo|grunge|shoegaze|doomgaze|new wave|darkwave|industrial|ebm|aggrotech|futurepop|dark electro|americana)\b/,
-  "metal-punk": /\b(?:metal|pank|punk|metalcore|thrashcore|post hardcore|screamo)\b/,
+  "indie-alternative": /\b(?:indie|indi|alternativ\w*|post ?(?:punk|pank)|emo|grunge|shoegaze|doomgaze|new wave|darkwave|industrial|ebm|aggrotech|futurepop|dark electro|americana)\b/,
+  "metal-punk": /\b(?:metal|(?<!post )(?:pank|punk)|metalcore|thrashcore|post hardcore|screamo)\b/,
   "hip-hop": /\b(?:hip hop|hiphop|rap|rep|trap)\b/,
   "rnb-soul": /\b(?:r and b|r n b|rnb|rhythm and blues|ritam i bluz|soul)\b/,
   "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz)(?:a|u|om)?|(?<!rhythm and |ritam i )(?:blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
-  folk: /\b(?:folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*)\b/,
+  folk: /\b(?:(?<!weird )(?<!freak )(?<!indie )folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*)\b/,
   classical: /\b(?:classical|klasicn\w* muzik\w*|klassichesk\w* muzy\w*|klavirsk\w* resital\w*|piano recital|harpsichord concert|opera|baroque|barok)\b/,
   latin: /\b(?:latino|latin(?: music)?|salsa|bachata|reggaeton|flamenco|kubansk\w* muzik\w*)\b/,
   "afro-amapiano": /\b(?:afrobeats?|afro beats?|amapiano|afro house)\b/,
