@@ -146,6 +146,63 @@ assert.doesNotMatch(yandexSource, /target=["']_blank/);
 assert.match(yandexSource, /width=\{32\}/);
 assert.match(yandexSource, /h-11 w-11/);
 const flowSource = await readFile(new URL("../components/travel/compass-flow.tsx", import.meta.url), "utf8");
+// Exercise the shipped permission callback, not a separately reimplemented
+// permission helper. A compass needs the absolute/magnetometer grant.
+const flowAst = ts.createSourceFile("compass-flow.tsx", flowSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let permissionCallback;
+function findPermissionCallback(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(flowAst) === "enableCompass" && node.initializer && ts.isCallExpression(node.initializer)) {
+    permissionCallback = node.initializer.arguments[0].getText(flowAst);
+  }
+  ts.forEachChild(node, findPermissionCallback);
+}
+findPermissionCallback(flowAst);
+assert.ok(permissionCallback, "The actual compass permission callback must be exercised.");
+function compassPermissionHarness() {
+  const calls = [], listeners = new Map(), headings = [];
+  let saved = null, gesture = false, requireGesture = false;
+  const orientationState = { current: "idle" };
+  const refs = {
+    orientationState, orientationGeneration: { current: 0 }, orientationCleanup: { current: null },
+    orientationReading: { current: false }, orientationTimer: { current: null }, lastHeading: { current: null },
+  };
+  const context = {
+    ...refs, document: { hidden: false },
+    window: {
+      DeviceOrientationEvent: { requestPermission: async absolute => {
+        calls.push({ absolute, gesture });
+        if (requireGesture && !gesture) throw new Error("User activation required");
+        return "granted";
+      } },
+      addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name),
+    },
+    rememberedCompassPermission: () => saved, rememberCompassPermission: value => { saved = value; },
+    setOrientationMessage: () => {}, setHeading: value => headings.push(value), setTimeout: () => 1,
+  };
+  const output = ts.transpileModule(`globalThis.invoke = ${permissionCallback};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  runInNewContext(output, context);
+  return {
+    calls, headings, listeners, invoke: context.invoke,
+    gesture(value) { gesture = value; }, requireGesture(value) { requireGesture = value; },
+    saved: () => saved, state: () => orientationState.current,
+    resume() { refs.orientationCleanup.current?.(); orientationState.current = "idle"; },
+  };
+}
+{
+  const h = compassPermissionHarness();
+  await h.invoke(); assert.equal(h.calls.length, 0, "The first iOS permission request waits for an existing user gesture.");
+  h.gesture(true); await h.invoke(true);
+  assert.deepEqual(h.calls, [{ absolute: true, gesture: true }], "The first gesture must request absolute orientation, including the magnetometer.");
+  assert.equal(h.saved(), "granted");
+  h.listeners.get("deviceorientationabsolute")({ absolute: true, alpha: 270 });
+  assert.deepEqual(h.headings, [90], "Granted absolute readings drive the compass bearing.");
+  h.resume(); h.gesture(false); h.requireGesture(true); await h.invoke();
+  assert.deepEqual(h.calls.at(-1), { absolute: true, gesture: false }, "Restoring a remembered grant still requests the magnetometer.");
+  assert.equal(h.state(), "gesture", "A browser that still requires a gesture must remain retryable, not be remembered as denied.");
+  h.gesture(true); await h.invoke(true);
+  assert.deepEqual(h.calls.at(-1), { absolute: true, gesture: true }, "The existing Yes/vibe tap retries the absolute permission request.");
+  assert.equal(h.state(), "active"); assert.equal(h.saved(), "granted");
+}
 assert.match(flowSource, /function showRoute/);
 assert.match(flowSource, /onClick=\{showRoute\}/);
 assert.doesNotMatch(flowSource, /Heineken|heineken|demoOrigin|demo location/);

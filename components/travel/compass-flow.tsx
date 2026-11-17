@@ -157,7 +157,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   const enableCompass = useCallback(async (fromGesture = false, retryDenied = false) => {
     if (document.hidden || orientationState.current === "active" || orientationState.current === "pending") return;
     if (rememberedCompassPermission() === "denied" && !retryDenied) { orientationState.current = "denied"; setOrientationMessage(true); return; }
-    const OrientationEvent = window.DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: () => Promise<string> };
+    const OrientationEvent = window.DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: (absolute?: boolean) => Promise<string> };
     if (!OrientationEvent) { setOrientationMessage(true); return; }
     const generation = ++orientationGeneration.current;
     orientationState.current = "pending";
@@ -165,7 +165,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
       if (OrientationEvent.requestPermission) {
         // iOS needs an existing user gesture on the first grant, even though the sensor is on by default.
         if (!fromGesture && rememberedCompassPermission() !== "granted") { orientationState.current = "gesture"; return; }
-        const permission = await OrientationEvent.requestPermission();
+        const permission = await OrientationEvent.requestPermission(true);
         if (generation !== orientationGeneration.current) return;
         if (permission !== "granted") { rememberCompassPermission("denied"); orientationState.current = "denied"; setOrientationMessage(true); return; }
         rememberCompassPermission("granted");
