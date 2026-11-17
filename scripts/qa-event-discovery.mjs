@@ -9,6 +9,7 @@ import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genre
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -99,6 +100,11 @@ const result = await classifyEventDiscoveryBatch(inputs, {
     assert.equal(request.method, "POST");
     assert.equal(request.cache, "no-store");
     const body = JSON.parse(request.body);
+    const system = body.input.find(({ role }) => role === "system").content;
+    assert.ok(system.includes(getMusicGenreGuide()), "The actual classifier request includes the shared canonical genre and relationship guide.");
+    assert.match(system, /Use no outside knowledge or tools/);
+    assert.match(system, /Every claim requires an exact verbatim quote/);
+    assert.match(system, /Use the event's exact advertised genre words/);
     assert.equal(body.store, false);
     assert.equal(body.text.format.strict, true);
     assert.deepEqual(body.text.format.schema.properties.rows.items.properties.g.items.properties.label.enum, expectedGenres);
@@ -365,6 +371,11 @@ const estimate = await estimatePerformerGenresBatch(estimateInputs, {
   ...options,
   fetch: async (_url, request) => {
     const body = JSON.parse(request.body);
+    const system = body.input.find(({ role }) => role === "system").content;
+    assert.ok(system.includes(getMusicGenreGuide()), "The actual no-search estimator request uses the identical canonical guide.");
+    assert.match(system, /clearly recognize that exact musical performer/);
+    assert.match(system, /return recognizedAct null and genres \[\]/);
+    assert.match(system, /Do not invent subgenres, sources, URLs, or anything about the advertised program/);
     assert.equal(body.store, false);
     assert.equal(body.tools, undefined);
     assert.equal(body.text.format.strict, true);

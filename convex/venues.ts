@@ -2,6 +2,9 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { v, type Infer } from "convex/values";
+import { eventDiscoveryTaxonomy } from "./eventDiscoveryValues";
+import { loadPublicEventDiscoveryLabels } from "./eventDiscovery";
+import { addDaysToDateKey } from "../lib/events/nightlife-date";
 import {
   MAX_VENUE_ALIASES,
   normalizeHandle,
@@ -864,6 +867,56 @@ export const getPublicVenuePage = query({
       historyEvents: historyEvents.map(toPublicEvent),
       stats: null,
     };
+  },
+});
+
+/** Narrow read for the confirmed venue; no AI work or whole-calendar scan. */
+export const getPublicVenueMusicEvents = query({
+  args: { id: v.id("venues"), today: v.string(), beforeDate: v.string() },
+  returns: v.union(v.null(), v.object({
+    asOf: v.number(),
+    events: v.array(v.object({
+      _id: v.id("events"), title: v.string(), date: v.string(),
+      time: v.optional(v.string()),
+      timeStatus: v.optional(v.union(v.literal("confirmed"), v.literal("inferred"), v.literal("unknown"))),
+      venueId: v.id("venues"), venue: v.string(), eventType: v.string(), artists: v.array(v.string()),
+      updatedAt: v.number(),
+      eventTaxonomy: v.optional(eventDiscoveryTaxonomy),
+      performerGenreResearch: v.optional(v.object({
+        sources: v.array(v.object({ performer: v.string(), url: v.string() })), estimated: v.optional(v.literal(true)),
+      })),
+    })),
+  })),
+  handler: async (ctx, { id, today, beforeDate }) => {
+    const venue = await ctx.db.get(id);
+    if (!venue || !isVenuePublic(venue) || !venueRequiresPhysicalDetails(venue.category)) return null;
+    const readDate = (value: string) => {
+      const timestamp = /^\d{4}-\d{2}-\d{2}$/u.test(value) ? Date.parse(`${value}T00:00:00Z`) : NaN;
+      return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value ? timestamp : NaN;
+    };
+    const span = readDate(beforeDate) - readDate(today);
+    if (span !== 86_400_000 && span !== 172_800_000) throw new Error("Invalid programme date window.");
+    // Explicit Belgrade date arguments invalidate the cached date window at
+    // midnight/outing rollover even when no event document has changed.
+    const now = Date.now();
+    const since = addDaysToDateKey(today, -30);
+    const [history, upcoming] = await Promise.all([
+      loadBoundedVenueEventCards(ctx, venue, { direction: "history", limit: 24, today }),
+      loadBoundedVenueEventCards(ctx, venue, { direction: "upcoming", limit: 12, today }),
+    ]);
+    const events = await Promise.all([...history, ...upcoming]
+      .filter(event => event.venueId === id && event.date >= since && event.date < beforeDate)
+      .map(async event => {
+        const discovery = await loadPublicEventDiscoveryLabels(ctx, event, true);
+        return {
+          _id: event._id, title: event.title, date: event.date,
+          ...(event.time && event.timeStatus !== "unknown" ? { time: event.time } : {}),
+          ...(event.timeStatus ? { timeStatus: event.timeStatus } : {}),
+          venueId: id, venue: venue.name, eventType: event.eventType, artists: event.artists.slice(0, 20),
+          updatedAt: event.updatedAt, ...discovery,
+        };
+      }));
+    return { asOf: now, events };
   },
 });
 

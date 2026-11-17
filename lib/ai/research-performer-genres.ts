@@ -2,6 +2,7 @@ import { MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "@/li
 import { classifyExplicitEventDiscovery, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
+import { getMusicGenreGuide } from "@/lib/taxonomy/music-genre-relations";
 import {
   EventDiscoveryProviderError,
   genreProof,
@@ -99,6 +100,7 @@ const SYSTEM_PROMPT = [
   "trustedFormat party/live is a broad category, not evidence of a DJ set or a specific performance. Use it only to exclude unrelated identities. With ambiguous, conflicting or unverified identity, leave genres empty and do not guess.",
   "For each genre provide the exact HTTPS source URL visited and a verbatim quote of no more than 20 words that establishes the style and identifies the same artist. Match the fixed genre enum literally, not the genre of a venue, one song, similar artist, label roster, or the style of another performer. The genre URL must be an identity or corroboration source, or tie back to the exact handle or event coordinates. Use at most four independently evidenced styles. General electronic is only for explicitly broad electronic styles.",
   "A performer profile shows a typical style. A verified titleOnly listing shows the style announced for that occurrence. Keep empty results when the evidence is unavailable. Never construct or guess a URL, edit a quote, or supply a general search results page as evidence.",
+  getMusicGenreGuide(),
 ].join("\n");
 const THOROUGH_PROMPT = "Use two independent search passes per artist. First search the exact billed act for a profile and explicit style, then independently search the name or handle with the supplied city or venue, including earlier local lineups. If a handle search is sparse, also search the display spelling suggested by the title without treating the title as identity proof. Examine the second pass even if the first results look conclusive.";
 const STANDARD_PROMPT = "For named acts, search the exact billed act name or handle first, with artist, DJ or band and genre terms; use dates and venues to disambiguate as needed.";

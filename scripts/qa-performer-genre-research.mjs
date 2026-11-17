@@ -25,6 +25,7 @@ import {
   PERFORMER_GENRE_RESEARCH_VERSION,
 } from "../lib/taxonomy/performer-genre-research.ts";
 import { EVENT_DISCOVERY_VERSION } from "../lib/taxonomy/event-discovery.ts";
+import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key.ts";
 
 const options = { apiKey: "test-only-key", model: "fixture-search-model" };
@@ -121,6 +122,11 @@ const listing = await researchPerformerGenresBatch([input], {
     assert.equal(url, "https://api.openai.com/v1/responses");
     assert.equal(request.method, "POST");
     const body = JSON.parse(request.body);
+    const system = body.input.find(({ role }) => role === "system").content;
+    assert.ok(system.includes(getMusicGenreGuide()), "The actual web research request uses the same canonical genre guide as extraction and estimates.");
+    assert.match(system, /A titleOnly row always requires its exact title, venue and full date/);
+    assert.match(system, /With ambiguous, conflicting or unverified identity, leave genres empty/);
+    assert.match(system, /A performer profile shows a typical style/);
     assert.equal(body.store, false);
     assert.ok(body.tools.some(({ type }) => type === "web_search" || type === "web_search_preview"));
     assert.ok(!request.body.includes(input.key), "A web request must not expose internal event IDs.");

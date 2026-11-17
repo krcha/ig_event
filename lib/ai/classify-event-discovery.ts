@@ -17,6 +17,7 @@ import {
   type ExplicitDiscoveryInput,
 } from "@/lib/taxonomy/explicit-event-discovery";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
+import { getMusicGenreGuide } from "@/lib/taxonomy/music-genre-relations";
 
 export const EVENT_DISCOVERY_BATCH_LIMIT = 20;
 const MAX_ATTEMPTS = 2;
@@ -167,6 +168,7 @@ const SYSTEM_PROMPT = [
   "Do not infer genres or activities from venue, artists' reputations, headliner names, other dates, broad genre-themed artwork, or generic retro/rave/party/DJ. Use the event's exact advertised genre words. A rock quiz is participate/quiz, not music. A film description of a singer is not a genre. A band name containing Jazz, Funk or Pop is not genre evidence.",
   "Categories: party=advertised DJ/dancing; live=actual concert/band/recital; culture=film screening/theatre/stand-up/spoken word; exhibition=exhibition/fair/market; participate=quiz/game/workshop/karaoke; food=meal/drink/tasting as main draw; talk=panel/lecture/discussion/conference; other=explicit activity outside these groups such as watching sports. Do not make a DJ workshop a DJ set or a sports screening a film. Only add a second category if the listing advertises a separate activity. Use null for a generic listing.",
   "Stand-up is format stand-up only when explicitly advertised. Film is screening only for a screening. For an electronic club night with a live electronic set, choose party, not live unless there is a distinct live-music program. Genre labels follow the enum and their literal style names; broad electronic is only for unnamed electronic style. Named house, techno, trance and drum-and-bass do not also need electronic.",
+  getMusicGenreGuide(),
   "Credits distinguish organizer, performer, dj, band, guest, comedian, speaker, moderator and presenter. Never infer organizer from publishing account, ticket seller, performer, sponsor or venue. Only output names explicitly billed for this occurrence.",
 ].join("\n");
 

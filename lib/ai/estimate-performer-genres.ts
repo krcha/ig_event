@@ -5,6 +5,7 @@ import {
 } from "@/lib/ai/classify-event-discovery";
 import { MUSIC_GENRES, type MusicGenre } from "@/lib/taxonomy/event-discovery";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
+import { getMusicGenreGuide } from "@/lib/taxonomy/music-genre-relations";
 
 type EstimateInput = {
   key: string | number;
@@ -41,6 +42,7 @@ const SYSTEM_PROMPT = [
   "Return each row exactly once. Only set recognizedAct to the supplied act number if you clearly recognize that exact musical performer, group or DJ by name or handle. These are mostly Belgrade listings. Do not assume a match for a common name or confuse artists with similar names.",
   "If the act is obscure, ambiguous, not a musical performer, or only sounds like a style, return recognizedAct null and genres []. If known artists in a lineup have conflicting styles and there is no clear basis for an overall estimate, abstain.",
   "For a recognized act return one or two of the supplied genre labels for their characteristic music. Do not invent subgenres, sources, URLs, or anything about the advertised program. Prefer a specific named electronic genre over the broad electronic label.",
+  getMusicGenreGuide(),
 ].join("\n");
 
 type JsonObject = Record<string, unknown>;
