@@ -1,0 +1,53 @@
+import type { Locale } from "@/i18n/config";
+
+const messages = {
+  next: ["Gde dalje?", "Where next?", "Куда дальше?"],
+  locate: ["Koristi moju lokaciju", "Use my location", "Моё местоположение"],
+  locating: ["Tražimo tvoju lokaciju…", "Finding your location…", "Определяем местоположение…"],
+  locationIntro: ["Prvo da vidimo gde si. Zatim biramo fazon i najbliže otvoreno mesto.", "First, find where you are. Then choose a vibe and the nearest open place.", "Сначала найдём, где ты. Затем выберем атмосферу и ближайшее открытое место."],
+  denied: ["Lokacija je blokirana. Dozvoli je u podešavanjima pregledača pa pokušaj ponovo.", "Location is blocked. Allow it in your browser settings and try again.", "Доступ к геолокации закрыт. Разреши его в настройках браузера и повтори."],
+  unavailable: ["Lokacija nije dostupna. Proveri GPS pa pokušaj ponovo.", "Location is unavailable. Check GPS and try again.", "Местоположение недоступно. Проверь GPS и повтори."],
+  timeout: ["GPS se nije javio na vreme. Pokušaj ponovo.", "GPS took too long. Try again.", "GPS не ответил вовремя. Повтори попытку."],
+  here: ["Da li si ovde?", "Are you here?", "Ты здесь?"],
+  no: ["Ne, sledeće mesto", "No, next place", "Нет, следующее место"],
+  yes: ["Da, ovde sam", "Yes, I'm here", "Да, я здесь"],
+  vibe: ["Šta bi dalje?", "What next?", "Что дальше?"],
+  same: ["U istom fazonu", "A similar vibe", "Похожая атмосфера"],
+  different: ["Nešto skroz drugačije", "Something completely different", "Совсем другая атмосфера"],
+  sameHint: ["Slični žanrovi i muzika.", "Similar genres and music.", "Похожие жанры и музыка."],
+  differentHint: ["Promeni muziku ili vrstu izlaska.", "Change the music or type of outing.", "Другая музыка или формат вечера."],
+  nearby: ["Otvorena mesta u blizini", "Open places nearby", "Открытые места рядом"],
+  unknownVibe: ["Za ovaj lokal još nema podataka o večerašnjem fazonu. Možeš da pogledaš otvorena mesta u blizini.", "Tonight's vibe is not known here yet. You can explore open places nearby.", "Атмосфера сегодняшнего вечера пока неизвестна. Посмотри открытые места рядом."],
+  walk: ["pešaka", "on foot", "пешком"],
+  drive: ["kolima", "by car", "на машине"],
+  estimate: ["Okvirno od tvoje lokacije", "Estimated from your location", "Примерно от тебя"],
+  fromYou: ["Od tvoje lokacije", "From your location", "От тебя"],
+  open: ["Lokal radi sada", "Venue open now", "Место сейчас открыто"],
+  until: ["do", "until", "до"],
+  loadError: ["Ponuda trenutno nije dostupna. Pokušaj ponovo.", "Listings are unavailable. Please try again.", "Подборка недоступна. Повтори попытку."],
+  nearest: ["Od najbližeg ka daljim", "Nearest first", "Сначала ближайшие"],
+  route: ["Prikaži rutu", "Show route", "Показать маршрут"],
+  routeLoading: ["Učitavamo rutu…", "Loading route…", "Загружаем маршрут…"],
+  routeError: ["Ruta trenutno nije dostupna. Pokušaj ponovo ili otvori navigaciju.", "Route unavailable. Retry or open navigation.", "Маршрут недоступен. Повтори или открой навигацию."],
+  navigation: ["Otvori navigaciju", "Open navigation", "Открыть навигацию"],
+  nextPlace: ["Sledeće mesto", "Next place", "Следующее место"],
+  previous: ["Prethodno", "Previous", "Назад"],
+  change: ["Promeni fazon", "Change vibe", "Другая атмосфера"],
+  reset: ["Promeni gde si", "Change your place", "Выбрать место заново"],
+  empty: ["Nema potvrđeno otvorenih mesta u ovom fazonu.", "No confirmed open places with this vibe.", "Нет подтверждённых открытых мест с такой атмосферой."],
+  emptyHint: ["Predlažemo samo lokale za koje imamo radno vreme i odgovarajući žanr. Probaj drugi fazon ili proveri ponovo kasnije.", "Only places with known opening hours and a matching genre are suggested. Try another vibe or check again later.", "Предлагаем только места с известным расписанием и подходящим жанром. Выбери другую атмосферу или проверь позже."],
+  noPlaces: ["Nema lokala sa potvrđenom lokacijom u aktuelnoj ponudi.", "No places with verified coordinates in the current listings.", "В текущей подборке нет мест с подтверждёнными координатами."],
+  refresh: ["Proveri ponovo", "Check again", "Проверить снова"],
+  end: ["To su svi predlozi za sada.", "That's all for now.", "Пока это все варианты."],
+  north: ["Smer prema severu", "Bearing from north", "Направление от севера"],
+  compass: ["Uključi kompas", "Enable compass", "Включить компас"],
+  compassOn: ["Kompas je uključen", "Compass enabled", "Компас включён"],
+  compassUnavailable: ["Kompas nije dostupan. Strelica pokazuje smer od severa.", "Compass unavailable. The arrow shows the bearing from north.", "Компас недоступен. Стрелка показывает направление от севера."],
+  details: ["Detalji događaja", "Event details", "О событии"],
+  musicUnknown: ["Za ovaj lokal još nemamo potvrđene žanrove. Predlozi koriste poznatu vrstu događaja.", "Genres are not confirmed here yet. Suggestions use the known event category.", "Жанры пока не подтверждены. Подбор основан на известной категории события."],
+} as const;
+
+export type TravelCopyKey = keyof typeof messages;
+export function travelText(locale: Locale, key: TravelCopyKey): string {
+  return messages[key][locale === "sr" ? 0 : locale === "ru" ? 2 : 1];
+}

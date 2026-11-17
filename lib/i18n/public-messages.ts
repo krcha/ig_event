@@ -4,7 +4,18 @@ import additional from "./public-message-extra.json" with { type: "json" };
 import supplement from "./public-message-supplement.json" with { type: "json" };
 
 type Translation = Record<Locale, string>;
-const extra = { ...additional, ...supplement } as Record<string, Translation>;
+const extra = {
+  ...additional,
+  ...supplement,
+  "Udaljeno od mene": { sr: "Udaljeno od mene", en: "Distance from me", ru: "Расстояние от меня" },
+  "Uključi lokaciju za najbliže događaje. Do tada su poređani po vremenu.": { sr: "Uključi lokaciju za najbliže događaje. Do tada su poređani po vremenu.", en: "Enable location to see the nearest events. Until then, events are sorted by time.", ru: "Разрешите геолокацию, чтобы увидеть ближайшие события. Пока они отсортированы по времени." },
+  "Lokacija nije dostupna. Dozvoli lokaciju i pokušaj ponovo.": { sr: "Lokacija nije dostupna. Dozvoli lokaciju i pokušaj ponovo.", en: "Location is unavailable. Allow location access and try again.", ru: "Геолокация недоступна. Разрешите доступ и попробуйте снова." },
+  "Tražimo lokaciju…": { sr: "Tražimo lokaciju…", en: "Finding your location…", ru: "Определяем местоположение…" },
+  "Tražimo tvoju lokaciju…": { sr: "Tražimo tvoju lokaciju…", en: "Finding your location…", ru: "Определяем местоположение…" },
+  "Koristi moju lokaciju": { sr: "Koristi moju lokaciju", en: "Use my location", ru: "Использовать моё местоположение" },
+  "Sortiranje događaja": { sr: "Sortiranje događaja", en: "Sort events", ru: "Сортировка событий" },
+  "Preporučeno": { sr: "Preporučeno", en: "Recommended", ru: "Рекомендуемое" },
+} as Record<string, Translation>;
 
 /** Presentation copy only. Callers explicitly mark UI text; event/source facts
  * are never walked, rewritten, or used to update canonical data. */

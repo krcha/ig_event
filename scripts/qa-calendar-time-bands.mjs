@@ -232,9 +232,13 @@ const kindToggleSource = readFileSync(
   "utf8",
 );
 assert.match(calendarSource,/sortMode === "title" \|\| sortMode === "venue"/);
+assert.match(calendarSource,/const ungrouped = alphabetical \|\| sortMode === "distance"/,
+  "Alphabetical and distance selections must both retain their full ordering instead of regrouping by time.");
 assert.match(calendarSource,/AGENDA_BAND_ORDER\[sortMode === "late"/);
 assert.match(calendarSource,/events: visible/);
-assert.match(calendarSource,/data-calendar-time-band=\{alphabetical \? undefined : group.key\}/);
+assert.match(calendarSource,/events: orderedVisible/,
+  "The ungrouped selection must render the complete sorted matching set.");
+assert.match(calendarSource,/data-calendar-time-band=\{ungrouped \? undefined : group.key\}/);
 assert.match(calendarSource,/data-calendar-time-band-visible-count="true"/);
 assert.match(calendarSource,/data-calendar-event-id=\{event._id\}/);
 assert.match(calendarSource,/timeStatus: event.timeStatus/);

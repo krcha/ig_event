@@ -112,8 +112,9 @@ const browsePageSource = readFileSync("app/(main)/events-browse-page.tsx", "utf8
 assert.match(browsePageSource, /sortAgendaEvents\(selectedDayAgendaEvents, selectedSortMode\)/);
 assert.equal(normalizeAgendaSortMode(), "time");
 assert.equal(normalizeAgendaSortMode("venue"), "venue");
+assert.equal(normalizeAgendaSortMode("distance"), "distance");
 assert.equal(normalizeAgendaSortMode("invalid"), "time");
-assert.deepEqual(AGENDA_SORT_OPTIONS.map(option => [option.value, option.label]), [["time","Po vremenu"],["late","Kasnije prvo"],["title","Po nazivu"],["venue","Po imenu mesta"]]);
+assert.deepEqual(AGENDA_SORT_OPTIONS.map(option => [option.value, option.label]), [["time","Po vremenu"],["late","Kasnije prvo"],["title","Po nazivu"],["venue","Po imenu mesta"],["distance","Udaljeno od mene"]]);
 const ordered = [
   makeEvent({_id:"tie-b",time:"20:00",timeStatus:"confirmed"}),
   makeEvent({_id:"unknown-a",time:"22:00",timeStatus:"unknown"}),
@@ -136,6 +137,22 @@ assert.deepEqual(sortAgendaEvents(many,"venue").slice(0,3).map(e=>e.venue),["Mes
 const original=ordered.map(e=>e._id);sortAgendaEvents(ordered,"title");assert.deepEqual(ordered.map(e=>e._id),original,"Never mutate input snapshots.");
 const display=[makeEvent({_id:"normalized",time:"23:00",displayTimeStart:"18:00",timeStatus:"confirmed"}),makeEvent({_id:"raw",time:"19:00",timeStatus:"confirmed"})];
 assert.equal(sortAgendaEvents(display,"time")[0]._id,"normalized");
+const origin = { latitude: 44.81, longitude: 20.46 };
+const byDistance = [
+  makeEvent({ _id: "missing", time: "10:00" }),
+  makeEvent({ _id: "far", time: "11:00", venueLatitude: 44.87, venueLongitude: 20.48 }),
+  makeEvent({ _id: "near-b", time: "23:00", venueLatitude: 44.811, venueLongitude: 20.46 }),
+  makeEvent({ _id: "invalid", time: "12:00", venueLatitude: NaN, venueLongitude: 200 }),
+  makeEvent({ _id: "near-a", time: "18:00", venueLatitude: 44.811, venueLongitude: 20.46 }),
+];
+assert.deepEqual(sortAgendaEvents(byDistance, "distance", origin).map(event => event._id),
+  ["near-b", "near-a", "far", "missing", "invalid"],
+  "Distance uses real coordinates over the complete set, keeps ties stable, and puts unavailable coordinates last.");
+assert.deepEqual(sortAgendaEvents(byDistance, "distance").map(event => event._id), sortAgendaEvents(byDistance, "time").map(event => event._id),
+  "Without permission or a GPS fix, distance sort safely retains the time order.");
+assert.deepEqual(sortAgendaEvents(byDistance, "distance", { latitude: Infinity, longitude: 20 }).map(event => event._id),
+  sortAgendaEvents(byDistance, "time").map(event => event._id), "An invalid origin must never produce a fabricated distance order.");
+assert.deepEqual(byDistance.map(event => event._id), ["missing", "far", "near-b", "invalid", "near-a"], "Distance sort never mutates the original snapshot.");
 assert.equal(
   browsePageSource.includes("month-events-table"),
   false,

@@ -191,6 +191,12 @@ Keep the existing inline Instagram accordion, original image/caption fetching, l
 
 Apply the shared palette and font while preserving Discover's poster actions, swipe/save/skip/undo/details behavior, and existing motion preferences. Preserve Map's date and Open now filters, location controls, venue pins, popups, pan, zoom, directions, and links to venue/event details. Do not import the old HTML proposal's snapshot dates or demo storage namespace into application contracts.
 
+### Mobile outing refinements
+
+Expanded Events retain a complete uncropped poster at full available width. Factual venue hours sit on the upper dark fade; caption, compact approximate travel times and source/details actions continue over the lower poster fade. Collapsed cards retain their time/type hierarchy with a lazy low-resolution blurred poster tint. Desktop original-post columns remain intact.
+
+Mobile Discover contains the full original poster while retaining its header and Like/Skip controls within the viewport. Metadata and actions overlay the lower fade. The central Gde dalje compass rises subtly above the bottom bar in a 42px lime circle. Yandex uses its 32px square Go asset inside a transparent 44px target, without a text wordmark. Motion respects reduced-motion and pauses in background tabs.
+
 ## Do's and Don'ts
 
 ### Do:

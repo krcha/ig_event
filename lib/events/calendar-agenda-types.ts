@@ -6,7 +6,7 @@ import type { CalendarTimeBandKey } from "./calendar-time-bands";
 export type CalendarEventSummary = Pick<PublicEvent,
   "_id" | "title" | "description" | "date" | "time" | "timeStatus" | "dayPeriod" |
   "displayTimeEnd" | "displayTimeLabel" | "displayTimeSource" | "displayTimeStart" |
-  "venue" | "venueId" | "venueCategory" | "venueHours" | "artists" | "eventType" |
+  "venue" | "venueId" | "venueCategory" | "venueHours" | "venueLatitude" | "venueLongitude" | "artists" | "eventType" |
   "ticketPrice" | "attendance" | "attendanceCount" | "attendeeCount" | "attendees" |
   "attendeesCount" | "going" | "goingCount" | "eventTaxonomy" | "performerGenreResearch" | "timeEvidenceKind"
 >;
@@ -16,6 +16,7 @@ export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "ve
   tags: string[];
   mobileOrder: number;
   sessionLabel: string | null;
+  venueHoursLabel: string | null;
   band: CalendarTimeBandKey;
   presentation: {
     kind: "event" | "venue_hours" | "unknown";

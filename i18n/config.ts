@@ -53,7 +53,7 @@ export function stripLocalePrefix(pathname: string): string {
 }
 
 export function isPublicPagePath(pathname: string): boolean {
-  return /^\/(?:$|discover\/?$|map\/?$|saved\/?$|you\/?$|install\/?$|calendar\/?$|events(?:\/[^/]+)?\/?$|venues(?:\/[^/]+)?\/?$|sign-in(?:\/.*)?$|sign-up(?:\/.*)?$)/u.test(pathname);
+  return /^\/(?:$|discover\/?$|next\/?$|map\/?$|saved\/?$|you\/?$|install\/?$|calendar\/?$|events(?:\/[^/]+)?\/?$|venues(?:\/[^/]+)?\/?$|sign-in(?:\/.*)?$|sign-up(?:\/.*)?$)/u.test(pathname);
 }
 
 /** Only public pages acquire prefixes. APIs, assets and operations stay stable. */

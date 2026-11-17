@@ -123,6 +123,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
     currentPage,
     error,
     events,
+    distanceEvents,
     mobileEvents,
     firstEventNumber,
     lastEventNumber,
@@ -138,6 +139,7 @@ export default async function DiscoverPage({ searchParams }: DiscoverPageProps) 
       dateTabs={buildDateTabs(today, selectedDate, locale)}
       error={error}
       events={events}
+      distanceEvents={distanceEvents}
       mobileEvents={mobileEvents}
       today={today}
       key={`${selectedDate}:${currentPage}:${revision}`}

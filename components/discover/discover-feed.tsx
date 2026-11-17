@@ -5,7 +5,7 @@ import { eventNoun } from "@/lib/i18n/display";
 
 
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Instagram, Search, Sparkles } from "lucide-react";
 import {
   EventCategoryPill,
@@ -21,6 +21,10 @@ import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
 import { EventZekaMark } from "@/components/brand/event-zeka-brand";
 import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
 import { getDiscoverImageVersion } from "@/lib/discover/discover-image-source";
+import { sortDiscoverByDistance } from "@/lib/discover/distance-sort";
+import type { PublicEventPostPreview } from "@/lib/events/public-event-post";
+import type { EventPrimaryCategory } from "@/lib/taxonomy/event-categories";
+import { useUserLocation } from "@/components/travel/user-location";
 import styles from "./desktop-discover.module.css";
 
 export type DiscoverFeedEvent = {
@@ -42,9 +46,14 @@ export type DiscoverFeedEvent = {
   time?: string;
   title: string;
   venue: string;
+  venueLatitude?: number;
+  venueLongitude?: number;
   venueId?: string;
   venueHours?: VenueHoursCacheFields;
   updatedAt?: number;
+  captionDeferred?: true;
+  primaryCategory?: EventPrimaryCategory;
+  sessionLabel?: string;
 };
 
 export type DiscoverDateTab = {
@@ -69,6 +78,7 @@ type DiscoverFeedProps = {
   dateTabs: DiscoverDateTab[];
   error?: string;
   events: DiscoverFeedEvent[];
+  distanceEvents?: DiscoverFeedEvent[];
   introduction: string;
   pagination: DiscoverPagination;
   revision: string;
@@ -95,7 +105,7 @@ function getResolvedTime(event: DiscoverFeedEvent): {
   });
   return {
     dayPeriod: displayTime.dayPeriod,
-    label: displayTime.label,
+    label: event.displayTimeLabel ?? displayTime.label,
   };
 }
 
@@ -116,7 +126,7 @@ function EventMetaChips({ event }: { event: DiscoverFeedEvent }) {
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <EventCategoryPill className="flex-none" event={event} />
+      <EventCategoryPill className="flex-none" event={event} category={event.primaryCategory} />
       <EventDayPeriodChip className="flex-none" value={time.dayPeriod} />
       <EventPriceChip className="flex-none" value={event.ticketPrice} />
     </div>
@@ -129,14 +139,27 @@ function getInstagramCaption(event: DiscoverFeedEvent): string | null {
 
 function DiscoverPost({ event }: { event: DiscoverFeedEvent }) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [inspected,setInspected] = useState(false);
+  const [originalPost,setOriginalPost] = useState<PublicEventPostPreview|null>(null);
+  useEffect(()=>{
+    if (!inspected || !event.captionDeferred) return;
+    const controller = new AbortController();
+    void fetch(`/api/events/${encodeURIComponent(event._id)}/post`,{cache:"no-store",signal:controller.signal})
+      .then(async response=>{
+        if (!response.ok) return;
+        const post = await response.json() as PublicEventPostPreview;
+        if (!controller.signal.aborted && post.eventId === event._id) setOriginalPost(post);
+      }).catch(()=>{});
+    return ()=>controller.abort();
+  },[event._id,event.captionDeferred,inspected]);
   const time = getResolvedTime(event);
   const handleLabel = getInstagramHandleLabel(event);
-  const instagramCaption = getInstagramCaption(event);
+  const instagramCaption = originalPost?.captionSource === "instagram" ? originalPost.caption : getInstagramCaption(event);
   const imageUrl = getStableImageUrl(event);
-  const sessionLabel = getEventSessionLabel(event);
+  const sessionLabel = event.sessionLabel ?? getEventSessionLabel(event);
 
   return (
-    <article className={styles.post} data-discover-post="true" aria-label={event.title}>
+    <article className={styles.post} data-discover-post="true" aria-label={event.title} onFocus={()=>setInspected(true)} onPointerEnter={()=>setInspected(true)}>
       <Link aria-label={`Open details for ${event.title}`} className={styles.posterLink} href={`/events/${event._id}`} prefetch={false}>
         {imageUrl && !imageFailed ? <ResponsiveEventImage alt={event.title} className={styles.poster} data-discover-image-source="event-proxy" fill loading="lazy" onError={() => setImageFailed(true)} sizes="(max-width: 1024px) 25vw, (max-width: 1536px) 24vw, 350px" src={imageUrl} version={getDiscoverImageVersion(event)} /> : <span className={styles.missingImage}><Sparkles aria-hidden="true" size={30} /><span>{event.title}</span><span><PublicText text={imageFailed ? "Poster unavailable." : "Image pending for this post."} /></span></span>}
         <div className={styles.overlay} data-discover-hover-details="true">
@@ -189,6 +212,7 @@ function DesktopDiscoverFeed({
   dateTabs,
   error,
   events,
+  distanceEvents = [],
   introduction,
   pagination,
   revision,
@@ -196,6 +220,8 @@ function DesktopDiscoverFeed({
   subline,
 }: DiscoverFeedProps) {
   const locale = useLocale();
+  const location = useUserLocation();
+  const [sort,setSort] = useState<"recommended"|"distance">("recommended");
   const [visibleEvents, setVisibleEvents] = useState(events);
   const [nextCursor, setNextCursor] = useState<string | null>(events.at(-1)?._id ?? null);
   const [hasMore, setHasMore] = useState(Boolean(pagination.nextHref && events.length > 0));
@@ -204,7 +230,13 @@ function DesktopDiscoverFeed({
   const [loadError, setLoadError] = useState<{ message: string; reload: boolean } | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const inFlight = useRef(false);
-  const hasEvents = visibleEvents.length > 0;
+  const displayedEvents = useMemo(()=>{
+    if (sort !== "distance" || !location.position) return visibleEvents;
+    const loaded = new Map(visibleEvents.map(event=>[event._id,event]));
+    const complete = distanceEvents.length ? distanceEvents.map(event=>loaded.get(event._id) ?? event) : visibleEvents;
+    return sortDiscoverByDistance(complete,location.position);
+  },[distanceEvents,location.position,sort,visibleEvents]);
+  const hasEvents = displayedEvents.length > 0;
   const fallbackHref = `/discover?date=${encodeURIComponent(selectedDate)}&page=${nextPage}`;
   const reloadHref = `/discover?date=${encodeURIComponent(selectedDate)}`;
 
@@ -258,7 +290,7 @@ function DesktopDiscoverFeed({
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || !hasMore || loadError || typeof IntersectionObserver === "undefined") {
+    if (sort === "distance" || !sentinel || !hasMore || loadError || typeof IntersectionObserver === "undefined") {
       return;
     }
     const observer = new IntersectionObserver(
@@ -271,7 +303,7 @@ function DesktopDiscoverFeed({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, loadError, loadMore]);
+  }, [hasMore, loadError, loadMore, sort]);
 
   return (
     <main className="app-page app-page-wide gap-3 sm:gap-4" data-discover-feed="instagram-profile">
@@ -286,20 +318,30 @@ function DesktopDiscoverFeed({
             </div>
             <Link aria-label="Search events" className={styles.search} href="/"><Search aria-hidden="true" size={18} /></Link>
           </div>
-          <LocalizedElement as="nav" aria-label="Discover dates" className={styles.dates}>
-            {dateTabs.map(tab => <LocalizedElement as="a" aria-current={tab.active ? "date" : undefined} className={styles.date} href={tab.href} key={tab.href}><strong><PublicText text={tab.label} /></strong><span><PublicText text={tab.sublabel} /></span></LocalizedElement>)}
-          </LocalizedElement>
+          <div className={styles.controls}>
+            <LocalizedElement as="nav" aria-label="Discover dates" className={styles.dates}>
+              {dateTabs.map(tab => <LocalizedElement as="a" aria-current={tab.active ? "date" : undefined} className={styles.date} href={tab.href} key={tab.href}><strong><PublicText text={tab.label} /></strong><span><PublicText text={tab.sublabel} /></span></LocalizedElement>)}
+            </LocalizedElement>
+            <label className={styles.sort}><span className="sr-only"><PublicText text="Sortiranje događaja" /></span>
+              <LocalizedElement as="select" aria-label="Sortiranje događaja" data-discover-sort="true" value={sort} onChange={event=>{const next=event.target.value as "recommended"|"distance";setSort(next);if(next==="distance")location.requestLocation();}}>
+                <option value="recommended"><PublicText text="Preporučeno" /></option>
+                <option value="distance"><PublicText text="Udaljeno od mene" /></option>
+              </LocalizedElement>
+            </label>
+          </div>
+          {sort === "distance" && location.status === "loading" ? <p className={styles.locationStatus} role="status"><PublicText text="Tražimo tvoju lokaciju…" /></p> : null}
+          {sort === "distance" && location.status === "error" ? <div className={styles.locationStatus} role="status"><span>{location.error}</span><button onClick={location.requestLocation} type="button"><PublicText text="Pokušaj ponovo" /></button></div> : null}
         </header>
 
         <section
           className={styles.grid}
           data-discover-post-grid="true"
         >
-          {visibleEvents.map((event) => (
+          {displayedEvents.map((event) => (
             <DiscoverPost event={event} key={event._id} />
           ))}
         </section>
-        {hasMore ? (
+        {hasMore && sort !== "distance" ? (
           <div
             className="mx-auto flex w-full max-w-[38rem] flex-col items-center gap-2 py-3 lg:max-w-none"
             data-discover-pagination="infinite"

@@ -37,6 +37,7 @@ const jsx = (type, props, key) => type?.qaRender ? type(props) : ({ type, props:
 const components = new Proxy({ __esModule: true }, { get: (target, name) => name in target ? target[name] : String(name) });
 let pageLocale = "sr";
 let discoveryParams = new URLSearchParams();
+let userPosition = null;
 const localizedComponents = new Proxy({
   PublicText: Object.assign(({ text }) => publicText(pageLocale, text), { qaRender: true }),
   LocalizedLink: Object.assign(({ href, ...props }) => jsx("link", { ...props, href: localeConfig.localizeHref(href, pageLocale) }), { qaRender: true }),
@@ -60,6 +61,7 @@ function compile(file, mocks) {
     if (name === "@/lib/i18n/display") return publicDisplay;
     if (name === "@/lib/i18n/seo") return localizedSeo;
     if (name === "@/components/i18n/public-text") return localizedComponents;
+    if (name === "@/components/travel/user-location") return { useUserLocation: () => ({ position: userPosition, status: userPosition ? "ready" : "idle", error: null, requestLocation: () => {} }) };
     if (name === "@/lib/taxonomy/event-discovery") return discovery;
     if (name === "./calendar-discovery-state") return discoveryState;
     if (name === "lucide-react" || name.startsWith("@/components/") || name.startsWith("./calendar-") || name === "./event-kind-toggle-chips" || name === "./open-now-filter") return components;
@@ -209,7 +211,7 @@ assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).va
 legacyOptions.push({ value: "id:venue-b", label: "Other venue", names: ["Old alias"] });
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "Old alias", "Ambiguous legacy aliases must retain the existing name-matching behavior.");
 
-for (const mobile of [false, true]) for (const sortMode of ["time","late","title","venue"]) {
+for (const mobile of [false, true]) for (const sortMode of ["time","late","title","venue", "distance"]) {
   const VirtualAgendaList = Object.assign(({items,children})=>items.map(children),{qaRender:true});
   const {CalendarAgenda}=compile("components/calendar/calendar-agenda.tsx",{
     react:{useMemo:cb=>cb(),useState:v=>[v,()=>{}],useEffect:()=>{}},"./virtual-agenda-list":{VirtualAgendaList},
@@ -221,7 +223,27 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   const rows=nodes(tree,node=>node.props?.["data-calendar-event-id"]);
   assert.deepEqual(rows.map(node=>node.props["data-calendar-event-id"]),ordered.map(e=>e._id),`The whole ${sortMode} ordering must survive the ${mobile?"mobile":"desktop"} rendering path.`);
   assert.equal(new Set(rows.map(node=>node.props["data-calendar-event-id"])).size,events.length);
-  if(sortMode==="title"||sortMode==="venue")assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Alphabetical lists cannot be regrouped by time.");
+  if(sortMode==="title"||sortMode==="venue"||sortMode==="distance")assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Alphabetical and distance lists cannot be regrouped by time.");
+}
+
+{
+  const VirtualAgendaList = Object.assign(({ items, children }) => items.map(children), { qaRender: true });
+  const { CalendarAgenda } = compile("components/calendar/calendar-agenda.tsx", {
+    react: { useMemo: cb => cb() }, "./virtual-agenda-list": { VirtualAgendaList },
+    "@/lib/events/calendar-time-band-definitions": bands,
+  });
+  const compact = projected.map((event, index) => ({ ...event, venueLatitude: 44.81 + (7 - index) * .001, venueLongitude: 20.46 }));
+  userPosition = { latitude: 44.81, longitude: 20.46 };
+  const tree = CalendarAgenda({ events: compact, sortMode: "distance", openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+  assert.deepEqual(nodes(tree, node => node.props?.["data-calendar-event-id"]).map(row => row.props["data-calendar-event-id"]),
+    [...compact].reverse().map(event => event._id), "The complete client matching set must be sorted from the shared GPS fix before virtualization.");
+  assert.equal(nodes(tree, node => node.props?.["data-calendar-distance-location"]).length, 0, "A valid GPS fix does not show a redundant permission prompt.");
+  const tint = nodes(tree, node => node.type === "img" && node.props?.["aria-hidden"])[0];
+  assert.equal(tint.props.loading, "lazy", "Closed poster tints should not eagerly load the whole day.");
+  assert.match(tint.props.src, /\?w=192$/, "Closed rows use the smallest supported first-party image variant.");
+  userPosition = null;
+  const fallback = CalendarAgenda({ events: compact, sortMode: "distance", openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+  assert.equal(nodes(fallback, node => node.props?.["data-calendar-distance-location"]).length, 1, "A distance link without a GPS fix offers an explicit permission action.");
 }
 
 {

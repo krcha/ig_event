@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import {
   Bookmark,
   CalendarDays,
+  Compass,
   Instagram,
   Loader2,
   MapPin,
@@ -47,6 +48,12 @@ const PUBLIC_TOOLBAR_ITEMS: ToolbarItem[] = [
     href: "/discover",
     label: "Discover",
     icon: Sparkles,
+    match: "prefix",
+  },
+  {
+    href: "/next",
+    label: "Next",
+    icon: Compass,
     match: "prefix",
   },
   {
@@ -164,7 +171,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
     return localizeHref(getMobileNavigationHref(item.href, selectedDate), locale);
   }
   function itemLabel(item: ToolbarItem): string {
-    const key = ({ Events: "nav.events", Discover: "nav.discover", Map: "nav.map", Saved: "nav.saved" } as const)[item.label as "Events" | "Discover" | "Map" | "Saved"];
+    const key = ({ Events: "nav.events", Discover: "nav.discover", Next: "nav.next", Map: "nav.map", Saved: "nav.saved" } as const)[item.label as "Events" | "Discover" | "Next" | "Map" | "Saved"];
     return key ? accountText(locale, key) : item.label;
   }
   function cancelIntent() {
@@ -300,7 +307,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
 
       <nav className="mobile-nav-shell" aria-label={accountText(locale, "nav.mobile")}>
         <div className="glass-panel bg-card/95 px-2 py-2 shadow-[0_-18px_48px_-34px_rgba(15,23,42,0.45)]">
-          <div className="flex w-full items-center gap-1 overflow-hidden">
+          <div className="flex w-full items-center gap-1">
             {mobileToolbarItems.map((item) => {
               const Icon = item.icon;
               const active = isActivePath(pathname, item);
@@ -319,6 +326,7 @@ export function AppToolbar({ showAdminNavigation = false }: AppToolbarProps) {
                       ? "bg-primary text-primary-foreground shadow-[0_16px_34px_-22px_rgba(14,116,144,0.52)]"
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   )}
+                  data-compass-tab={item.href === "/next" ? "true" : undefined}
                   href={href}
                   key={item.href}
                   data-global-navigation="client"

@@ -148,13 +148,14 @@ const publicItemsSource = source.slice(publicItemsStart, adminItemsStart);
 
 assert.deepEqual(
   [...publicItemsSource.matchAll(/\blabel:\s*"([^"]+)"/g)].map(([, label]) => label),
-  ["Events", "Discover", "Map", "Saved"],
-  "Internal navigation keys retain Events, Discover, Map, Saved before localized presentation.",
+  ["Events", "Discover", "Next", "Map", "Saved"],
+  "Internal navigation retains Events, Discover, central compass, Map and Saved before localized presentation.",
 );
 
 for (const { href, label } of [
   { href: "/", label: "Events" },
   { href: "/discover", label: "Discover" },
+  { href: "/next", label: "Next" },
   { href: "/map", label: "Map" },
   { href: "/saved", label: "Saved" },
 ]) {
@@ -205,7 +206,7 @@ assert.ok(source.includes("href={SITE_INSTAGRAM_URL}") && source.includes('targe
   source.includes('rel="noopener noreferrer"') && source.includes("<span>Follow</span>"),
   "Instagram remains an explicit Follow action to the unchanged official profile.");
 for (const locale of ["sr", "en", "ru"]) {
-  for (const key of ["nav.events", "nav.discover", "nav.map", "nav.saved", "nav.profile", "nav.homeA11y", "nav.global", "nav.mobile", "nav.instagramA11y"]) {
+  for (const key of ["nav.events", "nav.discover", "nav.next", "nav.map", "nav.saved", "nav.profile", "nav.homeA11y", "nav.global", "nav.mobile", "nav.instagramA11y"]) {
     assert.ok(accountText(locale, key).trim(), `${locale} navigation must translate ${key}.`);
   }
 }
@@ -228,11 +229,15 @@ assert.ok(source.includes("setPendingHref(href)") && source.includes('data-navig
 assert.ok(source.includes("canPrefetchMobileNavigation(href)") && source.includes("onPointerLeave={cancelIntent}") && source.includes("}, 350)"),
   "Public prefetch must be based on sustained intent, not all mounted tabs.");
 assert.ok(
-  source.includes('className="flex w-full items-center gap-1 overflow-hidden"') &&
+  source.includes('className="flex w-full items-center gap-1"') &&
     source.includes("inline-flex min-w-0 flex-1 flex-col") &&
     source.includes('className="max-w-full truncate"'),
-  "Mobile primary navigation should keep four flexible, truncating tabs without horizontal overflow at 320px.",
+  "Mobile primary navigation should keep five flexible, truncating tabs while allowing the compass to rise above the bar.",
 );
+assert.match(source, /data-compass-tab=\{item.href === "\/next" \? "true" : undefined\}/u,
+  "Only the compass tab receives the raised affordance.");
+assert.match(globalsSource, /\[data-compass-tab="true"\] > span:first-child\s*\{[\s\S]*?width: 42px;[\s\S]*?height: 42px;/u,
+  "The compass keeps the approved subtle 42px diameter inside its flexible tap target.");
 
 assert.ok(
   layoutSource.includes("<Suspense fallback={null}>") && layoutSource.includes("<NavigationFeedback />"),

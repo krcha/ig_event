@@ -99,11 +99,19 @@ export function CalendarEventPreviewRow({
   eventId,
   headerClassName,
   title,
+  venueHoursLabel,
+  venueLatitude,
+  venueLongitude,
+  venueName,
 }: {
   children: ReactNode;
   eventId: string;
   headerClassName?: string;
   title: string;
+  venueHoursLabel?: string | null;
+  venueLatitude?: number;
+  venueLongitude?: number;
+  venueName?: string;
 }) {
   const { activeId, close, toggle } = useCalendarEventPreview();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -117,7 +125,7 @@ export function CalendarEventPreviewRow({
   };
 
   return (
-    <div data-calendar-event-preview-row="true" data-expanded={open ? "true" : "false"}>
+    <div className="relative" data-calendar-event-preview-row="true" data-expanded={open ? "true" : "false"}>
       <div
         className={cn("relative rounded-[inherit] transition-colors", open && "bg-primary/[0.05]")}
         data-calendar-event-preview-header="true"
@@ -150,7 +158,8 @@ export function CalendarEventPreviewRow({
       <div aria-labelledby={triggerId} hidden={!open} id={panelId} role="region">
         {open ? (
           <Suspense fallback={<CalendarPostLoading />}>
-            <EventPostPreview eventId={eventId} onClose={closePost} title={title} />
+            <EventPostPreview eventId={eventId} onClose={closePost} title={title} venueHoursLabel={venueHoursLabel}
+              venueLatitude={venueLatitude} venueLongitude={venueLongitude} venueName={venueName} />
           </Suspense>
         ) : null}
       </div>

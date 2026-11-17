@@ -14,6 +14,8 @@ import { OpenNowStatus } from "@/components/events/open-now-status";
 import { SaveEventButton } from "@/components/events/save-event-button";
 import { CALENDAR_TIME_BANDS } from "@/lib/events/calendar-time-band-definitions";
 import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/lib/events/agenda-sort-options";
+import { sortAgendaEvents } from "@/lib/events/agenda-sort";
+import { useUserLocation } from "@/components/travel/user-location";
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, getEventDiscoveryTaxonomy, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
 import styles from "./mobile-events-home.module.css";
@@ -93,7 +95,11 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     data-calendar-event-discovery-categories={taxonomy.categories.join(",")}
     data-calendar-mobile-event-row="true" data-event-title={event.title} data-event-venue={event.venue}
     data-event-time={event.displayTimeLabel ?? event.time} data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}>
-    <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}>
+    {/* eslint-disable-next-line @next/next/no-img-element -- A bounded first-party derivative supplies only a lazy decorative tint. */}
+    <img alt="" aria-hidden="true" className={styles.eventBackdrop} decoding="async" loading="lazy" width={192} height={192}
+      onError={event => { event.currentTarget.hidden = true; }} src={`/api/discover/images/${encodeURIComponent(event._id)}?w=192`} />
+    <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}
+      venueHoursLabel={event.venueHoursLabel} venueName={event.venue} venueLatitude={event.venueLatitude} venueLongitude={event.venueLongitude}>
       <LocalizedElement as="span" className={styles.eventTime} title={timeDescription} aria-label={timeDescription}
         data-time-source={known ? "event" : "unknown"}>
         <span>{known ? event.timeParts.startLabel : "—"}</span>
@@ -122,6 +128,7 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
 /** Filter the selected day's sorted projection before measuring its virtual rows. */
 export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasActiveFilters, clearFiltersHref }: Props) {
   const { categories, genre, time, format, hiddenCategories } = useCalendarDiscoveryFilters();
+  const { position, status: locationStatus, error: locationError, requestLocation } = useUserLocation();
   const items = useMemo(() => {
     const distinct = new Map<string, AgendaItem>();
     for (const event of events) {
@@ -160,10 +167,16 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
     }
     return { visible, categoryCounts, genreCounts, unknownGenreCount, standUpCount, allCount };
   }, [categories, format, genre, hiddenCategories, items, time]);
+  const orderedVisible = useMemo(() => {
+    if (sortMode !== "distance" || !position) return visible;
+    const order = new Map(sortAgendaEvents(visible.map(({ event }) => event), "distance", position).map((event, index) => [event._id, index]));
+    return [...visible].sort((a, b) => order.get(a.event._id)! - order.get(b.event._id)!);
+  }, [position, sortMode, visible]);
   const alphabetical = sortMode === "title" || sortMode === "venue";
+  const ungrouped = alphabetical || sortMode === "distance";
   const sortLabel = AGENDA_SORT_OPTIONS.find(option => option.value === sortMode)!.label;
-  const groups = alphabetical
-    ? [{ key: "alphabetical", label: sortLabel, description: "", events: visible }]
+  const groups = ungrouped
+    ? [{ key: "selection", label: sortMode === "distance" && !position ? "Po vremenu" : sortLabel, description: "", events: orderedVisible }]
     : AGENDA_BAND_ORDER[sortMode === "late" ? "late" : "time"].map(key => ({ key, label: calendarBandLabels[key], description: key === "time-not-announced" ? "" : CALENDAR_TIME_BANDS.find(band => band.key === key)!.description, events: visible.filter(({ event }) => event.band === key) })).filter(group => group.events.length);
   const hasDiscoveryFilters = Boolean(categories.length || genre || time || format || hiddenCategories.length);
 
@@ -173,9 +186,13 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
     <CalendarDiscoveryFilters categories={categories} categoryCounts={categoryCounts} allCount={allCount} hasLegacyFilter={hiddenCategories.length > 0}
       genre={genre} genreCounts={genreCounts} unknownGenreCount={unknownGenreCount} time={time} format={format} standUpCount={standUpCount} />
     <p className={styles.resultCount} role="status"><span data-calendar-visible-event-count="true"><PublicEventCount count={visible.length} /></span> · <PublicText text={sortLabel} /></p>
+    {sortMode === "distance" && !position ? <div className={styles.locationSort} data-calendar-distance-location="true">
+      <p role="status"><PublicText text={locationError ? "Lokacija nije dostupna. Dozvoli lokaciju i pokušaj ponovo." : "Uključi lokaciju za najbliže događaje. Do tada su poređani po vremenu."} /></p>
+      <button disabled={locationStatus === "loading"} onClick={requestLocation} type="button"><PublicText text={locationStatus === "loading" ? "Tražimo lokaciju…" : "Koristi moju lokaciju"} /></button>
+    </div> : null}
     <div className={styles.contentGrid}>
       <div>{groups.map(group => <section className={styles.band} id={`agenda-${group.key}`} key={group.key}
-        data-calendar-time-band={alphabetical ? undefined : group.key} data-calendar-time-band-event-count={group.events.length}
+        data-calendar-time-band={ungrouped ? undefined : group.key} data-calendar-time-band-event-count={group.events.length}
         aria-labelledby={`heading-${group.key}`}>
         <header className={styles.bandHeader}><h2 id={`heading-${group.key}`}><PublicText text={group.label} /></h2>{group.description ? <span>{group.description}</span> : null}<span data-calendar-time-band-visible-count="true">{group.events.length}</span></header>
         <VirtualAgendaList items={group.events} getKey={item => item.event._id} estimateSize={108}>{item => renderEventRow(item, openNowActive)}</VirtualAgendaList>
@@ -187,7 +204,7 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
           : hasDiscoveryFilters ? <button className="button-secondary" type="button" onClick={() => replaceCalendarDiscoveryFilters({ category: null, genre: null, time: null, format: null, hide: null })}><PublicText text="Poništi filtere" /></button> : null}
       </div> : null}
       </div>
-      <LocalizedElement as="aside" className={styles.side} aria-label="Pregled dana"><h2><PublicText text={alphabetical ? "Abecedni pregled" : "Po satima"} /></h2><nav>{groups.map(group => <LocalizedElement as="a" key={group.key} href={`#agenda-${group.key}`}><span><PublicText text={group.label} /></span><span>{group.events.length}</span></LocalizedElement>)}</nav><p><strong><PublicText text={"Vreme i izvor."} /></strong><br /><PublicText text={"Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa."} /></p></LocalizedElement>
+      <LocalizedElement as="aside" className={styles.side} aria-label="Pregled dana"><h2><PublicText text={sortMode === "distance" ? "Udaljeno od mene" : alphabetical ? "Abecedni pregled" : "Po satima"} /></h2><nav>{groups.map(group => <LocalizedElement as="a" key={group.key} href={`#agenda-${group.key}`}><span><PublicText text={group.label} /></span><span>{group.events.length}</span></LocalizedElement>)}</nav><p><strong><PublicText text={"Vreme i izvor."} /></strong><br /><PublicText text={"Ako početak nije najavljen, prikazujemo dostupno radno vreme mesta za taj dan. Radno vreme mesta nije trajanje programa."} /></p></LocalizedElement>
     </div>
   </section></CalendarEventPreviews>;
 }

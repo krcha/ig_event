@@ -39,6 +39,7 @@ function loadLayoutMetadata(locale) {
     "@/components/providers/auth-user-provider": { AuthUserProvider: "auth-provider" },
     "@/components/providers/user-library-provider": { UserLibraryProvider: "library-provider" },
     "@/components/calendar/events-ui-provider": { EventsUiProvider: "events-ui-provider" },
+    "@/components/travel/user-location": { UserLocationProvider: "user-location-provider" },
     "@/components/install/install-prompt": { InstallPrompt: "install-prompt" },
     "@/lib/seo/site": { SITE_ORIGIN: localizedSeo.SITE_ORIGIN },
     "@/lib/i18n/seo": localizedSeo,

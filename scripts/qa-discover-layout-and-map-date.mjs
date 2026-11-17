@@ -45,6 +45,64 @@ for (const reduced of [false, true]) {
   h.cleanup(); assert.equal(h.listeners.size, 0); assert.equal(h.classes.size, 0);
 }
 
+// Reproduce the production streaming race: Discover mounts before its toolbar,
+// then the header shifts the stage without a browser resize event.
+{
+  const listeners = new Map(), viewportListeners = new Map(), documentListeners = new Map(), fontListeners = new Map();
+  const frames = new Map(), values = new Map(), observed = new Set();
+  let cleanup, mutation, resized, fontsReady, frameId = 0, writes = 0;
+  let stageTop = 124, navigation = null, navigationHeight = 0;
+  let resizeDisconnected = false, mutationDisconnected = false;
+  const controls = { contains: () => false };
+  const main = { children: [controls] };
+  const window = {
+    innerHeight: 844, scrollY: 0,
+    visualViewport: { height: 844, addEventListener: (name, callback) => viewportListeners.set(name, callback), removeEventListener: name => viewportListeners.delete(name) },
+    requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; },
+    cancelAnimationFrame: id => frames.delete(id),
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: name => listeners.delete(name),
+  };
+  const surface = {
+    closest: () => main,
+    getBoundingClientRect: () => ({ top: stageTop-window.scrollY }),
+    style: { getPropertyValue: name => values.get(name), setProperty: (name, value) => { writes++; values.set(name,value); } },
+  };
+  const document = {
+    body: {}, documentElement: {},
+    querySelector: selector => selector === ".mobile-nav-shell" ? navigation : null,
+    fonts: { ready: { then: callback => { fontsReady=callback; } }, addEventListener: (name, callback) => fontListeners.set(name,callback), removeEventListener: name => fontListeners.delete(name) },
+    addEventListener: (name, callback) => documentListeners.set(name,callback),
+    removeEventListener: name => documentListeners.delete(name),
+  };
+  class ResizeObserver { constructor(callback) { resized=callback; } observe(element) { observed.add(element); } disconnect() { resizeDisconnected=true; } }
+  class MutationObserver { constructor(callback) { mutation=callback; } observe() {} disconnect() { mutationDisconnected=true; } }
+  const { useDiscoverViewportFit } = compile("components/discover/use-discover-viewport-fit.ts", {
+    react: { useLayoutEffect: effect => { cleanup=effect(); } },
+  }, { window, document, ResizeObserver, MutationObserver });
+  const settle = () => {
+    for (let turn=0;frames.size;turn++) {
+      assert.ok(turn<12,"Viewport fitting must settle, rather than resize itself forever.");
+      const pending=[...frames.values()];frames.clear();pending.forEach(callback=>callback());
+    }
+  };
+  const height = () => values.get("--discover-stage-height");
+  useDiscoverViewportFit({current:surface},true);settle();
+  assert.equal(height(),"614px","An absent streamed nav uses a safe height estimate, not a zero top edge.");
+  navigation={getBoundingClientRect:()=>({height:navigationHeight})};navigationHeight=93;stageTop=180;
+  mutation();settle();
+  assert.equal(height(),"553px","A late header/nav mount automatically fills the available first viewport.");
+  assert.ok(observed.has(navigation),"Late navigation nodes join size observation.");
+  stageTop=196;fontsReady();settle();assert.equal(height(),"537px","Font layout settling recomputes the space above the poster.");
+  window.scrollY=300;resized();settle();assert.equal(height(),"537px","Scrolling does not grow the deck or hide the global header.");
+  window.visualViewport.height=780;stageTop=180;viewportListeners.get("resize")();settle();assert.equal(height(),"489px");
+  navigationHeight=0;resized();settle();assert.equal(height(),"494px","A not-yet-laid-out nav cannot collapse the poster to its minimum.");
+  const stableWrites=writes;mutation();resized();settle();assert.equal(writes,stableWrites,"Unchanged geometry never rewrites inline styles.");
+  mutation();cleanup();assert.equal(frames.size,0);assert.ok(resizeDisconnected&&mutationDisconnected);
+  assert.equal(listeners.size+viewportListeners.size+documentListeners.size+fontListeners.size,0);
+  fontsReady();assert.equal(frames.size,0,"A late font promise cannot revive an unmounted deck.");
+}
+
 const jsx = (type, props) => ({ type, props });
 for (const [instant, expected] of [
   ["2026-11-01T02:00:00+01:00", "2026-11-01"],
@@ -88,4 +146,4 @@ for (const [instant, expected] of [
   assert.equal(filteredMetadata.robots.index,false,"Date-filtered map variants retain their exclusion policy in every language.");
   }
 }
-console.log("QA passed: deliberate photo snapping, upward escape, reduced motion, cleanup, and identical date/read-window map behavior across all three languages and midnight/year/DST.");
+console.log("QA passed: streaming-safe Discover viewport fitting, stable scroll baseline, font/viewport settling and cleanup, legacy photo snapping, and identical map date windows across languages and midnight/year/DST.");

@@ -9,7 +9,7 @@ import { publicText } from "@/lib/i18n/public-messages";
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
 import { useLocalizedRouter as useRouter } from "@/components/i18n/public-text";
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { ArrowLeft, CalendarDays, Check, ExternalLink, Heart, Info, Instagram, LoaderCircle, MapPin, RotateCcw, Sparkles, Undo2, X } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowLeft, CalendarDays, Check, ExternalLink, Heart, Info, Instagram, LoaderCircle, MapPin, RotateCcw, Sparkles, Undo2, X } from "lucide-react";
 import { EVENT_CATEGORY_TONES, EventPriceChip } from "@/components/events/event-meta";
 import { ResponsiveEventImage } from "@/components/events/responsive-event-image";
 import { useRequireAuth } from "@/lib/auth/use-require-auth";
@@ -18,9 +18,12 @@ import type { PublicEventPostPreview } from "@/lib/events/public-event-post";
 import { choicesForScope, DISCOVER_SCOPES, getDiscoverCategory, getDiscoverGestureAction, type DiscoverScope } from "@/lib/discover/swipe-session";
 import { cn } from "@/lib/utils";
 import type { MobileDiscoverEvent } from "@/lib/discover/mobile-event";
+import { getDiscoverCoordinates, sortDiscoverByDistance } from "@/lib/discover/distance-sort";
+import { useUserLocation } from "@/components/travel/user-location";
+import { YandexTaxiButton } from "@/components/travel/yandex-taxi-button";
 import { useDiscoverSelections } from "./use-discover-selections";
-import { useDiscoverPhotoSnap } from "./use-discover-photo-snap";
 import { useDiscoverSwipeHint } from "./use-discover-swipe-hint";
+import { useDiscoverViewportFit } from "./use-discover-viewport-fit";
 import styles from "./mobile-discover.module.css";
 
 type MobileDiscoverProps = {authEnabled:boolean; error?:string; events:MobileDiscoverEvent[]; selectedDate:string; today:string};
@@ -51,6 +54,8 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   const selection = useDiscoverSelections(identity, events);
   const {complete:completeSelection} = selection;
   const [scope,setScope] = useState<DiscoverScope>("all");
+  const [sort,setSort] = useState<"recommended"|"distance">("recommended");
+  const location = useUserLocation();
   const [summaryOpen,setSummaryOpen] = useState(false);
   const [busy,setBusy] = useState(false);
   const [exiting,setExiting] = useState<MobileDiscoverEvent|null>(null);
@@ -66,7 +71,10 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
   const dayChoices = selection.sessions[selectedDate];
   const history = dayChoices?.choices ?? [];
   const seen = new Set(history.map(choice=>choice.eventId));
-  const queue = events.filter(event=>scope === "all" || getDiscoverCategory(event) === scope);
+  const queue = useMemo(()=>{
+    const matching = events.filter(event=>scope === "all" || getDiscoverCategory(event) === scope);
+    return sort === "distance" && location.position ? sortDiscoverByDistance(matching,location.position) : matching;
+  },[events,scope,sort,location.position]);
   const remaining = queue.filter(event=>!seen.has(event._id));
   const scopedChoices = choicesForScope(dayChoices,scope);
   const likedIds = new Set(history.filter(choice=>choice.decision === "like").map(choice=>choice.eventId));
@@ -84,7 +92,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     const requested = new URLSearchParams(window.location.search).get("category");
     if (DISCOVER_SCOPES.includes(requested as DiscoverScope)) setScope(requested as DiscoverScope);
   },[]);
-  useDiscoverPhotoSnap(stage, !showSummary && selection.hydrated && cards.length > 0, styles.scrollRoot);
+  useDiscoverViewportFit(stage,!showSummary);
   useDiscoverSwipeHint(stage, !locked && !showSummary && !detail && cards.length > 0);
   useEffect(()=>{
     const chip = categories.current?.querySelector<HTMLElement>(`[data-category="${scope}"]`);
@@ -105,6 +113,13 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
     stage.current?.getAnimations({subtree:true}).forEach(animation=>animation.cancel());
     setScope(next); setSummaryOpen(false);
     const url = new URL(window.location.href); url.searchParams.set("category",next); window.history.replaceState(null,"",url);
+  }
+  function changeSort(next:"recommended"|"distance") {
+    if (locked) return;
+    gesture.current = null;
+    stage.current?.getAnimations({subtree:true}).forEach(animation=>animation.cancel());
+    setSort(next);
+    if (next === "distance") location.requestLocation();
   }
   async function decide(decision:"like"|"skip",drag={x:0,y:0}) {
     const event = remaining[0], card = stage.current?.querySelector<HTMLElement>('[data-layer="0"]');
@@ -187,9 +202,17 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
         {!dates.includes(selectedDate)?<option value={selectedDate}>{dateLabel(selectedDate,locale)}</option>:null}
         {dates.map(date=><option key={date} value={date}>{date===today?`${publicText(locale,"Today")} · ${dateLabel(date,locale)}`:date===addDaysToDateKey(today,1)?`${publicText(locale,"Tomorrow")} · ${dateLabel(date,locale)}`:dateLabel(date,locale)}</option>)}
       </LocalizedElement></label>
+      <label className={styles.sort} data-discover-distance-sort={sort === "distance" ? "true" : undefined}>
+        {location.status === "loading" && sort === "distance" ? <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={17}/> : <ArrowDownWideNarrow aria-hidden="true" size={17}/>}
+        <LocalizedElement as="select" aria-label="Sortiranje događaja" disabled={locked} onChange={event=>changeSort(event.target.value as "recommended"|"distance")} value={sort}>
+          <option value="recommended"><PublicText text="Preporučeno" /></option>
+          <option value="distance"><PublicText text="Udaljeno od mene" /></option>
+        </LocalizedElement>
+      </label>
       <LocalizedElement as="button" aria-label={`${publicText(locale,"Event picks for the day")}: ${formatEventCount(locale,liked.length)}${selection.failedIds.length?`. ${publicText(locale,"Some events could not be saved.")}`:selection.saving?`. ${publicText(locale,"Saving…")}`:""}`} className={styles.count} disabled={locked} onClick={()=>setSummaryOpen(true)} type="button">{selection.failedIds.length?<Info aria-hidden="true" size={16}/>:selection.saving?<LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={16}/>:<Heart aria-hidden="true" size={16}/>}{liked.length}</LocalizedElement>
       {scopedChoices.length>0?<LocalizedElement as="button" aria-label={`Ponovo biraj: ${scopeLabel}`} className={styles.reset} disabled={locked} onClick={()=>restartDialog.current?.showModal()} title={`Ponovo biraj: ${scopeLabel}`} type="button"><RotateCcw aria-hidden="true" size={16}/></LocalizedElement>:null}
     </div>
+    {sort === "distance" && location.status === "error" ? <div className={styles.locationError} role="status"><span>{location.error}</span><button onClick={location.requestLocation} type="button"><PublicText text="Pokušaj ponovo" /></button></div> : null}
     <LocalizedElement as="div" aria-label="Kategorije događaja" className={styles.categories} ref={categories} role="group">
       {DISCOVER_SCOPES.map(category=><button aria-pressed={category===scope} className={styles.chip} data-category={category} disabled={locked} key={category} onClick={()=>switchScope(category)} type="button">{category!=="all"?<span aria-hidden="true" className={styles.dot} style={{backgroundColor:EVENT_CATEGORY_TONES[category].color}}/>:null}<PublicText text={labels[category]} /></button>)}
     </LocalizedElement>
@@ -201,7 +224,7 @@ function SwipeDiscover({authEnabled,error,events,selectedDate,today,identity}:Mo
       {!liked.length?<p className={styles.emptyCopy}><PublicText text={"Nijedan događaj nije izabran."} /></p>:null}
       {removeError?<p className={styles.emptyCopy} role="alert"><PublicText text={"Događaj nije uklonjen iz sačuvanih. Pokušaj ponovo u Saved."} /></p>:null}
     </LocalizedElement>:<LocalizedElement as="section" aria-label="Biraj događaje" className={styles.deck}>
-      <div className={styles.progress}><LocalizedElement as="div" aria-label={`Pregledani događaji: $<PublicText text={labels[scope]} />`} aria-valuemax={queue.length} aria-valuemin={0} aria-valuenow={activeCount} className={styles.progressTrack} role="progressbar"><div style={{width:queue.length?`${activeCount/queue.length*100}%`:"0%"}}/></LocalizedElement><span>{queue.length?`${Math.min(activeCount+1,queue.length)} / ${queue.length}`:"0 / 0"}</span></div>
+      <div className={styles.progress}><LocalizedElement as="div" aria-label={`Pregledani događaji: ${scopeLabel}`} aria-valuemax={queue.length} aria-valuemin={0} aria-valuenow={activeCount} className={styles.progressTrack} role="progressbar"><div style={{width:queue.length?`${activeCount/queue.length*100}%`:"0%"}}/></LocalizedElement><span>{queue.length?`${Math.min(activeCount+1,queue.length)} / ${queue.length}`:"0 / 0"}</span></div>
       <LocalizedElement as="div" aria-label="Prevuci karticu levo ili desno" className={styles.stage} data-discover-anchor="card" onPointerCancel={event=>pointerUp(event,true)} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={event=>pointerUp(event)} ref={stage} tabIndex={0}>
         {!selection.hydrated || navigating ? <LocalizedElement as="div" aria-label="Učitavanje događaja" className={styles.empty} role="status"><LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={26}/></LocalizedElement> : cards.length ? cards.map((event,index)=><SwipeCard event={event} key={event._id} layer={index} onDetails={()=>setDetail(event)}/>).reverse() : <div className={styles.empty}><CalendarDays aria-hidden="true" size={30}/><h2><PublicText text={error?"Događaji nisu učitani.":"Nema događaja u ovoj kategoriji."} /></h2><p><PublicText text={error?"Pokušaj ponovo kasnije.":"Izaberi drugu kategoriju ili datum."} /></p>{error?<button className="button-secondary" onClick={()=>router.refresh()} type="button"><PublicText text={"Pokušaj ponovo"} /></button>:null}</div>}
       </LocalizedElement>
@@ -229,6 +252,7 @@ function SwipeCard({event,layer,onDetails}:{event:MobileDiscoverEvent;layer:numb
 }
 
 function DiscoverDetails({event,onClose}:{event:MobileDiscoverEvent;onClose:()=>void}) {
+  const coordinates = getDiscoverCoordinates(event);
   const dialog=useRef<HTMLDialogElement>(null);
   const [post,setPost]=useState<PublicEventPostPreview|null>(null),[error,setError]=useState(false),[attempt,setAttempt]=useState(0);
   useEffect(()=>{dialog.current?.showModal();},[]);
@@ -237,5 +261,16 @@ function DiscoverDetails({event,onClose}:{event:MobileDiscoverEvent;onClose:()=>
     void fetch(`/api/events/${encodeURIComponent(event._id)}/post`,{cache:"no-store",signal:controller.signal}).then(async response=>{if(!response.ok)throw Error();const value=await response.json() as PublicEventPostPreview;if(value.eventId!==event._id)throw Error();if(!controller.signal.aborted)setPost(value);}).catch(()=>{if(!controller.signal.aborted)setError(true);});
     return ()=>controller.abort();
   },[attempt,event._id]);
-  return <dialog aria-labelledby="discover-detail-title" className={cn(styles.dialog,styles.detailDialog)} onClose={onClose} ref={dialog}><div className={styles.dialogHead}><h2 id="discover-detail-title">{event.title}</h2><LocalizedElement as="button" aria-label="Zatvori detalje" onClick={()=>dialog.current?.close()} type="button"><X aria-hidden="true" size={18}/></LocalizedElement></div>{error?<div className={styles.detailCopy} role="alert"><p><PublicText text={"Objava trenutno nije dostupna."} /></p><button className="button-secondary" onClick={()=>setAttempt(value=>value+1)} type="button"><PublicText text={"Pokušaj ponovo"} /></button></div>:post?<><div className={styles.detailPoster}>{post.imageUrl?<ResponsiveEventImage alt={`${event.title} — originalna objava`} className="object-contain" fill sizes="(max-width: 520px) 100vw, 520px" src={post.imageUrl} version={event.imageVersion}/>:null}</div><div className={styles.detailCopy}><p className={styles.captionLabel}><PublicText text={post.captionSource==="instagram"?"Original caption":"Event description"} /></p><p className={styles.caption} lang="und">{post.caption||<PublicText text={"Opis nije dostupan."}/>}</p></div><div className={styles.detailLinks}>{post.instagramPostUrl?<LocalizedElement as="a" href={post.instagramPostUrl} rel="noopener noreferrer" target="_blank"><Instagram aria-hidden="true" size={15}/><PublicText text={"Instagram"} /></LocalizedElement>:<span/>}<Link href={`/events/${event._id}`}><ExternalLink aria-hidden="true" size={15}/><PublicText text={"Event details"} /></Link></div></>:<div className={styles.detailCopy} role="status"><LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={22}/><span className="sr-only"><PublicText text={"Učitavanje originalne objave"} /></span></div>}</dialog>;
+  return <dialog aria-labelledby="discover-detail-title" className={cn(styles.dialog,styles.detailDialog)} onClose={onClose} ref={dialog}>
+    <div className={styles.dialogHead}><h2 id="discover-detail-title">{event.title}</h2><LocalizedElement as="button" aria-label="Zatvori detalje" onClick={()=>dialog.current?.close()} type="button"><X aria-hidden="true" size={18}/></LocalizedElement></div>
+    {error ? <div className={styles.detailCopy} role="alert"><p><PublicText text="Objava trenutno nije dostupna." /></p><button className="button-secondary" onClick={()=>setAttempt(value=>value+1)} type="button"><PublicText text="Pokušaj ponovo" /></button></div> : post ? <>
+      <div className={styles.detailPoster}>{post.imageUrl?<ResponsiveEventImage alt={`${event.title} — originalna objava`} className="object-contain" fill sizes="(max-width: 520px) 100vw, 520px" src={post.imageUrl} version={event.imageVersion}/>:null}</div>
+      <div className={styles.detailCopy}><p className={styles.captionLabel}><PublicText text={post.captionSource==="instagram"?"Original caption":"Event description"} /></p><p className={styles.caption} lang="und">{post.caption||<PublicText text="Opis nije dostupan."/>}</p></div>
+    </> : <div className={styles.detailCopy} role="status"><LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" size={22}/><span className="sr-only"><PublicText text="Učitavanje originalne objave" /></span></div>}
+    <div className={styles.detailLinks}>
+      {post?.instagramPostUrl?<LocalizedElement as="a" href={post.instagramPostUrl} rel="noopener noreferrer" target="_blank"><Instagram aria-hidden="true" size={15}/><PublicText text="Instagram" /></LocalizedElement>:null}
+      <Link href={`/events/${event._id}`}><ExternalLink aria-hidden="true" size={15}/><PublicText text="Event details" /></Link>
+      {coordinates ? <YandexTaxiButton latitude={coordinates.latitude} longitude={coordinates.longitude} venueName={event.venue} /> : null}
+    </div>
+  </dialog>;
 }

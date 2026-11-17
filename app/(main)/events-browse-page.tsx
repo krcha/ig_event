@@ -197,6 +197,8 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     venueId: event.venueId,
     venueCategory: event.venueCategory,
     venueHours: event.venueHours,
+    venueLatitude: event.venueLatitude,
+    venueLongitude: event.venueLongitude,
     artists: event.artists,
     eventType: event.eventType,
     eventTaxonomy: event.eventTaxonomy,
@@ -209,6 +211,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     attendeesCount: event.attendeesCount,
     going: event.going,
     goingCount: event.goingCount,
+    timeEvidenceKind: event.timeEvidenceKind,
   };
 }
 

@@ -1,0 +1,77 @@
+.post {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: #10141f;
+}
+
+.backdrop {
+  position: absolute;
+  z-index: -1;
+  inset: -28px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(26px);
+  opacity: .42;
+  pointer-events: none;
+}
+
+.close { position: absolute; right: 7px; top: 7px; z-index: 4; background: rgb(12 17 29 / .78); }
+.layout { position: relative; }
+.image { position: relative; min-height: 220px; }
+.poster { display: block; width: 100%; height: auto; object-fit: contain; }
+.hours {
+  position: absolute;
+  z-index: 3;
+  inset: 0 0 auto;
+  min-height: 74px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 16px 59px 32px 14px;
+  background: linear-gradient(180deg, rgb(10 15 25 / .93), rgb(10 15 25 / .65) 48%, transparent);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  color: #f5f4f0;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px #0a0f19;
+}
+.hours svg { flex: none; margin-top: 2px; }
+.body {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: -176px;
+  min-height: 176px;
+  padding: 38px 12px 7px;
+  background: linear-gradient(180deg, transparent, rgb(10 15 25 / .58) 17%, rgb(10 15 25 / .88) 56%, rgb(10 15 25 / .93));
+  color: #f5f4f0;
+  text-shadow: 0 1px 4px rgb(10 15 25 / .75);
+}
+.body p { max-width: 75ch; }
+.readMore { border-radius: 4px; background: rgb(12 17 29 / .85); padding-inline: 4px; }
+.travel { min-width: 0; font-size: 11px; }
+.actions { display: flex; align-items: center; gap: 2px; border-top: 1px solid rgb(255 255 255 / .12); padding-top: 3px; }
+.actions a { white-space: nowrap; }
+.taxi { margin-left: auto; display: flex; align-items: center; justify-content: center; min-width: 44px; }
+
+@media (min-width: 768px) {
+  .post { border-top: 1px solid rgb(209 255 74 / .15); }
+  .backdrop { display: none; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .image { height: min(38svh, 18rem); min-height: 192px; background: rgb(0 0 0 / .4); }
+  .poster { height: 100%; width: 100%; }
+  .hours { padding-right: 12px; font-size: 10px; }
+  .body { margin: 0; min-height: 0; padding: 12px 12px 7px; background: none; text-shadow: none; }
+  .travel { margin-top: auto; }
+  .actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 350px) {
+  .body { padding-inline: 8px; }
+  .actions a { padding-inline: 5px; font-size: 11px; }
+}
