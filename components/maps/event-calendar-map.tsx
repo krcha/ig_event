@@ -6,7 +6,7 @@ import { publicText } from "@/lib/i18n/public-messages";
 
 
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, MapPin, Navigation, Warehouse } from "lucide-react";
 import { EventLocationMap } from "@/components/maps/event-location-map";
 import { EventSessionLabel } from "@/components/events/event-session-label";
@@ -22,16 +22,31 @@ import type { PublicEvent } from "@/lib/events/public-events";
 import { cn } from "@/lib/utils";
 import "./event-calendar-map.css";
 
+type MapDay = { date: string; eventCount?: number };
 type EventCalendarMapProps = {
   selectedDate: string;
   todayDate: string;
-  days: readonly { date: string; eventCount: number }[];
+  days: readonly MapDay[];
+  daysPromise?: Promise<readonly MapDay[] | null>;
   events: PublicEvent[];
   initialNow: number;
   openNowActive: boolean;
 };
 
 const MAP_KEYBOARD_DATE_KEY = "eventzeka-map-keyboard-date";
+
+function DayCount({ date, daysPromise, initialCount }: { date: string; daysPromise?: EventCalendarMapProps["daysPromise"]; initialCount?: number }) {
+  const locale = useLocale();
+  const loaded = daysPromise ? use(daysPromise) : undefined;
+  const count = loaded?.find(day => day.date === date)?.eventCount ?? initialCount;
+  return typeof count === "number" ? (
+    <><span className="sm:hidden">{count}</span><span className="hidden sm:inline">{formatEventCount(locale, count)}</span></>
+  ) : <span aria-label={publicText(locale, "Event count unavailable")}>—</span>;
+}
+
+function LoadingDayCount() {
+  return <><span aria-hidden="true">…</span><span className="sr-only"><PublicText text="Loading event counts..." /></span></>;
+}
 
 function preserveDayFocus(event: KeyboardEvent<HTMLAnchorElement>, date: string) {
   if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
@@ -61,7 +76,7 @@ function MapEventRow({ event, openNowState }: { event: PublicEvent; openNowState
   );
 }
 
-export function EventCalendarMap({ initialNow, openNowActive, selectedDate, todayDate, days, events }: EventCalendarMapProps) {
+export function EventCalendarMap({ initialNow, openNowActive, selectedDate, todayDate, days, daysPromise, events }: EventCalendarMapProps) {
   const locale = useLocale();
   const formatDate = (date: string, options: Intl.DateTimeFormatOptions) => formatPublicDate(locale, date, options);
   const [now, setNow] = useState(initialNow);
@@ -163,12 +178,14 @@ export function EventCalendarMap({ initialNow, openNowActive, selectedDate, toda
         <LocalizedElement as="nav" aria-label="Event days" className="grid grid-cols-7 gap-1.5 sm:gap-2">
           {days.map((day) => {
             const selected = day.date === selectedDate;
-            const eventCount = selected && openNowActive ? visibleEvents.length : day.eventCount;
+            const eventCount = selected ? visibleEvents.length : day.eventCount;
             return (
-              <Link aria-current={selected ? "date" : undefined} aria-label={`${formatDate(day.date, { weekday: "long", day: "numeric", month: "long" })}, ${formatEventCount(locale, eventCount)}${selected && openNowActive ? ` ${publicText(locale, "Open now")}` : ""}${openNowActive ? `; ${publicText(locale, "Show all events for this day")}` : ""}`} className={cn("flex min-w-0 flex-col items-center rounded-xl border px-1 py-3 text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary", selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white/[0.02] hover:border-primary/40 hover:bg-white/[0.05]")} href={buildEventMapHref(day.date)} key={day.date} onKeyDown={(event) => preserveDayFocus(event, day.date)} prefetch={false} ref={selected ? selectedDayRef : undefined} scroll={false}>
+              <Link aria-current={selected ? "date" : undefined} aria-describedby={`event-map-count-${day.date}`} aria-label={`${formatDate(day.date, { weekday: "long", day: "numeric", month: "long" })}${selected && openNowActive ? ` ${publicText(locale, "Open now")}` : ""}${openNowActive ? `; ${publicText(locale, "Show all events for this day")}` : ""}`} className={cn("flex min-w-0 flex-col items-center rounded-xl border px-1 py-3 text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary", selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white/[0.02] hover:border-primary/40 hover:bg-white/[0.05]")} href={buildEventMapHref(day.date)} key={day.date} onKeyDown={(event) => preserveDayFocus(event, day.date)} prefetch={false} ref={selected ? selectedDayRef : undefined} scroll={false}>
                 <span className={cn("text-[10px] font-semibold uppercase tracking-wider sm:text-xs", !selected && "text-muted-foreground")}>{formatDate(day.date, { weekday: "short" })}</span>
                 <span className="mt-1 text-xl font-semibold leading-7 sm:text-2xl">{formatDate(day.date, { day: "numeric" })}</span>
-                <span className={cn("mt-1 text-[10px] sm:text-xs", !selected && "text-muted-foreground")}><span className="sm:hidden">{eventCount}</span><span className="hidden sm:inline">{formatEventCount(locale, eventCount)}</span></span>
+                <span id={`event-map-count-${day.date}`} className={cn("mt-1 text-[10px] sm:text-xs", !selected && "text-muted-foreground")}>
+                  <Suspense fallback={<LoadingDayCount />}><DayCount date={day.date} initialCount={eventCount} daysPromise={selected ? undefined : daysPromise} /></Suspense>
+                </span>
               </Link>
             );
           })}

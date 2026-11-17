@@ -2,6 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { createPublicEventImageHandler } from "@/lib/images/public-event-image-delivery";
 import type { PublicEventImageSource } from "@/lib/images/public-event-raster";
+import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 
 export const runtime = "nodejs";
 
@@ -15,7 +16,7 @@ const getPublicEventImageSourceQuery =
   "mediaAssets:getPublicEventImageSource" as unknown as FunctionReference<"query">;
 
 function getConvexClient(): ConvexHttpClient | null {
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const convexUrl = getCalendarConvexUrl();
   return convexUrl ? new ConvexHttpClient(convexUrl) : null;
 }
 

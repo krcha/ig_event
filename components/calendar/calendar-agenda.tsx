@@ -96,7 +96,7 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     data-calendar-mobile-event-row="true" data-event-title={event.title} data-event-venue={event.venue}
     data-event-time={event.displayTimeLabel ?? event.time} data-calendar-open-now-state={openNowActive ? event.openNowState : undefined}>
     {/* eslint-disable-next-line @next/next/no-img-element -- A bounded first-party derivative supplies only a lazy decorative tint. */}
-    <img alt="" aria-hidden="true" className={styles.eventBackdrop} decoding="async" loading="lazy" width={192} height={192}
+    <img alt="" aria-hidden="true" className={styles.eventBackdrop} decoding="async" fetchPriority="low" loading="lazy" width={192} height={192}
       onError={event => { event.currentTarget.hidden = true; }} src={`/api/discover/images/${encodeURIComponent(event._id)}?w=192`} />
     <CalendarEventPreviewRow eventId={event._id} title={event.title} headerClassName={styles.eventHeader}
       venueHoursLabel={event.venueHoursLabel} venueName={event.venue} venueLatitude={event.venueLatitude} venueLongitude={event.venueLongitude}>

@@ -7,6 +7,9 @@ type Translation = Record<Locale, string>;
 const extra = {
   ...additional,
   ...supplement,
+  "Loading events...": { sr: "Učitavamo događaje…", en: "Loading events…", ru: "Загружаем события…" },
+  "Loading event counts...": { sr: "Učitavamo broj događaja…", en: "Loading event counts…", ru: "Загружаем число событий…" },
+  "Event count unavailable": { sr: "Broj događaja nije dostupan", en: "Event count unavailable", ru: "Число событий недоступно" },
   "Udaljeno od mene": { sr: "Udaljeno od mene", en: "Distance from me", ru: "Расстояние от меня" },
   "Uključi lokaciju za najbliže događaje. Do tada su poređani po vremenu.": { sr: "Uključi lokaciju za najbliže događaje. Do tada su poređani po vremenu.", en: "Enable location to see the nearest events. Until then, events are sorted by time.", ru: "Разрешите геолокацию, чтобы увидеть ближайшие события. Пока они отсортированы по времени." },
   "Lokacija nije dostupna. Dozvoli lokaciju i pokušaj ponovo.": { sr: "Lokacija nije dostupna. Dozvoli lokaciju i pokušaj ponovo.", en: "Location is unavailable. Allow location access and try again.", ru: "Геолокация недоступна. Разрешите доступ и попробуйте снова." },

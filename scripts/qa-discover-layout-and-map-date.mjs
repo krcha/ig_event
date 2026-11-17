@@ -87,6 +87,7 @@ for (const reduced of [false, true]) {
     }
   };
   const height = () => values.get("--discover-stage-height");
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- Exercise the compiled hook with the mocked effect runtime above.
   useDiscoverViewportFit({current:surface},true);settle();
   assert.equal(height(),"614px","An absent streamed nav uses a safe height estimate, not a zero top edge.");
   navigation={getBoundingClientRect:()=>({height:navigationHeight})};navigationHeight=93;stageTop=180;
@@ -111,7 +112,8 @@ for (const [instant, expected] of [
   ["2026-10-25T01:15:00Z", "2026-10-25"],
 ]) {
   for (const locale of LOCALES) {
-  let readWindow, readOverviewWindow;
+  let readWindow, readOverviewWindow, releaseOverview;
+  const heldOverview = new Promise(resolve => { releaseOverview = resolve; });
   const events=[{_id:"today",date:expected,title:"Today",venue:"Venue",eventType:"live"},{_id:"yesterday",date:dates.addDaysToDateKey(expected,-1)}];
   class FixedDate extends Date { static now() { return Date.parse(instant); } }
   const pageModule=compile("app/(main)/map/page.tsx", {
@@ -120,14 +122,18 @@ for (const [instant, expected] of [
     "@/components/maps/event-map-loading": { EventMapLoading: "loading" },
     "@/lib/events/event-map": maps, "@/lib/events/nightlife-date": dates,
     "@/lib/events/public-events": { loadPublicCalendarEventsWindow: async value => { readWindow=value; return { events }; } },
-    "@/lib/events/public-calendar-overview": { loadPublicCalendarOverviewWindow: async value => { readOverviewWindow=value; return {groups:[]}; } },
+    "@/lib/events/public-calendar-overview": { loadPublicCalendarOverviewWindow: async value => { readOverviewWindow=value; return heldOverview; } },
     "@/lib/seo/site": { SITE_ORIGIN: "https://eventzeka.com" },
     "@/data/venue-coordinates-2026-10-15.json": { default: { venues: [] } },
     "@/i18n/server": { getLocale: async () => locale },
     "@/lib/i18n/seo": localizedSeo,
   }, { Date: FixedDate });
   const tree=await pageModule.default({searchParams:Promise.resolve({})});
-  const result=await tree.props.children.type(tree.props.children.props);
+  let slowCountsTimer;
+  const result = await Promise.race([
+    tree.props.children.type(tree.props.children.props),
+    new Promise((_, reject) => { slowCountsTimer = setTimeout(() => reject(Error("Selected-day pins waited for the unresolved weekly overview.")), 250); }),
+  ]).finally(() => clearTimeout(slowCountsTimer));
   assert.equal(result.props.selectedDate,expected,"Map defaults to the civil date in Belgrade, including before the nightlife rollover.");
   assert.equal(result.props.todayDate,expected);
   assert.equal(readWindow.fromDate,expected);
@@ -137,6 +143,11 @@ for (const [instant, expected] of [
   const expectedWeekStart=dates.addDaysToDateKey(expected,-((weekday+6)%7));
   assert.equal(readOverviewWindow.fromDate,expectedWeekStart,"Locale must not broaden the map count-read scope.");
   assert.equal(readOverviewWindow.beforeDate,dates.addDaysToDateKey(expectedWeekStart,7));
+  assert.equal(result.props.days.find(day => day.date === expected).eventCount, 1, "The selected chip uses the actual detail snapshot immediately.");
+  assert.ok(result.props.days.filter(day => day.date !== expected).every(day => day.eventCount === undefined), "Pending weekly counts must never pretend to be zero.");
+  releaseOverview({ groups: [{ date: expectedWeekStart, count: 3 }] });
+  const resolvedDays = await result.props.daysPromise;
+  assert.equal(resolvedDays.find(day => day.date === expectedWeekStart).eventCount, 3, "Actual weekly counts stream independently after pins are available.");
   const metadata=await pageModule.generateMetadata({searchParams:Promise.resolve({})});
   assert.equal(metadata.title,localizedSeo.SITE_COPY[locale].mapTitle);
   assert.equal(metadata.alternates.canonical,localizedSeo.localizedAbsoluteUrl("/map",locale));

@@ -20,7 +20,7 @@ const validRaster = (bytes: Buffer, format: ResponsiveImageFormat) => bytes.leng
 // Live public/source validation belongs before this cache. v/query strings do
 // not form cache keys: only the authoritative source identity and fixed variant.
 export function createResponsiveImageCache(options: CacheOptions = {}) {
-  const maxEntries = options.maxEntries ?? 256;
+  const maxEntries = options.maxEntries ?? 512;
   const maxBytes = options.maxBytes ?? 64 * 1024 * 1024;
   const now = options.now ?? Date.now;
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < DEFAULT_MAX_IMAGE_BYTES) throw new Error("Invalid responsive image cache bounds.");

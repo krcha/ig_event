@@ -1,0 +1,25 @@
+.dialog { width:calc(100% - 24px); max-width:980px; max-height:calc(100dvh - 24px); margin:auto; padding:0; overflow:hidden; border:1px solid var(--border); border-radius:16px; background:var(--background); color:var(--foreground); }
+.dialog[open] { display:flex; flex-direction:column; }
+.dialog::backdrop { background:rgb(5 8 14 / .85); }
+.header { display:flex; flex:none; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border-bottom:1px solid var(--border); }
+.header>div { min-width:0; }
+.header h2 { font-size:18px; font-weight:600; line-height:1.25; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.header p { margin-top:3px; color:var(--muted-foreground); font-size:13px; line-height:19px; }
+.close { display:grid; place-items:center; flex:none; width:44px; height:44px; border-radius:12px; color:var(--muted-foreground); }
+.close:hover { color:var(--foreground); background:var(--card); }
+.content { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-color:var(--input) var(--background); }
+.media { position:relative; flex:none; height:min(62dvh,620px); min-height:180px; background:#080c14; }
+.poster { object-fit:contain; object-position:center; }
+.imageStatus { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:20px; text-align:center; color:var(--muted-foreground); font-size:13px; }
+.description { min-width:0; padding:18px 16px 10px; }
+.caption { max-width:75ch; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.65; color:var(--foreground); }
+.actions { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:16px; padding-top:8px; border-top:1px solid var(--border); }
+.actions a { display:inline-flex; min-height:44px; align-items:center; gap:7px; font-size:13px; font-weight:600; }
+.dialog :is(a,button):focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
+@media(min-width:768px) {
+  .content { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr); min-height:0; height:min(78dvh,780px); overflow:hidden; }
+  .media { height:100%; min-height:0; }
+  .description { display:flex; flex-direction:column; overflow-y:auto; min-height:0; padding:20px 20px 12px; }
+  .actions { margin-top:auto; padding-top:16px; }
+  .caption { padding-bottom:20px; }
+}

@@ -269,6 +269,8 @@
 
   .mobile-nav-shell [data-compass-tab="true"] {
     position: relative;
+    flex: 1.25;
+    min-width: 76px;
     background: transparent;
     color: var(--foreground);
     box-shadow: none;
@@ -278,17 +280,18 @@
     place-items: center;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
-    margin-top: -23px;
+    width: 48px;
+    height: 48px;
+    margin-top: -30px;
     margin-bottom: 1px;
     border-radius: 50%;
     background: var(--primary);
     color: var(--primary-foreground);
-    box-shadow: 0 0 0 5px var(--background);
+    box-shadow: 0 0 0 5px var(--background), 0 5px 12px -7px rgb(213 245 107 / .45);
     transition: transform 180ms ease-out;
   }
-  .mobile-nav-shell [data-compass-tab="true"] > span:first-child svg { width: 22px; height: 22px; }
+  .mobile-nav-shell [data-compass-tab="true"] > span:first-child svg { width: 24px; height: 24px; }
+  .mobile-nav-shell [data-compass-tab="true"] .mobile-compass-label { max-width:100%; overflow:visible; white-space:nowrap; font-size:10px; line-height:16px; }
   .mobile-nav-shell [data-compass-tab="true"]:active > span:first-child { transform: scale(.94); }
 }
 

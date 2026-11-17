@@ -8,6 +8,7 @@ import sharp from "sharp";
 import ts from "typescript";
 import { createPublicEventImageHandler } from "../lib/images/public-event-image-delivery.ts";
 import { fetchPublicEventRaster } from "../lib/images/public-event-raster.ts";
+import { createPublicEventRasterCache } from "../lib/images/public-event-raster-cache.ts";
 import { createResponsiveImageCache } from "../lib/images/responsive-image-cache.ts";
 import { MAX_RESPONSIVE_IMAGE_PIXELS, OriginalRasterRequired, renderResponsiveImage } from "../lib/images/responsive-image-render.ts";
 import { getResponsiveEventImageSrcSet, getResponsiveEventImageUrl, parseResponsiveImageRequest, RESPONSIVE_IMAGE_WIDTHS } from "../lib/images/responsive-image-url.ts";
@@ -115,6 +116,74 @@ try {
   const beforeInvalid = sourceReads;
   assert.equal((await handler(request("?w=1"), "event-1")).status, 400);
   assert.equal(sourceReads, beforeInvalid, "Invalid variant requests are rejected before backend/source work.");
+
+  let sharedSourceReads = 0, originalDownloads = 0;
+  let sharedSource = { eventExists: true, kind: "stored", storageId: "shared-original", url: "https://storage.test/shared-original" };
+  const sharedHandler = createPublicEventImageHandler({
+    loadSource: async () => { sharedSourceReads++; return sharedSource; }, placeholderResponse,
+    fetchRaster: async () => { originalDownloads++; await new Promise(resolve => setTimeout(resolve, 10)); return raster; },
+    cacheVariant: createResponsiveImageCache({ directory: path.join(directory, "cross-width") }),
+  });
+  const differentSlots = await Promise.all(["?w=192", "?w=768", "?w=1080&format=jpeg", ""].map(query => sharedHandler(request(query), "event-shared")));
+  assert.equal(sharedSourceReads, 4, "Blur, poster and modal each retain a fresh public/source check.");
+  assert.equal(originalDownloads, 1, "Different widths, formats and the full poster share one original download.");
+  assert.equal(hash(Buffer.from(await differentSlots[3].arrayBuffer())), originalHash);
+  await sharedHandler(request("?w=384"), "event-shared");
+  assert.equal(originalDownloads, 1, "Opening a new display size shortly after the blur reuses its source bytes.");
+  sharedSource = { eventExists: true, kind: "none" };
+  assert.equal((await sharedHandler(request(), "event-shared")).headers.get("x-event-image-source"), "placeholder",
+    "A warm original cache cannot reveal a newly hidden event, including the full-size URL.");
+  sharedSource = { eventExists: true, kind: "stored", storageId: "shared-original-v2", url: "https://storage.test/shared-original-v2" };
+  await sharedHandler(request(), "event-shared");
+  assert.equal(originalDownloads, 2, "Replacing the authoritative stored source requires new original bytes.");
+
+  let clock = 0, memoryDownloads = 0;
+  const smallRaster = { bytes: tiny, contentType: "image/png" };
+  const sourceFor = name => ({ eventExists: true, kind: "stored", storageId: name, url: `https://storage.test/${name}` });
+  const loadSmall = async () => { memoryDownloads++; return smallRaster; };
+  const memory = createPublicEventRasterCache({ now: () => clock, maxEntries: 2, maxBytes: tiny.length * 2 });
+  await memory(sourceFor("a"), loadSmall); await memory(sourceFor("b"), loadSmall);
+  await memory(sourceFor("a"), loadSmall); await memory(sourceFor("c"), loadSmall);
+  assert.equal(memoryDownloads, 3);
+  await memory(sourceFor("b"), loadSmall);
+  assert.equal(memoryDownloads, 4, "Least recently used originals are evicted at the entry and byte bounds.");
+  clock = 30_000; await memory(sourceFor("b"), loadSmall);
+  clock = 60_001;
+  await memory(sourceFor("b"), loadSmall);
+  assert.equal(memoryDownloads, 5, "Stored original bytes expire without extending age on a hit.");
+  const upstreamMemory = createPublicEventRasterCache({ now: () => clock });
+  const upstreamSource = { eventExists: true, kind: "upstream", url: "https://cdn.test/original.jpg" };
+  await upstreamMemory(upstreamSource, loadSmall); clock += 15_001; await upstreamMemory(upstreamSource, loadSmall);
+  assert.equal(memoryDownloads, 7, "Mutable upstream originals have a shorter retention window.");
+  let byteDownloads = 0;
+  const byteBounded = createPublicEventRasterCache({ maxEntries: 4, maxBytes: tiny.length * 2 });
+  const byteLoader = async () => { byteDownloads++; return smallRaster; };
+  for (const name of ["byte-a", "byte-b", "byte-c", "byte-a"]) await byteBounded(sourceFor(name), byteLoader);
+  assert.equal(byteDownloads, 4, "The byte limit evicts originals even below the entry limit.");
+  let oversizedDownloads = 0;
+  const noRoom = createPublicEventRasterCache({ maxBytes: tiny.length - 1 });
+  for (let repeat = 0; repeat < 2; repeat++) await noRoom(sourceFor("no-room"), async () => { oversizedDownloads++; return smallRaster; });
+  assert.equal(oversizedDownloads, 2, "An original larger than the retention budget is delivered without retaining it.");
+  let identityDownloads = 0;
+  const identity = createPublicEventRasterCache();
+  const identityLoader = async () => { identityDownloads++; return smallRaster; };
+  await identity(sourceFor("identity-a"), identityLoader);
+  await identity({ ...sourceFor("identity-a"), storageId: "replacement" }, identityLoader);
+  assert.equal(identityDownloads, 2, "Even an unchanged URL cannot mask a changed authoritative storage identity.");
+  let attempts = 0;
+  const retryable = createPublicEventRasterCache();
+  const retryLoader = async () => { if (++attempts === 1) throw new Error("temporary source failure"); return smallRaster; };
+  await assert.rejects(retryable(sourceFor("retry"), retryLoader), /temporary source failure/);
+  await retryable(sourceFor("retry"), retryLoader);
+  assert.equal(attempts, 2, "A failed download does not poison later image retries.");
+  const limited = createPublicEventRasterCache({ maxInFlight: 1 });
+  let releaseDownload;
+  const held = limited(sourceFor("held"), () => new Promise(resolve => { releaseDownload = resolve; }));
+  await Promise.resolve();
+  await assert.rejects(limited(sourceFor("other"), loadSmall), /busy/);
+  releaseDownload(smallRaster); await held;
+  await limited(sourceFor("other"), loadSmall);
+  for (const options of [{ maxEntries: 0 }, { maxBytes: NaN }, { maxInFlight: 1.1 }]) assert.throws(() => createPublicEventRasterCache(options), /bounds/);
 
   const animatedHandler = createPublicEventImageHandler({ loadSource: async () => source, placeholderResponse, fetchRaster: async () => ({ bytes: animatedWebp, contentType: "image/webp" }), cacheVariant: createResponsiveImageCache({ directory: path.join(directory, "animated") }) });
   const passthrough = await animatedHandler(request("?w=384"), "event-1");

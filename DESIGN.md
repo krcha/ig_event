@@ -185,7 +185,7 @@ Rows preserve their time block, title, linked venue, category dot, session and e
 
 ### Original post and Save
 
-Keep the existing inline Instagram accordion, original image/caption fetching, loading and failure states, caption expansion, source link, event-detail link, explicit close, Escape behavior, focus return, and scroll anchoring. Image and caption are side by side on desktop and stacked on mobile. Save remains a separate action; keep the existing guest-local persistence and sign-in synchronization behavior.
+Keep the existing inline Instagram accordion, original image/caption fetching, loading and failure states, caption expansion, source link, event-detail link, Escape behavior, focus return, and scroll anchoring. The row and chevron close the inline view without an overlaid X. Tapping the poster opens its uncropped image and complete caption in a focus-protected dialog with an explicit close control. Image and caption are side by side on desktop and stacked on mobile. Save remains a separate action; keep the existing guest-local persistence and sign-in synchronization behavior.
 
 ### Discover and Map
 
@@ -193,11 +193,13 @@ Apply the shared palette and font while preserving Discover's poster actions, sw
 
 ### Mobile outing refinements
 
-Expanded Events retain a complete uncropped poster at full available width. Factual venue hours sit on the upper dark fade; caption, compact approximate travel times and source/details actions continue over the lower poster fade. Collapsed cards retain their time/type hierarchy with a lazy low-resolution blurred poster tint. Desktop original-post columns remain intact.
+Expanded Events retain a complete uncropped poster ten pixels narrower than its available slot, with proportional height. Factual venue hours sit on the upper dark fade; caption, compact approximate travel times and source/details actions continue over the lower poster fade. Collapsed cards retain their time/type hierarchy with a lazy low-resolution blurred poster tint that follows the poster hue. Decorative images have lower fetch priority than the opened poster. Desktop original-post columns remain intact.
 
-Mobile Discover contains the full original poster while retaining its header and Like/Skip controls within the viewport. Metadata and actions overlay the lower fade. The central Gde dalje compass rises subtly above the bottom bar in a 42px lime circle. Yandex uses its 32px square Go asset inside a transparent 44px target, without a text wordmark. Motion respects reduced-motion and pauses in background tabs.
+Mobile Discover contains the full original poster while retaining its header and Like/Skip controls within the viewport. Metadata and actions overlay the lower fade. The central Gde dalje compass rises above the bottom bar in a 48px lime circle with space for its full Serbian, English or Russian label. Yandex uses its 32px square Go asset inside a transparent 44px target, without a text wordmark. Motion respects reduced-motion and pauses in background tabs.
 
 Gde dalje uses one compact viewport on phones: venue facts, programme/genre provenance, a flexible compass or map, approximate travel times and the primary controls remain visible together. Opening a route replaces the compass area; it does not append a map below the page. Recent venue context and performer estimates are labeled explicitly. Loading, missing research and network failures have separate compact states, and primary navigation remains usable during lookup.
+
+The compass is on by default with no separate enable action below its needle. Detailed event information sits at the left and change-place at the right of one row. A route click immediately starts the basemap and endpoints while the real street line loads independently. The main map streams actual streets before events and keeps weekly count loading inside the individual counters; unknown counts never appear as zero.
 
 ## Do's and Don'ts
 

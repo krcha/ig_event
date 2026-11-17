@@ -14,6 +14,7 @@ import { getEventSessionLabel } from "@/lib/events/event-session";
 import { resolveEventTimePresentation } from "@/lib/events/event-time-presentation";
 import { OPEN_NOW_POSSIBLE_LABEL } from "@/components/events/open-now-status";
 import { cn } from "@/lib/utils";
+import { loadLeaflet } from "@/lib/maps/leaflet-loader";
 import "leaflet/dist/leaflet.css";
 import "./event-map.css";
 
@@ -27,9 +28,10 @@ type EventLocationMapProps = {
   selectedLocationId: string | null;
   onSelectLocation: (id: string) => void;
   possibleEventIds?: readonly string[];
+  loadingEvents?: boolean;
 };
 
-export function EventLocationMap({ className, controls, locations, selectedLocationId, onSelectLocation, possibleEventIds = [] }: EventLocationMapProps) {
+export function EventLocationMap({ className, controls, locations, selectedLocationId, onSelectLocation, possibleEventIds = [], loadingEvents = false }: EventLocationMapProps) {
   const locale = useLocale();
   // Server refreshes create new prop objects. Keep Leaflet alive when their
   // content is unchanged so open popups, the viewport, and location tracking
@@ -64,7 +66,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
     setLocationMessage("");
 
     async function initializeMap() {
-      const L = await import("leaflet");
+      const L = await loadLeaflet();
       if (cancelled || !containerRef.current) return;
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const desktopViewport = window.matchMedia("(min-width: 1024px)");
@@ -73,6 +75,10 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
         zoom: BELGRADE_ZOOM,
         scrollWheelZoom: false,
         zoomControl: false,
+        dragging: !loadingEvents,
+        touchZoom: !loadingEvents,
+        doubleClickZoom: !loadingEvents,
+        keyboard: !loadingEvents,
         zoomAnimation: !reducedMotion,
         fadeAnimation: !reducedMotion,
         markerZoomAnimation: !reducedMotion,
@@ -149,7 +155,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
               : "Your location is unavailable. Check location services and try again.");
         }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 });
       };
-      L.control.zoom({ position: "bottomright", zoomInTitle: publicText(locale, "Zoom in"), zoomOutTitle: publicText(locale, "Zoom out") }).addTo(map);
+      if (!loadingEvents) L.control.zoom({ position: "bottomright", zoomInTitle: publicText(locale, "Zoom in"), zoomOutTitle: publicText(locale, "Zoom out") }).addTo(map);
       let loadedTiles = 0;
       const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -385,7 +391,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [mapLocations, mapInstanceId, onSelectLocation, possibleIds, locale]);
+  }, [mapLocations, mapInstanceId, onSelectLocation, possibleIds, locale, loadingEvents]);
 
   useEffect(() => {
     if (status !== "ready") return;
@@ -420,7 +426,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       <div className="pointer-events-none absolute inset-x-2 top-3 z-[600] flex flex-col items-start gap-2 sm:inset-x-3 md:top-20 lg:top-3">
         <div className="pointer-events-auto flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-start sm:gap-2">
           {controls}
-          {status === "ready" ? (
+          {status === "ready" && !loadingEvents ? (
             <>
               <LocalizedElement as="button" aria-label={locationStatus === "locating" ? "Finding your location" : "Show my location"} aria-busy={locationStatus === "locating"} className="button-secondary h-8 min-h-8 shrink-0 gap-1.5 whitespace-nowrap bg-card/95 px-2 py-0 text-[11px] leading-none shadow-lg disabled:cursor-wait sm:px-2.5" disabled={locationStatus === "locating"} onClick={() => locateUserRef.current?.()} type="button">
                 {locationStatus === "locating" ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <LocateFixed aria-hidden="true" className={cn("size-3.5", locationStatus === "ready" && "text-blue-400")} />}
@@ -431,7 +437,7 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
             </>
           ) : null}
         </div>
-        {status === "ready" ? (
+        {status === "ready" && !loadingEvents ? (
           <span className="hidden rounded-full border border-border bg-card/95 px-3 py-2 text-xs font-semibold text-foreground shadow-lg lg:inline">
             {mapLocations.length} <PublicText text={mapLocations.length === 1 ? "venue" : "venues"} /><PublicText text={" on the map"} /></span>
         ) : null}
@@ -442,7 +448,10 @@ export function EventLocationMap({ className, controls, locations, selectedLocat
       {tilesUnavailable && status === "ready" ? (
         <p role="status" className="pointer-events-none absolute bottom-14 left-3 right-14 z-[500] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground"><PublicText text={"The street map could not load. Venue pins and event details are still available."} /></p>
       ) : null}
-      {mapLocations.length === 0 && status === "ready" && !tilesUnavailable ? (
+      {loadingEvents && status === "ready" ? (
+        <p role="status" className="pointer-events-none absolute bottom-14 left-3 z-[500] flex max-w-[85%] items-center gap-2 rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-foreground"><LoaderCircle aria-hidden="true" className="size-3.5 flex-none motion-safe:animate-spin" /><PublicText text="Loading events..." /></p>
+      ) : null}
+      {mapLocations.length === 0 && status === "ready" && !tilesUnavailable && !loadingEvents ? (
         <p className="pointer-events-none absolute bottom-14 left-3 z-[500] max-w-[75%] rounded-xl border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground"><PublicText text={"No mapped locations for this day."} /></p>
       ) : null}
     </div>
