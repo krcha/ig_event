@@ -10,6 +10,7 @@ import { localizeHref } from "@/i18n/config";
 import { MUSIC_GENRES } from "@/lib/taxonomy/event-discovery";
 import { compassCandidates, getCompassGenres, getCompassMusicBasis, type CompassMusicProfile, type CompassPlace } from "@/lib/travel/compass";
 import { travelText } from "@/lib/travel/copy";
+import { formatTravelDuration } from "@/lib/travel/duration";
 import { bearingDegrees, estimateTravel, haversineMeters, type Coordinates } from "@/lib/travel/location";
 import { useUserLocation } from "./user-location";
 import { YandexTaxiButton } from "./yandex-taxi-button";
@@ -132,6 +133,8 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
     }
   }, [position, route]);
   const estimate = position && destination ? estimateTravel(position, destination) : null;
+  const walkMinutes = estimate ? route?.mode === "foot" ? Math.max(1, Math.ceil(route.distance / 75)) : estimate.walkMinutes : 0;
+  const driveMinutes = estimate ? route?.mode === "car" ? Math.max(1, Math.ceil(route.distance / (20_000 / 60))) : estimate.driveMinutes : 0;
   const carPreferred = (estimate?.walkMinutes ?? 0) > 10;
   const mode = carPreferred ? "car" : "foot";
   const bearing = position && destination ? bearingDegrees(position, destination) : 0;
@@ -241,7 +244,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
       <p className={styles.muted}>{t("nearest")}</p>
       {confirmation ? <>
         <div className={styles.place} key={confirmation.id}><MapPin size={24} className="text-primary" aria-hidden="true" /><h3 className={styles.name}>{confirmation.name}</h3><p className={styles.address}>{confirmation.address}</p>
-          <p className={styles.muted}>≈ {estimateTravel(position, confirmation).walkMinutes} min {t("walk")}</p></div>
+          <p className={styles.muted}>≈ {formatTravelDuration(estimateTravel(position, confirmation).walkMinutes, locale)} {t("walk")}</p></div>
         <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => setRejectedIds((ids) => [...ids, confirmation.id])}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); warmRouteMap(); setSource(confirmation); setPhase("vibe"); }}><Check size={18} />{t("yes")}</button></div>
       </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); router.refresh(); }}>{t("refresh")}</button></>}
     </section> : phase === "vibe" ? <section className={`${styles.step} ${styles.vibe}`} key="vibe">
@@ -288,7 +291,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
           </>}
         </div>
         <div className={styles.travelInfo}>
-          <div className={styles.eta}><span className={!carPreferred ? styles.preferred : ""}><Footprints size={16} aria-hidden="true" />≈ {route?.mode === "foot" ? Math.max(1, Math.ceil(route.distance / 75)) : estimate.walkMinutes} min {t("walk")}</span><span className={carPreferred ? styles.preferred : ""}><CarFront size={16} aria-hidden="true" />≈ {route?.mode === "car" ? Math.max(1, Math.ceil(route.distance / (20_000 / 60))) : estimate.driveMinutes} min {t("drive")}</span></div>
+          <div className={styles.eta} data-long-duration={walkMinutes > 60 || driveMinutes > 60 ? "true" : undefined}><span className={!carPreferred ? styles.preferred : ""}><Footprints size={16} aria-hidden="true" />≈ {formatTravelDuration(walkMinutes, locale)} {t("walk")}</span><span className={carPreferred ? styles.preferred : ""}><CarFront size={16} aria-hidden="true" />≈ {formatTravelDuration(driveMinutes, locale)} {t("drive")}</span></div>
           <p className={styles.estimate}>{t("estimate")}</p>
         </div>
         <div className={`${styles.actions} ${styles.routeActions}`}><button className={styles.primary} type="button" disabled={routeStatus === "loading"} onClick={showRoute} onFocus={warmRouteMap} onPointerEnter={warmRouteMap} onPointerDown={warmRouteMap} ref={routeButton} aria-controls="where-next-direction" aria-expanded={routeVisible}><Route size={17} aria-hidden="true" />{t(routeStatus === "loading" ? "routeLoading" : "route")}</button><YandexTaxiButton latitude={destination.latitude} longitude={destination.longitude} venueName={destination.name} /></div>

@@ -1,6 +1,14 @@
 import type { Locale } from "@/i18n/config";
 
 const messages = {
+  durationShortMinute: ["min", "min", "мин"],
+  durationAnd: ["i", "and", "и"],
+  durationHourOne: ["sat", "hour", "час"],
+  durationHourFew: ["sata", "hours", "часа"],
+  durationHourMany: ["sati", "hours", "часов"],
+  durationMinuteOne: ["minut", "minute", "минута"],
+  durationMinuteFew: ["minuta", "minutes", "минуты"],
+  durationMinuteMany: ["minuta", "minutes", "минут"],
   next: ["Gde dalje?", "Where next?", "Куда дальше?"],
   locate: ["Koristi moju lokaciju", "Use my location", "Моё местоположение"],
   locating: ["Tražimo tvoju lokaciju…", "Finding your location…", "Определяем местоположение…"],

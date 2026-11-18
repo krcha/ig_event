@@ -54,14 +54,16 @@ function PerformerGenreProvenance({ genres, research }: {
         sources.set(source.href, performer.trim() || source.hostname);
       }
     } catch {
-      // Keep the provenance label even when a source link is unavailable.
+      // Keep the genre values even when a source link is unavailable.
     }
   }
 
+  if (research.estimated && !genres.length && !sources.size) return null;
+
   return <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs leading-5 text-muted-foreground" data-calendar-genre-provenance={research.estimated ? "estimate" : "performer"}>
-    <span><PublicText text={research.estimated ? "Procena žanra prema izvođaču" : "Žanr prema izvoru"} />{genres.length ? " · " : null}
+    {genres.length || !research.estimated ? <span>{!research.estimated ? <><PublicText text="Žanr prema izvoru" />{genres.length ? " · " : null}</> : null}
       {genres.map((genre, index) => <Fragment key={genre}>{index ? ", " : null}<PublicText text={genreLabels.get(genre)} /></Fragment>)}
-    </span>
+    </span> : null}
     {[...sources].map(([href, performer]) => <a key={href} href={href} target="_blank" rel="noopener noreferrer"
       className="min-w-0 break-words text-detail underline underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-detail">
       <PublicText text="Izvor za žanr" />{" · "}{performer}
