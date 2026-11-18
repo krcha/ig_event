@@ -30,6 +30,7 @@ export type SourceDocument = {
     isPinned?: boolean;
     imageSlides?: Array<{ index: number; imageUrls: string[]; mediaType?: "image" | "video" | "unknown" }>;
     imageSlideCount?: number;
+    metadataProvider?: "instaloader";
   }>;
   sourceIdentity: string;
   sourceRevision: number;
@@ -52,6 +53,7 @@ export type InstagramSourceDocumentRecord = {
   postedAt?: string;
   postType?: string;
   isPinned?: boolean;
+  metadataProvider?: "instaloader";
   sourceKey?: string;
   sourceRevision?: number;
 };
@@ -132,6 +134,7 @@ export function adaptInstagramScrapedPostToSourceDocument(
       ...(record.isPinned === undefined ? {} : { isPinned: record.isPinned }),
       ...(record.imageSlides === undefined ? {} : { imageSlides: record.imageSlides }),
       ...(record.imageSlideCount === undefined ? {} : { imageSlideCount: record.imageSlideCount }),
+      ...(record.metadataProvider === "instaloader" ? { metadataProvider: "instaloader" as const } : {}),
     },
     sourceIdentity: buildSourceDocumentIdentity(
       "instagram",

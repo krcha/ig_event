@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from collector import (BoundedHTTPServer, Collector, CollectorError, Journal, RateHistory, SHORTCODE_ALPHABET,
                        collect_posts, create_loader, make_handler, normalize_post,
-                       session_availability, shortcode_media_id, validate_request)
+                       session_availability, shortcode_media_id, upstream_failure_result, validate_request)
 
 
 def shortcode(value):
@@ -109,6 +109,27 @@ class QueuedCollector(Collector):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_upstream_failure_diagnostics_are_sanitized_and_never_empty_success(self):
+        from instaloader.exceptions import (AbortDownloadException, BadResponseException,
+                                           LoginRequiredException, QueryReturnedNotFoundException)
+        secret = "private-session-cookie-and-checkpoint-url"
+        for error, expected in (
+            (BadResponseException(secret), "metadata_unavailable"),
+            (QueryReturnedNotFoundException(secret), "upstream_not_found"),
+            (LoginRequiredException(secret), "authentication_required"),
+            (AbortDownloadException(secret), "upstream_aborted"),
+            (KeyError(secret), "unexpected_metadata_shape"),
+            (RuntimeError(secret), "unclassified_failure"),
+        ):
+            with self.subTest(expected=expected):
+                status, value = upstream_failure_result(error, "fixture-diagnostic")
+                self.assertEqual(status, 503)
+                self.assertEqual(value["error"]["code"], "instagram_unavailable")
+                self.assertEqual(value["error"]["diagnosticCause"], expected)
+                self.assertFalse(value["error"]["retryable"])
+                self.assertNotIn("items", value)
+                self.assertNotIn(secret, json.dumps(value))
+
     def test_rules_and_target_validation(self):
         value = request()
         self.assertEqual(value["target"], "source_venue")
@@ -323,6 +344,8 @@ class CollectorTests(unittest.TestCase):
             status, output = journal.lookup(pending)
             self.assertEqual((status, output["error"]["code"]), (409, "request_outcome_unknown"))
             journal.pause()
+            self.assertGreater(journal.pause_remaining_seconds(), 0)
+            self.assertLessEqual(journal.pause_remaining_seconds(), 900)
             journal.close()
             journal = Journal(path)
             self.assertTrue(journal.paused())
@@ -497,6 +520,7 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertFalse(ready["instagramVerified"])
             self.assertFalse(ready["paused"])
+            self.assertEqual(ready["retryAfterSeconds"], 0)
             self.assertEqual(ready["queueCapacity"], 8)
             value = request()
             value.pop("kind")

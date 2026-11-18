@@ -57,6 +57,7 @@ export async function persistScrapedPostsForHandle(
             instagramPostUrl: post.instagramPostUrl,
             ...(post.postedAt ? { postedAt: post.postedAt } : {}),
             username: post.username,
+            ...(post.metadataProvider === "instaloader" ? { metadataProvider: "instaloader" as const } : {}),
           })),
         },
         serviceSecret,

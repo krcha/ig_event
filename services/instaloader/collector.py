@@ -48,6 +48,30 @@ def error_result(error, request_id=None):
     return error.status, value
 
 
+def upstream_failure_result(error, request_id):
+    # Preserve failure/pause semantics. Never expose exception text: it can
+    # contain authentication redirects, response bodies or signed media URLs.
+    causes = {
+        "BadResponseException": "metadata_unavailable",
+        "QueryReturnedNotFoundException": "upstream_not_found",
+        "LoginRequiredException": "authentication_required",
+        "LoginException": "authentication_required",
+        "PrivateProfileNotFollowedException": "access_restricted",
+        "TooManyRequestsException": "rate_limited",
+        "AbortDownloadException": "upstream_aborted",
+        "ConnectionException": "connection_failed",
+        "QueryReturnedBadRequestException": "request_rejected",
+        "QueryReturnedForbiddenException": "access_rejected",
+        "KeyError": "unexpected_metadata_shape",
+        "TypeError": "unexpected_metadata_shape",
+        "AttributeError": "unexpected_metadata_shape",
+    }
+    status, value = error_result(CollectorError("instagram_unavailable",
+        "Instagram metadata could not be collected; check session and provider availability."), request_id)
+    value["error"]["diagnosticCause"] = causes.get(type(error).__name__, "unclassified_failure")
+    return status, value
+
+
 def invalid(message):
     raise CollectorError("invalid_request", message, 400)
 
@@ -478,10 +502,9 @@ def worker_main(connection, config):
         except CollectorError as error:
             status, result = error_result(error, request_id)
             connection.send((request_id, status, result))
-        except Exception:
+        except Exception as error:
             # Login/challenge/transport/schema errors are never empty success.
-            status, result = error_result(CollectorError("instagram_unavailable",
-                "Instagram metadata could not be collected; check session and provider availability."), request_id)
+            status, result = upstream_failure_result(error, request_id)
             connection.send((request_id, status, result))
 
 
@@ -570,6 +593,11 @@ class Journal:
         with self.lock:
             row = self.db.execute("SELECT value FROM control WHERE key='paused_until'").fetchone()
         return row is not None and row[0] > time.time()
+
+    def pause_remaining_seconds(self):
+        with self.lock:
+            row = self.db.execute("SELECT value FROM control WHERE key='paused_until'").fetchone()
+        return max(0, math.ceil(row[0] - time.time())) if row is not None else 0
 
 
 class Collector:
@@ -683,7 +711,8 @@ def make_handler(collector, token):
                 ready = (available or collector.config["allow_anonymous"]) and not paused
                 self.respond(200 if ready else 503, {"ready": ready, "sessionAvailable": available,
                     "anonymousAllowed": collector.config["allow_anonymous"], "instagramVerified": False,
-                    "paused": paused, "queueCapacity": 8})
+                    "paused": paused, "retryAfterSeconds": collector.journal.pause_remaining_seconds() if paused else 0,
+                    "queueCapacity": 8})
             else:
                 self.respond(*error_result(CollectorError("not_found", "Unknown endpoint.", 404)))
 
