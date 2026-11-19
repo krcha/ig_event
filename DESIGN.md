@@ -193,7 +193,7 @@ Apply the shared palette and font while preserving Discover's poster actions, sw
 
 ### Mobile outing refinements
 
-Expanded Events retain a complete uncropped poster ten pixels narrower than its available slot, with proportional height. Factual venue hours sit on the upper dark fade; caption, compact approximate travel times and source/details actions continue over the lower poster fade. Collapsed cards retain their time/type hierarchy with a lazy low-resolution blurred poster tint that follows the poster hue. Decorative images have lower fetch priority than the opened poster. Desktop original-post columns remain intact.
+Expanded Events retain a complete uncropped poster ten pixels narrower than its available slot, with proportional height. Factual venue hours sit on the upper dark fade; caption, compact approximate travel times and source/details actions continue over the lower poster fade. Collapsed cards use the solid card surface and retain their time/type hierarchy. Poster images load on expansion. Desktop original-post columns remain intact.
 
 Mobile Discover contains the full original poster while retaining its header and Like/Skip controls within the viewport. Metadata and actions overlay the lower fade. The central Gde dalje compass rises above the bottom bar in a 48px lime circle with space for its full Serbian, English or Russian label. Yandex uses its 32px square Go asset inside a transparent 44px target, without a text wordmark. Motion respects reduced-motion and pauses in background tabs.
 
