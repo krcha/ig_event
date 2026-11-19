@@ -238,9 +238,7 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   assert.deepEqual(nodes(tree, node => node.props?.["data-calendar-event-id"]).map(row => row.props["data-calendar-event-id"]),
     [...compact].reverse().map(event => event._id), "The complete client matching set must be sorted from the shared GPS fix before virtualization.");
   assert.equal(nodes(tree, node => node.props?.["data-calendar-distance-location"]).length, 0, "A valid GPS fix does not show a redundant permission prompt.");
-  const tint = nodes(tree, node => node.type === "img" && node.props?.["aria-hidden"])[0];
-  assert.equal(tint.props.loading, "lazy", "Closed poster tints should not eagerly load the whole day.");
-  assert.match(tint.props.src, /\?w=192$/, "Closed rows use the smallest supported first-party image variant.");
+  assert.equal(nodes(tree, node => node.type === "img").length, 0, "Collapsed event rows must not request poster images.");
   userPosition = null;
   const fallback = CalendarAgenda({ events: compact, sortMode: "distance", openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
   assert.equal(nodes(fallback, node => node.props?.["data-calendar-distance-location"]).length, 1, "A distance link without a GPS fix offers an explicit permission action.");
