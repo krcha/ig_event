@@ -28,6 +28,7 @@ import { VenueBulkEdit } from "@/components/admin/venue-bulk-edit";
 import {
   DEFAULT_VENUE_TABLE_SORT,
   EMPTY_VENUE_TABLE_FILTERS,
+  VENUE_HOURS_LABELS,
   filterAndSortVenues,
   getVenueHoursState,
   getVenueMapState,
@@ -234,16 +235,6 @@ function getManualOpeningHoursInput(venue: Venue): string {
   } catch {
     return "";
   }
-}
-
-function getVenueHoursLabel(venue: Venue): string {
-  return {
-    manual: "Manual",
-    osm: "OpenStreetMap",
-    google: "Google",
-    missing: "Missing",
-    not_applicable: "Not applicable",
-  }[getVenueHoursState(venue)];
 }
 
 function VenueFormFields({
@@ -758,6 +749,7 @@ export function VenueManager() {
   const firstRow = (currentPage - 1) * PAGE_SIZE;
   const visibleVenues = filteredVenues.slice(firstRow, firstRow + PAGE_SIZE);
   const editingVenue = venues.find((venue) => venue.id === editingVenueId);
+  const editingHoursState = editingVenue ? getVenueHoursState(editingVenue) : "not_applicable";
   const isMutating = Boolean(busyVenueId) || isSubmitting || isImporting || isBulkEditing;
   const hasFilters = Boolean(searchQuery.trim()) || Object.entries(columnFilters).some(([key, value]) => value !== EMPTY_VENUE_TABLE_FILTERS[key as keyof VenueTableFilters]);
   const selectedVenues = venues.filter((venue) => selectedVenueIds.has(venue.id));
@@ -948,7 +940,7 @@ export function VenueManager() {
                 const isBusy = busyVenueId === venue.id;
                 const requiresPhysicalDetails = venueRequiresPhysicalDetails(venue.category);
                 const hasCoordinates = getVenueMapState(venue) === "present";
-                const hasHours = getVenueHoursLabel(venue) !== "Missing";
+                const hoursState = getVenueHoursState(venue);
                 return (
                   <tr aria-busy={isBusy} aria-selected={selectedVenueIds.has(venue.id)} className="group border-b border-border/70 last:border-b-0 hover:bg-muted/35 aria-selected:bg-primary/5" key={venue.id}>
                     <th className="sticky left-0 z-[1] bg-card px-4 py-2.5 font-normal group-hover:bg-muted" scope="row">
@@ -977,10 +969,10 @@ export function VenueManager() {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5">
-                      {requiresPhysicalDetails ? <>
-                        <span className={`text-xs ${hasHours ? "text-muted-foreground" : "text-amber-300/90"}`} title={venue.hoursError || (formatOptionalDateTime(venue.hoursFetchedAt) ? `Checked ${formatOptionalDateTime(venue.hoursFetchedAt)}` : undefined)}>{getVenueHoursLabel(venue)}</span>
+                      {hoursState !== "not_applicable" ? <>
+                        <span className={`text-xs ${hoursState === "missing" ? "text-amber-300/90" : "text-muted-foreground"}`} title={venue.hoursError || (formatOptionalDateTime(venue.hoursFetchedAt) ? `Checked ${formatOptionalDateTime(venue.hoursFetchedAt)}` : undefined)}>{VENUE_HOURS_LABELS[hoursState]}</span>
                         {venue.hoursError ? <span className="mt-1 block text-[11px] text-amber-300/90">Check failed</span> : null}
-                      </> : <span className="text-xs text-muted-foreground">Not applicable</span>}
+                      </> : <span className="text-xs text-muted-foreground">{VENUE_HOURS_LABELS.not_applicable}</span>}
                     </td>
                     <td className="px-3 py-2.5">
                       <select aria-label={`Publication for ${venue.name}`} className={`${INPUT_CLASS} min-w-[116px] ${venue.publicStatus === "published" ? "text-emerald-300" : venue.publicStatus === "pending" ? "text-amber-200" : "text-muted-foreground"}`} disabled={isMutating || isLoading} onChange={(event) => void updateVenueLifecycle(venue, { publicStatus: event.target.value as VenuePublicStatus })} value={venue.publicStatus}>
@@ -1050,10 +1042,10 @@ export function VenueManager() {
             {editingVenue && venueRequiresPhysicalDetails(editForm.category) ? (
               <div className="space-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p>Saved hours: <span className="text-foreground">{getVenueHoursLabel(editingVenue)}</span>{formatOptionalDateTime(editingVenue.hoursFetchedAt) ? ` · Checked ${formatOptionalDateTime(editingVenue.hoursFetchedAt)}` : ""}</p>
+                  <p>Saved hours: <span className="text-foreground">{VENUE_HOURS_LABELS[editingHoursState]}</span>{editingHoursState !== "not_applicable" && formatOptionalDateTime(editingVenue.hoursFetchedAt) ? ` · Checked ${formatOptionalDateTime(editingVenue.hoursFetchedAt)}` : ""}</p>
                   {editingVenue.hoursSource && editingVenue.hoursSource !== "none" ? <button className={BUTTON_CLASS} disabled={Boolean(busyVenueId)} onClick={() => void clearVenueHours(editingVenue)} type="button">Clear saved hours</button> : null}
                 </div>
-                {editingVenue.hoursError ? <p className="text-amber-300/90">{editingVenue.hoursError}</p> : null}
+                {editingHoursState !== "not_applicable" && editingVenue.hoursError ? <p className="text-amber-300/90">{editingVenue.hoursError}</p> : null}
                 <p>Updated {formatDateTime(editingVenue.updatedAt)}</p>
               </div>
             ) : null}

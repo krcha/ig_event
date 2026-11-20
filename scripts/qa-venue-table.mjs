@@ -71,6 +71,21 @@ assert.equal(getVenueMapState(venues[1]), "missing", "0,0 is not a map location"
 assert.equal(getVenueHoursState({ ...venues[0], hoursJson: "invalid" }), "missing");
 assert.deepEqual(validateVenueBulkPatch({ category: "promoter" }), { category: "promoter" });
 
+const theater = { ...venues[3], id: "t", name: "Atelje 212", instagramHandle: "@Atelje212" };
+const cinema = { ...venues[3], id: "f", name: "Cinema", category: "bioskop", latitude: 44.8, longitude: 20.4 };
+const cultureCenter = { ...venues[3], id: "k", name: "Culture center", category: "culture" };
+const programVenues = [theater, cinema, cultureCenter];
+const withFilter = (filters) => filterAndSortVenues(programVenues, "", { ...EMPTY_VENUE_TABLE_FILTERS, ...filters }, DEFAULT_VENUE_TABLE_SORT).map(({ id }) => id);
+assert.deepEqual(withFilter({ hours: "missing" }), ["k"]);
+assert.deepEqual(withFilter({ hours: "not_applicable" }), ["t", "f"]);
+assert.deepEqual(withFilter({ hours: "not_applicable", mapStatus: "missing" }), ["t"]);
+assert.equal(getVenueHoursState({ ...cinema, hoursSource: "manual", hoursJson: hours("manual") }), "manual");
+for (const venue of programVenues) {
+  const reportRow = classifyPublicVenue({ ...venue, _id: venue.id }, now);
+  assert.equal(reportRow.missingOpeningHours, getVenueHoursState(venue) === "missing");
+  assert.equal(reportRow.missingMapLocation, getVenueMapState(venue) === "missing");
+}
+
 const promoter = { ...venues[2], _id: "c", publicStatus: "published" };
 const physical = { ...venues[0], _id: "a" };
 assert.deepEqual(getActiveVenueHoursRefreshTargets([promoter, physical]).map(({ _id }) => _id), ["a"], "promoter stays scrape-active but never enters hours enrichment");
@@ -88,4 +103,4 @@ assert.equal(row.weeklyHours, "");
 const gaps = buildVenueGapSnapshot([promoter, physical], { now });
 assert.equal(gaps.lists.missingMapLocation.some(({ id }) => id === "c"), false);
 assert.equal(gaps.lists.missingOpeningHours.some(({ id }) => id === "c"), false);
-console.log("Venue table QA passed: seven column filters and sortable columns in both directions, combined search, promoter N/A, safe bulk category, enrichment exclusion and missing-data exports.");
+console.log("Venue table QA passed: filters, sorting, search, applicable hours and location states, safe bulk category, enrichment exclusion and missing-data exports.");

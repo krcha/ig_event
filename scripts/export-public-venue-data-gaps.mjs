@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getVenueCoordinates } from "../lib/venues/coordinates.ts";
 import { parseVenueHoursJson } from "../lib/venues/venue-hours-cache.ts";
 import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types.ts";
+import { venueRequiresOpeningHours } from "../lib/venues/venue-hours-requirement.ts";
 
 const DEFAULT_CONVEX_URL = "https://convex-events.ineedtofeedmyrabbit.com";
 const SITE_URL = "https://eventzeka.com";
@@ -84,6 +85,8 @@ function timezoneStatus(timezone, metadataTimezone) {
 
 export function classifyPublicVenue(venue, now = Date.now()) {
   const physical = venueRequiresPhysicalDetails(venue.category);
+  const handle = typeof venue.instagramHandle === "string" ? venue.instagramHandle.trim().replace(/^@+/, "") : "";
+  const hoursRequired = venueRequiresOpeningHours({ category: venue.category, instagramHandle: handle });
   const coordinates = physical ? getVenueCoordinates(venue.latitude, venue.longitude) : null;
   const hours = physical ? parseVenueHoursJson(venue.hoursJson) : null;
   const trustedHours = hours && hours.source !== "none" ? hours : null;
@@ -95,14 +98,16 @@ export function classifyPublicVenue(venue, now = Date.now()) {
   }));
   const knownDays = days.filter(({ value }) => value && (value.closed || value.windows.length > 0));
   const missingDays = days.filter(({ weekday }) => !knownDays.some((day) => day.weekday === weekday));
-  const missingOpeningHours = physical && knownDays.length === 0;
-  const partialOpeningHours = physical && knownDays.length > 0 && knownDays.length < 7;
+  const missingOpeningHours = hoursRequired && knownDays.length === 0;
+  const partialOpeningHours = hoursRequired && knownDays.length > 0 && knownDays.length < 7;
   const closedOnlyHours = knownDays.length > 0 && knownDays.every(({ value }) => value.closed);
-  const hoursStatus = !physical ? "Nije primenljivo" : missingOpeningHours ? "Nedostaje" : partialOpeningHours ? "Nepotpuno" : "Poznato";
+  const hoursStatus = missingOpeningHours ? "Nedostaje"
+    : partialOpeningHours ? "Nepotpuno"
+    : knownDays.length === 7 ? "Poznato"
+    : "Nije primenljivo";
   const timezone = physical ? hours?.timezone ?? venue.hoursTimezone ?? "" : "";
   const fetchedAt = physical ? isoTimestamp(venue.hoursFetchedAt) : "";
   const expiresAt = physical ? isoTimestamp(venue.hoursExpiresAt) : "";
-  const handle = typeof venue.instagramHandle === "string" ? venue.instagramHandle.replace(/^@+/, "") : "";
   const googleMapsUrl = physical && venue.googlePlaceId
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.name)}&query_place_id=${encodeURIComponent(venue.googlePlaceId)}`
     : "";
@@ -123,8 +128,8 @@ export function classifyPublicVenue(venue, now = Date.now()) {
     mapStatus: !physical ? "Nije primenljivo" : coordinates ? "Poznata" : "Nedostaje",
     hoursStatus,
     knownDays: knownDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", "),
-    missingDays: physical ? missingDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", ") : "",
-    weeklyHours: physical ? weeklyHours : "",
+    missingDays: hoursRequired ? missingDays.map(({ weekday }) => DAY_NAMES[weekday]).join(", ") : "",
+    weeklyHours: hoursRequired || knownDays.length > 0 ? weeklyHours : "",
     hoursSource: physical ? hours?.source ?? venue.hoursSource ?? "none" : "",
     hoursSourceUrls: physical ? sourceUrls(hours, venue) : "",
     googleMapsUrl,
@@ -167,7 +172,7 @@ export function buildVenueGapSnapshot(venues, options) {
     generatedAt: new Date(options.now).toISOString(),
     generatedAtBelgrade: new Intl.DateTimeFormat("sr-Latn-RS", { timeZone: "Europe/Belgrade", dateStyle: "long", timeStyle: "long" }).format(options.now),
     source: { url: `${options.convexUrl}/api/query`, query: "venues:listPublicVenueFields", args: { limit: PUBLIC_DIRECTORY_LIMIT }, siteUrl: SITE_URL },
-    scope: "Objavljeni profili iz Eventzeka imenika. Profili kategorije promoter nemaju obavezu stalne lokacije ili radnog vremena i iskljuceni su iz spiskova nedostajucih podataka. Uloge se ne pretpostavljaju iz naziva.",
+    scope: "Objavljeni profili iz Eventzeka imenika. Promoteri su izuzeti iz spiskova lokacije i radnog vremena. Pozorista i bioskopi su izuzeti iz spiskova nedostajuceg i nepotpunog radnog vremena, jer se termini predstava i projekcija objavljuju u repertoaru. Uloge se ne pretpostavljaju iz naziva.",
     criteria: {
       missingMapLocation: "Nema ispravnog numerickog para geografskih koordinata po istom pravilu kao aplikacija. Sama tekstualna adresa nije lokacija na mapi.",
       missingOpeningHours: "Nema nijednog poznatog dana iz parsiranog rasporeda sa izvorom razlicitim od none. Potvrdjen zatvoren dan jeste poznat podatak.",
@@ -224,6 +229,16 @@ function runSelfTests() {
   assert.equal(classifyPublicVenue({ ...venue, hoursJson: schedule([openDay], "none") }, now).missingOpeningHours, true);
   assert.equal(classifyPublicVenue({ ...venue, hoursJson: "invalid" }, now).missingOpeningHours, true);
   assert.equal(classifyPublicVenue({ ...venue, hoursJson: schedule([openDay], "manual", "invalid/zone") }, now).timezoneStatus, "Neispravna");
+  const theater = { ...venue, category: "culture", instagramHandle: "@Atelje212", latitude: null };
+  const cinema = { ...venue, _id: "cinema-id", category: "\u0431\u0438\u043e\u0441\u043a\u043e\u043f", hoursJson: schedule([openDay]) };
+  const cultureCenter = { ...venue, _id: "culture-center-id", category: "culture" };
+  const programGaps = buildVenueGapSnapshot([theater, cinema, cultureCenter], { now, convexUrl: DEFAULT_CONVEX_URL });
+  assert.deepEqual(programGaps.lists.missingMapLocation.map(({ id }) => id), [theater._id]);
+  assert.deepEqual(programGaps.lists.missingOpeningHours.map(({ id }) => id), [cultureCenter._id]);
+  assert.deepEqual(programGaps.lists.partialOpeningHours, []);
+  assert.equal(classifyPublicVenue(theater, now).hoursStatus, "Nije primenljivo");
+  assert.equal(classifyPublicVenue(cinema, now).missingDays, "");
+  assert.match(classifyPublicVenue(cinema, now).weeklyHours, /Subota: 20:00-02:00/);
   assert.throws(() => buildVenueGapSnapshot([venue, venue], { now, convexUrl: DEFAULT_CONVEX_URL }), /Duplicate/);
   const snapshot = buildVenueGapSnapshot([venue], { now, convexUrl: DEFAULT_CONVEX_URL });
   assert.equal(snapshot.counts.publicProfiles, 1);
@@ -233,7 +248,7 @@ function runSelfTests() {
   assert.ok(csv.startsWith("\uFEFF"));
   assert.ok(csv.includes('"\'=HYPERLINK(""bad"")"'));
   assert.ok(csv.includes('"a;b\nc"'));
-  console.log("Public venue export checks passed (coordinates, missing/partial/closed hours, expiry, timezones, IDs, CSV escaping).");
+  console.log("Public venue export checks passed (coordinates, hours gaps and exemptions, expiry, timezones, IDs, CSV escaping).");
 }
 
 async function main() {

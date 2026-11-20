@@ -1,6 +1,7 @@
 import { normalizeTaxonomyText, venueRequiresPhysicalDetails } from "@/lib/taxonomy/venue-types";
 import { getVenueCoordinates } from "@/lib/venues/coordinates";
 import { parseVenueHoursJson } from "@/lib/venues/venue-hours-cache";
+import { venueRequiresOpeningHours } from "@/lib/venues/venue-hours-requirement";
 
 export type VenueTableColumn = "name" | "instagram" | "category" | "location" | "hours" | "publication" | "scraping";
 export type VenueTableSort = { column: VenueTableColumn; direction: "asc" | "desc" };
@@ -41,14 +42,22 @@ export function getVenueMapState(venue: VenueTableRow): "present" | "missing" | 
 export function getVenueHoursState(venue: VenueTableRow): "google" | "manual" | "osm" | "missing" | "not_applicable" {
   if (!venueRequiresPhysicalDetails(venue.category)) return "not_applicable";
   const hours = parseVenueHoursJson(venue.hoursJson);
-  if (!hours || hours.source === "none" || !hours.weekly.some((day) => day.closed || day.windows.length > 0)) return "missing";
-  return venue.hoursSource === "google" || venue.hoursSource === "manual" || venue.hoursSource === "osm" ? venue.hoursSource : "missing";
+  const source = venue.hoursSource;
+  if (
+    (source === "google" || source === "manual" || source === "osm")
+    && hours && hours.source !== "none"
+    && hours.weekly.some((day) => day.closed || day.windows.length > 0)
+  ) return source;
+  return venueRequiresOpeningHours(venue) ? "missing" : "not_applicable";
 }
 
-function hoursLabel(venue: VenueTableRow): string {
-  const state = getVenueHoursState(venue);
-  return ({ google: "Google", manual: "Manual", osm: "OpenStreetMap", missing: "Missing", not_applicable: "Not applicable" })[state];
-}
+export const VENUE_HOURS_LABELS = {
+  google: "Google",
+  manual: "Manual",
+  osm: "OpenStreetMap",
+  missing: "Missing",
+  not_applicable: "Not applicable",
+};
 
 function locationLabel(venue: VenueTableRow): string {
   const state = getVenueMapState(venue);
@@ -77,7 +86,7 @@ export function filterAndSortVenues<T extends VenueTableRow>(
     if (filters.scraping === "paused" && venue.scrapeActive) return false;
     return !globalQuery || contains([
       venue.name, ...venue.aliases, venue.instagramHandle, venue.category,
-      locationLabel(venue), hoursLabel(venue), venue.publicStatus,
+      locationLabel(venue), VENUE_HOURS_LABELS[hoursState], venue.publicStatus,
       venue.scrapeActive ? "scraping enabled on" : "paused",
     ].join(" "), globalQuery);
   });
@@ -87,7 +96,7 @@ export function filterAndSortVenues<T extends VenueTableRow>(
       case "instagram": return venue.instagramHandle;
       case "category": return venue.category;
       case "location": return locationLabel(venue);
-      case "hours": return hoursLabel(venue);
+      case "hours": return VENUE_HOURS_LABELS[getVenueHoursState(venue)];
       case "publication": return venue.publicStatus;
       case "scraping": return venue.scrapeActive ? "On" : "Paused";
     }
