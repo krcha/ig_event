@@ -5,6 +5,7 @@ import {
   loadRecentApifyRunPosts,
   scrapeInstagramAccount,
 } from "../lib/scraper/instagram-scraper.ts";
+import { readApifyInstagramFollowerObservation } from "../lib/venues/instagram-follower-observation.ts";
 
 // This test never contacts Apify, Instagram or a production backend. It observes
 // every outgoing paid phase, including its input, charge ceiling and lease.
@@ -106,6 +107,22 @@ try {
   process.env.APIFY_DATA_DETAIL_LEVEL = "detailedData";
   process.env.APIFY_SKIP_PINNED_POSTS = "false";
   delete process.env.APIFY_MAX_TOTAL_CHARGE_USD_PER_RUN;
+
+  const profileUrl = `https://www.instagram.com/${OWNER}/`;
+  const profile = { username: OWNER, url: profileUrl, inputUrl: profileUrl, followsCount: 17, followersCount: 0,
+    error: "Profile restricts posts", followers: [{ username: "must_not_leave_provider" }] };
+  const observation = { handle: OWNER, count: 0, observedAt: NOW - 20_000 };
+  const followerObservations = [];
+  const profileOnly = await scenario([profile], [], {
+    onFollowerObservation: (row) => followerObservations.push(row),
+  });
+  assert.equal(profileOnly.posts.length, 0);
+  assert.equal(profileOnly.calls.length, 1, "A profile count in the usual response must not start a paid follow-up.");
+  assert.deepEqual(followerObservations, [observation], "Only the exact owner, zero aggregate count and observation time cross the callback.");
+  assert.equal(readApifyInstagramFollowerObservation({ ...profile, url: "https://www.instagram.com/other/" }, NOW), null);
+  assert.equal(readApifyInstagramFollowerObservation({ ...profile, followersCount: 0.5 }, NOW), null);
+  assert.equal(readApifyInstagramFollowerObservation({ username: OWNER, followersCount: 0 }, NOW), null);
+  assert.equal(readApifyInstagramFollowerObservation({ ownerUsername: OWNER, owner: { username: "other", followersCount: 7 } }, NOW), null);
 
   for (const options of [
     {}, { daysBack: 30 }, { noAgeCutoff: true },

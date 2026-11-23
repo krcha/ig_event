@@ -9,6 +9,8 @@ import { buildVenueHandleByCanonicalVenueName, getSourceIdentityKey, mapImported
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
 import { loadAllActiveInstagramSourceHandles } from "@/lib/pipeline/ingestion/venue-context";
 import { instagramSourceProviderAdapter } from "@/lib/pipeline/ingestion/source-provider";
+import { persistInstagramFollowerObservations } from "@/lib/pipeline/ingestion/follower-observations";
+import type { InstagramFollowerObservation } from "@/lib/venues/instagram-follower-observation";
 
 const EXISTING_EVENT_IMPORT_LIMIT_PER_STATUS = 1000;
 
@@ -38,9 +40,11 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
 
   const client = getConvexClient();
   const serviceSecret = getConfiguredServiceSecret(options.serviceSecret);
+  const followerObservations: InstagramFollowerObservation[] = [];
   const importResult = await instagramSourceProviderAdapter.loadRecentDocuments({
     handles: normalizedHandles,
     runsLimit: options.runsLimit,
+    onFollowerObservation: (observation) => { followerObservations.push(observation); },
   });
 
   let handlesWithImportedPosts = 0;
@@ -55,6 +59,7 @@ export async function importRecentApifyRunPostsToSavedPosts(options: {
     handlesWithImportedPosts += 1;
     await persistScrapedPostsForHandle(client, handle, posts, serviceSecret);
   }
+  await persistInstagramFollowerObservations(client, followerObservations, serviceSecret);
 
   return {
     handles: normalizedHandles,

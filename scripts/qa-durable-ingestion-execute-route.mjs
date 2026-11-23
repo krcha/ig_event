@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import ts from "typescript";
 import { readIngestionArchitectureSource } from "./qa-support/ingestion-architecture-source.mjs";
+import { persistInstagramFollowerObservations } from "../lib/pipeline/ingestion/follower-observations.ts";
 
 process.env.CRON_SECRET = "qa-durable-execute-route-secret";
 
@@ -255,6 +256,7 @@ function loadRouteWithMocks({
         isTransientSavedPostProcessingError,
       },
     ],
+    ["@/lib/pipeline/ingestion/follower-observations", { persistInstagramFollowerObservations }],
   ]);
   const routeModule = { exports: {} };
   const sandbox = {
@@ -595,6 +597,8 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
   Object.defineProperty(providerPosts, "rawItemCount", { value: 6 });
   let providerCalls = 0;
   let markerCalls = 0;
+  const followerWrites = [];
+  const followerObservation = { handle: "multi_venue", count: 0, observedAt: 1_789_000_000_000 };
   const warnings = [];
   const POST = loadRouteWithMocks({
     logger: { ...console, warn: (message) => warnings.push(JSON.parse(message)) },
@@ -622,6 +626,11 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
         assert.deepEqual(Array.from(args.savedPostLinks, (link) => link.sourceRevision), [1, 1, 1]);
         return { processingPending: true };
       }
+      if (reference === "venues:recordInstagramFollowerCounts") {
+        assert.equal(markerCalls, 1, "optional follower metadata must follow the durable post receipt");
+        followerWrites.push(args);
+        return { written: 1, existing: 0, unresolved: 0 };
+      }
       throw new Error(`Unexpected mutation in multi-post fetch test: ${reference}`);
     },
     scrape: async (request) => {
@@ -629,6 +638,7 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
       assert.equal(request.selectAllEligiblePosts, true);
       assert.equal(request.resultsLimit, 6);
       assert.equal(request.maxTotalChargeUsd, 0.01);
+      request.onFollowerObservation(followerObservation);
       return providerPosts;
     },
     persist: async (_client, _handle, posts) => posts.map((post, index) => ({
@@ -642,6 +652,7 @@ async function assertDeferredExecutorResponse(response, claimState, message) {
   assert.equal((await response.json()).processingPending, true);
   assert.equal(providerCalls, 1, "three saved posts share one paid provider request");
   assert.equal(markerCalls, 1, "three identities cross one durable persistence marker");
+  assert.deepEqual(followerWrites, [{ observations: [followerObservation], serviceSecret: "qa-service-secret" }]);
   assert.deepEqual(warnings.map((warning) => ({
     event: warning.event,
     rawItemCount: warning.rawItemCount,

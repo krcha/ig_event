@@ -9,6 +9,8 @@ import {
   runApprovedDuplicateCleanupForCompletedDurableRun,
 } from "@/lib/pipeline/run-instagram-ingestion";
 import { getInstagramScrapeRawItemCount, scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
+import { persistInstagramFollowerObservations } from "@/lib/pipeline/ingestion/follower-observations";
+import type { InstagramFollowerObservation } from "@/lib/venues/instagram-follower-observation";
 import { getInstagramScraperProvider, getInstaloaderReadiness } from "@/lib/scraper/instaloader-client";
 import {
   isDurableSavedPostRevisionMismatch,
@@ -387,6 +389,7 @@ export async function POST(request: Request) {
       // The controller owns the provider reservation and eight-slot semaphore.
       // Do not enter the legacy singleton paid-fetch lease here: that old safety
       // layer serializes all accounts and would turn eight workers into one.
+      const followerObservations: InstagramFollowerObservation[] = [];
       posts = await scrapeInstagramAccount({
         requestId: `durable:${runId}:${claimed.receiptId}`,
         collectorReadinessChecked: getInstagramScraperProvider() === "instaloader",
@@ -400,6 +403,7 @@ export async function POST(request: Request) {
           : {}),
         selectAllEligiblePosts: claimed.mode === "daily" || claimed.mode === "catch_up",
         maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
+        onFollowerObservation: (observation) => { followerObservations.push(observation); },
       });
       const rawItemCount = getInstagramScrapeRawItemCount(posts);
       if (rawItemCount >= claimed.controls.resultsLimit) {
@@ -455,6 +459,7 @@ export async function POST(request: Request) {
         processingProtocolVersion: multiPostProtocol ? 2 : 1,
         serviceSecret,
       });
+      await persistInstagramFollowerObservations(convex, followerObservations, serviceSecret);
     }
     if (posts.length > 0) {
       return NextResponse.json({

@@ -1,5 +1,6 @@
 import { getRequiredEnv } from "../utils/env.ts";
 import { fetchInstaloaderItems, getInstagramScraperProvider } from "./instaloader-client.ts";
+import { readApifyInstagramFollowerObservation, type InstagramFollowerObservation } from "../venues/instagram-follower-observation.ts";
 
 const DEFAULT_APIFY_ACTOR_ID = "apify/instagram-post-scraper";
 const DEFAULT_RESULTS_LIMIT = 3;
@@ -93,6 +94,7 @@ type ScrapeInstagramAccountOptions = {
   collectorReadinessChecked?: boolean;
   onRequestStarted?: () => void | Promise<void>;
   onTransportInvoked?: () => void;
+  onFollowerObservation?: (observation: InstagramFollowerObservation) => void;
 };
 
 type ApifyDataDetailLevel = "basicData" | "detailedData";
@@ -117,6 +119,7 @@ export type ApifyInstagramScrapeRequest = {
 type LoadRecentApifyRunPostsOptions = {
   handles?: string[];
   runsLimit?: number;
+  onFollowerObservation?: (observation: InstagramFollowerObservation) => void;
 };
 
 type ApifyInstagramImage =
@@ -1094,8 +1097,13 @@ export async function loadRecentApifyRunPosts(
       }),
     );
 
-    for (const datasetItems of datasetItemsBatch) {
+    for (const [offset, datasetItems] of datasetItemsBatch.entries()) {
+      const observedAt = Date.parse(runs[index + offset].finishedAt ?? "");
       for (const item of datasetItems) {
+        if (options.onFollowerObservation && handleFilter.size > 0) {
+          const observation = readApifyInstagramFollowerObservation(item, observedAt);
+          if (observation && handleFilter.has(observation.handle)) options.onFollowerObservation(observation);
+        }
         // Basic discovery runs also appear in free history imports. A failed
         // hydration must never re-enter ingestion as a cover-only source or
         // shadow a complete older dataset for the same post. History keeps its
@@ -1321,6 +1329,16 @@ export async function scrapeInstagramAccount(
     const candidates = freshItems.filter((item) => selectedKeys.has(`${buildPostId(item)}::${buildPostUrl(item)}`));
     const uniqueCandidates = [...new Map(candidates.map((item) => [`${buildPostId(item)}::${buildPostUrl(item)}`, item])).values()];
     const hydrationCandidates = uniqueCandidates.filter(needsApifyPostDetails);
+    const expectedOwner = normalizeHandle(target.fallbackUsername);
+    const readFollowerObservation = (items: ApifyInstagramItem[], run: ApifyActorRun) => {
+      if (!options.onFollowerObservation) return;
+      const observedAt = Date.parse(run.finishedAt ?? "");
+      const observations = items.map((item) => readApifyInstagramFollowerObservation(item, observedAt))
+        .filter((observation): observation is InstagramFollowerObservation => observation?.handle === expectedOwner);
+      const first = observations[0];
+      if (first && observations.every((observation) => observation.count === first.count)) return first;
+    };
+    let followerObservation = readFollowerObservation(basic.items, basic.run);
     let completeItems = uniqueCandidates;
     if (hydrationCandidates.length > 0) {
       // Immediate terminal metadata may still have preliminary costs. Apify
@@ -1359,7 +1377,10 @@ export async function scrapeInstagramAccount(
         return [candidate, mergeApifyPostDetails(candidate, matches[0])];
       }));
       completeItems = uniqueCandidates.map((candidate) => hydrated.get(candidate) ?? candidate);
+      const hydratedIds = new Set(hydrationCandidates.map(buildPostId));
+      followerObservation ??= readFollowerObservation(details.items.filter((item) => hydratedIds.has(buildPostId(item))), details.run);
     }
+    if (followerObservation) options.onFollowerObservation?.(followerObservation);
     return normalizeInstagramCollection(completeItems, target, apifyOptions, requestSettings, cutoffMs, basic.items.length);
   } finally {
     clearTimeout(abortTimer);

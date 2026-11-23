@@ -45,6 +45,7 @@ import {
 } from "./internal/eventRepairs/reviewedStructuredCorrections";
 import { sha256Hex } from "../lib/domain/reconciliation/evidence-digest";
 import { getVenueCoordinates } from "../lib/venues/coordinates";
+import { normalizeInstagramProfileHandle } from "../lib/venues/instagram-follower-observation";
 
 const DEFAULT_PUBLIC_VENUE_EVENT_LIMIT = 12;
 const MAX_PUBLIC_VENUE_EVENT_LIMIT = 50;
@@ -658,6 +659,43 @@ export const listVenues = query({
       ...venue,
       ...getEffectiveVenueLifecycle(venue),
     }));
+  },
+});
+
+export const recordInstagramFollowerCounts = mutation({
+  args: {
+    observations: v.array(v.object({ handle: v.string(), count: v.number(), observedAt: v.number(),
+      expectedVenueId: v.optional(v.id("venues")) })),
+    serviceSecret: v.optional(v.string()),
+  },
+  returns: v.object({ written: v.number(), existing: v.number(), unresolved: v.number() }),
+  handler: async (ctx, { observations, serviceSecret }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    const now = Date.now();
+    if (observations.length > 50 || new Set(observations.map(({ handle }) => handle)).size !== observations.length ||
+      observations.some(({ handle, count, observedAt }) => !handle || normalizeInstagramProfileHandle(handle) !== handle ||
+        !Number.isSafeInteger(count) || count < 0 || !Number.isSafeInteger(observedAt) || observedAt <= 0 || observedAt > now)) {
+      throw new Error("Invalid Instagram follower observations.");
+    }
+    const counts = { written: 0, existing: 0, unresolved: 0 };
+    for (const { handle, count, observedAt, expectedVenueId } of observations) {
+      const [exact, normalized] = await Promise.all([
+        ctx.db.query("venues").withIndex("by_instagramHandle", (q) => q.eq("instagramHandle", handle)).take(2),
+        ctx.db.query("venues").withIndex("by_normalizedInstagramHandle", (q) => q.eq("normalizedInstagramHandle", handle)).take(2),
+      ]);
+      const matches = [...new Map([...exact, ...normalized].map((venue) => [venue._id, venue])).values()];
+      const [venue] = matches;
+      if (matches.length !== 1 || normalizeInstagramProfileHandle(venue.instagramHandle) !== handle ||
+          (expectedVenueId && expectedVenueId !== venue._id)) {
+        counts.unresolved++;
+      } else if (venue.instagramFollowerCount !== undefined) {
+        counts.existing++;
+      } else {
+        await ctx.db.patch(venue._id, { instagramFollowerCount: count, instagramFollowerCountUpdatedAt: observedAt });
+        counts.written++;
+      }
+    }
+    return counts;
   },
 });
 

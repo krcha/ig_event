@@ -7,6 +7,8 @@ import { getOrCreateHandleSummary, markFreshFetchNotAttempted } from "@/lib/pipe
 import { getErrorMessage, getProviderAttemptCooldownMs, logError, normalizeDirectFullScrapeConcurrency, normalizeFullScrapeResultsLimit, withServiceSecret } from "@/lib/pipeline/ingestion/runtime";
 import { getSourceIdentityKey, loadSavedScrapedPostsForHandle, persistScrapedPostsForHandle } from "@/lib/pipeline/ingestion/source-documents";
 import { instagramSourceProviderAdapter } from "@/lib/pipeline/ingestion/source-provider";
+import { persistInstagramFollowerObservations } from "@/lib/pipeline/ingestion/follower-observations";
+import type { InstagramFollowerObservation } from "@/lib/venues/instagram-follower-observation";
 
 export async function resolvePaidFetchLeaseAfterBacklogMaintenance(
   claim: () => Promise<PaidFetchLeaseResult>,
@@ -93,6 +95,7 @@ export async function fetchFreshPostsForHandlesInParallel(
         const requestedResultsLimit = normalizeFullScrapeResultsLimit(
           lease.resultsLimit ?? baseResultsLimit,
         );
+        const followerObservations: InstagramFollowerObservation[] = [];
         const sourceBatch = await instagramSourceProviderAdapter.fetchDocuments({
           requestId: paidFetchLeaseOwner,
           handle,
@@ -102,6 +105,7 @@ export async function fetchFreshPostsForHandlesInParallel(
           skipPinnedPosts: options.skipPinnedPosts,
           onlyPostsNewerThan: onlyPostsNewerThan ?? undefined,
           abortAtMs: lease.expiresAt ? lease.expiresAt - 60_000 : undefined,
+          onFollowerObservation: (observation) => { followerObservations.push(observation); },
           onRequestStarted: async () => {
             await client.mutation(
               markPaidFetchRequestStartedMutation,
@@ -206,6 +210,7 @@ export async function fetchFreshPostsForHandlesInParallel(
         handleSummary.apifyHighWatermarkApplied = onlyPostsNewerThan ? 1 : 0;
 
         postsByHandle[handle] = freshPosts;
+        await persistInstagramFollowerObservations(client, followerObservations, serviceSecret);
       } catch (error) {
         const message = getErrorMessage(error);
         const handleSummary = getOrCreateHandleSummary(summary, handle);
