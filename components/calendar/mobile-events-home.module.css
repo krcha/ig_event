@@ -24,20 +24,6 @@
 
 .mobileGenre { display: none; }
 
-.eventBackdrop {
-  position: absolute;
-  z-index: -1;
-  inset: -28px;
-  width: calc(100% + 56px);
-  height: calc(100% + 56px);
-  object-fit: cover;
-  object-position: center;
-  filter: blur(26px);
-  mix-blend-mode: color;
-  opacity: .72;
-  pointer-events: none;
-}
-
 .locationSort { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 16px; padding-block: 5px; }
 .locationSort p { flex: 1 1 190px; font-size: 12px; line-height: 18px; color: var(--muted-foreground); }
 .locationSort button { min-height: 44px; padding-inline: 12px; border-radius: 10px; background: var(--primary); color: var(--primary-foreground); font-size: 12px; font-weight: 600; }
