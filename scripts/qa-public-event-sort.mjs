@@ -113,8 +113,11 @@ assert.match(browsePageSource, /sortAgendaEvents\(selectedDayAgendaEvents, selec
 assert.equal(normalizeAgendaSortMode(), "time");
 assert.equal(normalizeAgendaSortMode("venue"), "venue");
 assert.equal(normalizeAgendaSortMode("distance"), "distance");
+assert.equal(normalizeAgendaSortMode("popularity"), "popularity");
+assert.equal(normalizeAgendaSortMode("late"), "time");
+assert.equal(normalizeAgendaSortMode("title"), "time");
 assert.equal(normalizeAgendaSortMode("invalid"), "time");
-assert.deepEqual(AGENDA_SORT_OPTIONS.map(option => [option.value, option.label]), [["time","Po vremenu"],["late","Kasnije prvo"],["title","Po nazivu"],["venue","Po imenu mesta"],["distance","Udaljeno od mene"]]);
+assert.deepEqual(AGENDA_SORT_OPTIONS.map(option => [option.value, option.label]), [["time","Po vremenu"],["popularity","Po popularnosti"],["venue","Po imenu mesta"],["distance","Udaljeno od mene"]]);
 const ordered = [
   makeEvent({_id:"tie-b",time:"20:00",timeStatus:"confirmed"}),
   makeEvent({_id:"unknown-a",time:"22:00",timeStatus:"unknown"}),
@@ -125,16 +128,26 @@ const ordered = [
   makeEvent({_id:"unknown-b",time:undefined,timeStatus:"unknown"}),
 ];
 assert.deepEqual(sortAgendaEvents(ordered,"time").map(e=>e._id),["day","tie-b","tie-a","night","unknown-a","unknown-b","after"]);
-assert.deepEqual(sortAgendaEvents(ordered,"late").map(e=>e._id),["after","night","tie-b","tie-a","day","unknown-a","unknown-b"]);
-assert.deepEqual(AGENDA_BAND_ORDER.time,["daytime","evening","night","time-not-announced","after-midnight"]);
+assert.deepEqual(AGENDA_BAND_ORDER,["daytime","evening","night","time-not-announced","after-midnight"]);
 const words=["Žurka","Đir","Čarolija","Centrala","Ćaskanje","Zabava","Šetnja","Džez"];
 const alphaFixtures=words.map((word,index)=>makeEvent({_id:String(index),title:word,venue:word,time:index%2?"10:00":"23:00"}));
 const expected=["Centrala","Čarolija","Ćaskanje","Džez","Đir","Šetnja","Zabava","Žurka"];
-assert.deepEqual(sortAgendaEvents(alphaFixtures,"title").map(e=>e.title),expected);
 assert.deepEqual(sortAgendaEvents(alphaFixtures,"venue").map(e=>e.venue),expected);
 const many=Array.from({length:125},(_,i)=>makeEvent({_id:String(i),venue:`Mesto ${124-i}`,title:`Događaj ${124-i}`}));
 assert.deepEqual(sortAgendaEvents(many,"venue").slice(0,3).map(e=>e.venue),["Mesto 0","Mesto 1","Mesto 2"],"Sort the whole selection before any display page/window.");
-const original=ordered.map(e=>e._id);sortAgendaEvents(ordered,"title");assert.deepEqual(ordered.map(e=>e._id),original,"Never mutate input snapshots.");
+const original=ordered.map(e=>e._id);sortAgendaEvents(ordered,"popularity");assert.deepEqual(ordered.map(e=>e._id),original,"Never mutate input snapshots.");
+const popularFixtures = [
+  makeEvent({ _id: "missing", time: "10:00" }),
+  makeEvent({ _id: "zero", time: "18:00", venueInstagramFollowerCount: 0 }),
+  makeEvent({ _id: "popular-later", time: "23:00", venueInstagramFollowerCount: 15_000 }),
+  makeEvent({ _id: "invalid", time: "12:00", venueInstagramFollowerCount: -1 }),
+  makeEvent({ _id: "popular-earlier", time: "20:00", venueInstagramFollowerCount: 15_000 }),
+  makeEvent({ _id: "smaller", time: "14:00", venueInstagramFollowerCount: 6_000 }),
+  makeEvent({ _id: "popular-tie", time: "20:00", venueInstagramFollowerCount: 15_000 }),
+];
+assert.deepEqual(sortAgendaEvents(popularFixtures, "popularity").map(event => event._id),
+  ["popular-earlier", "popular-tie", "popular-later", "smaller", "zero", "missing", "invalid"],
+  "Popularity orders by descending venue follower count, then by agenda time and source order.");
 const display=[makeEvent({_id:"normalized",time:"23:00",displayTimeStart:"18:00",timeStatus:"confirmed"}),makeEvent({_id:"raw",time:"19:00",timeStatus:"confirmed"})];
 assert.equal(sortAgendaEvents(display,"time")[0]._id,"normalized");
 const origin = { latitude: 44.81, longitude: 20.46 };

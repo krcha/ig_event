@@ -190,24 +190,6 @@ try {
             await page.locator('[data-calendar-kind-toggle="all"][aria-pressed="true"]:visible').waitFor();
             return { clientOnly: true };
           });
-          await openCalendarFilters();
-          await step("calendar", "filter-start-time", async () => {
-            const time = await page.locator('[data-calendar-time-band]:visible').first().getAttribute("data-calendar-time-band", { timeout: 1000 }).catch(() => null);
-            if (!time) return skip("No time band is available on the selected day.");
-            await page.locator('[data-calendar-time-filter="true"]:visible').selectOption(time);
-            await queryEquals("time", time);
-            await page.waitForFunction((key) => {
-              const bands = [...document.querySelectorAll('[data-calendar-time-band]')];
-              return bands.length === 1 && bands[0].dataset.calendarTimeBand === key;
-            }, time);
-            return { time, clientOnly: true };
-          });
-          await step("calendar", "clear-start-time", async () => {
-            if (!new URL(page.url()).searchParams.has("time")) return skip("No time band was selected.");
-            await page.locator('[data-calendar-time-filter="true"]:visible').selectOption("");
-            await queryEquals("time", "");
-            return { clientOnly: true };
-          });
           await step("calendar", "search-submit-no-match", async () => {
             const input = await searchInput();
             await input.fill("__performance_no_match__");
@@ -222,6 +204,11 @@ try {
             await queryEquals("q", "");
           });
           await openCalendarFilters();
+          await step("calendar", "sort-popularity", async () => {
+            await page.locator('select[name="sort"]:visible').first().selectOption("popularity");
+            await queryEquals("sort", "popularity");
+            await page.locator('[data-calendar-sort-mode="popularity"]:visible').waitFor();
+          });
           await step("calendar", "sort-venue", async () => {
             await page.locator('select[name="sort"]:visible').first().selectOption("venue");
             await queryEquals("sort", "venue");

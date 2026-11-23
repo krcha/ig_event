@@ -48,7 +48,6 @@ type CalendarSearchParams = {
   venue?: string | string[];
   category?: string | string[];
   genre?: string | string[];
-  time?: string | string[];
   format?: string | string[];
   hide?: string | string[];
   sort?: string | string[];
@@ -197,6 +196,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     venueId: event.venueId,
     venueCategory: event.venueCategory,
     venueHours: event.venueHours,
+    venueInstagramFollowerCount: event.venueInstagramFollowerCount,
     venueLatitude: event.venueLatitude,
     venueLongitude: event.venueLongitude,
     artists: event.artists,
@@ -343,7 +343,6 @@ export default async function CalendarPage({ searchParams }: CalendarPageProps) 
     hide: hiddenCategoriesParam,
     category: getSingleValue(resolvedSearchParams?.category),
     genre: getSingleValue(resolvedSearchParams?.genre),
-    time: getSingleValue(resolvedSearchParams?.time),
     format: getSingleValue(resolvedSearchParams?.format),
     sort: hiddenSort,
     open: openNowActive ? "now" : undefined,

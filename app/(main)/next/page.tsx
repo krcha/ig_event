@@ -4,6 +4,7 @@ import { localizedMetadata } from "@/lib/i18n/seo";
 import { travelText } from "@/lib/travel/copy";
 import { getOpenNowEventWindow } from "@/lib/venues/venue-open-now";
 import { loadPublicCalendarEventsWindow } from "@/lib/events/public-events";
+import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import { loadPublicVenueDirectory } from "@/lib/venues/public-venue-pages";
 import { projectCompassPlaces } from "@/lib/travel/compass-projection";
 import { CompassFlow } from "@/components/travel/compass-flow";
@@ -17,9 +18,14 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function NextPlacePage() {
   const now = Date.now();
+  const window = getOpenNowEventWindow(now);
   const [directory, calendar] = await Promise.all([
     loadPublicVenueDirectory(),
-    loadPublicCalendarEventsWindow({ ...getOpenNowEventWindow(now), includeEventTaxonomy: true }),
+    loadPublicCalendarEventsWindow({
+      ...window,
+      beforeDate: addDaysToDateKey(window.beforeDate, 1),
+      includeEventTaxonomy: true,
+    }),
   ]);
   const places = projectCompassPlaces(directory.venues, calendar.events, now);
   return <CompassFlow places={places} initialNow={now} loadFailed={Boolean(directory.error || calendar.error)} />;

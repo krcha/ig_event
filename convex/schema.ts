@@ -405,6 +405,19 @@ export default defineSchema({
     matches: v.array(performerGenreMatch),
     auditJson: v.string(),
   }).index("by_eventId", ["eventId"]),
+  eventDiscoveryEnrichmentState: defineTable({
+    key: v.literal("upcoming"),
+    fromDate: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    dayKey: v.string(),
+    attempted: v.number(),
+    lease: v.optional(v.object({
+      owner: v.string(),
+      until: v.number(),
+      nextCursor: v.union(v.string(), v.null()),
+      events: v.array(v.object({ eventId: v.id("events"), expectedUpdatedAt: v.number() })),
+    })),
+  }).index("by_key", ["key"]),
   instagramSourceOccurrenceReceipts: defineTable({
     sourceIdentity: v.string(),
     sourceFingerprint: v.string(),

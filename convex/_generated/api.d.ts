@@ -56,6 +56,7 @@ import type * as internal_autonomousModerationRepair from "../internal/autonomou
 import type * as internal_autonomousVenueRepair from "../internal/autonomousVenueRepair.js";
 import type * as internal_campaignLineageReattestationProof from "../internal/campaignLineageReattestationProof.js";
 import type * as internal_carouselMediaProof from "../internal/carouselMediaProof.js";
+import type * as internal_eventDiscoveryExecutor from "../internal/eventDiscoveryExecutor.js";
 import type * as internal_eventRepairs_approvedLegacyVenue from "../internal/eventRepairs/approvedLegacyVenue.js";
 import type * as internal_eventRepairs_approvedPublicationRepairs from "../internal/eventRepairs/approvedPublicationRepairs.js";
 import type * as internal_eventRepairs_evidencePolicy from "../internal/eventRepairs/evidencePolicy.js";
@@ -213,6 +214,7 @@ declare const fullApi: ApiFromModules<{
   "internal/autonomousVenueRepair": typeof internal_autonomousVenueRepair;
   "internal/campaignLineageReattestationProof": typeof internal_campaignLineageReattestationProof;
   "internal/carouselMediaProof": typeof internal_carouselMediaProof;
+  "internal/eventDiscoveryExecutor": typeof internal_eventDiscoveryExecutor;
   "internal/eventRepairs/approvedLegacyVenue": typeof internal_eventRepairs_approvedLegacyVenue;
   "internal/eventRepairs/approvedPublicationRepairs": typeof internal_eventRepairs_approvedPublicationRepairs;
   "internal/eventRepairs/evidencePolicy": typeof internal_eventRepairs_evidencePolicy;

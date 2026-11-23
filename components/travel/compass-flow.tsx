@@ -8,10 +8,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "@/i18n/client";
 import { localizeHref } from "@/i18n/config";
 import { MUSIC_GENRES } from "@/lib/taxonomy/event-discovery";
-import { compassCandidates, getCompassGenres, getCompassMusicBasis, type CompassMusicProfile, type CompassPlace } from "@/lib/travel/compass";
-import { travelText } from "@/lib/travel/copy";
+import { compassCandidates, getCompassGenres, getCompassMusicBasis, getCompassSourceAt, getCompassSourceProgrammes, type CompassMusicProfile, type CompassPlace } from "@/lib/travel/compass";
+import { compassVenueTypeText, travelText } from "@/lib/travel/copy";
 import { formatTravelDuration } from "@/lib/travel/duration";
 import { bearingDegrees, estimateTravel, haversineMeters, type Coordinates } from "@/lib/travel/location";
+import { CompassMatchSpectrum } from "./compass-match-spectrum";
 import { useUserLocation } from "./user-location";
 import { YandexTaxiButton } from "./yandex-taxi-button";
 import styles from "./compass-flow.module.css";
@@ -45,6 +46,8 @@ function readSourceMusicContext(value: unknown): SourceMusicContext {
   const event = context.event;
   if (event != null && (typeof event.id !== "string" || typeof event.title !== "string" || typeof event.date !== "string" ||
     !event.taxonomy || !Array.isArray(event.taxonomy.categories) || !event.taxonomy.categories.every(category => typeof category === "string") ||
+    !Array.isArray(event.taxonomy.formats) || !event.taxonomy.formats.every(format => typeof format === "string") ||
+    typeof event.taxonomy.primaryCategory !== "string" ||
     !Array.isArray(event.taxonomy.genres) || !event.taxonomy.genres.every(genre => musicGenreKeys.has(genre)))) throw new Error("Invalid programme context");
   return { musicProfile: profile, ...(event ? { event } : {}) };
 }
@@ -57,8 +60,14 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   const [now, setNow] = useState(initialNow);
   const [phase, setPhase] = useState<"confirm" | "vibe" | "results">("confirm");
   const [rejectedIds, setRejectedIds] = useState<string[]>([]);
-  const [source, setSource] = useState<CompassPlace | null>(null);
-  const [sourceLookup, setSourceLookup] = useState<{ venueId: string | null; status: "loading" | "ready" | "error" }>({ venueId: null, status: "ready" });
+  const [manualVenueId, setManualVenueId] = useState("");
+  const [confirmedPlace, setConfirmedPlace] = useState<CompassPlace | null>(null);
+  const [sourceReference, setSourceReference] = useState("");
+  const [sourceLookup, setSourceLookup] = useState<{
+    key: string;
+    status: "loading" | "ready" | "error";
+    context?: SourceMusicContext;
+  }>();
   const [sourceLookupAttempt, setSourceLookupAttempt] = useState(0);
   const [vibe, setVibe] = useState<"same" | "different" | "nearby">("same");
   const [mounted, setMounted] = useState(false);
@@ -89,36 +98,58 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   }, []);
   const nearest = useMemo(() => position ? places.map((place, order) => ({ place, order, meters: haversineMeters(position, place) }))
     .sort((a, b) => a.meters - b.meters || a.order - b.order).map(({ place }) => place) : [], [places, position]);
-  const confirmation = nearest.find((place) => !rejectedIds.includes(place.id));
-  const candidates = useMemo(() => source && position ? compassCandidates(places, source, position, vibe, now) : [], [places, source, position, vibe, now]);
-  useEffect(() => { setIndex((current) => Math.min(current, Math.max(0, candidates.length - 1))); }, [candidates.length]);
-  const destination = candidates[Math.min(index, Math.max(0, candidates.length - 1))];
-  const sourceGenres = source ? getCompassGenres(source) : [];
-  const sourceVenueId = source?.id;
-  const sourceHasGenres = sourceGenres.length > 0;
-  const sourceLookupLoading = Boolean(source && !sourceHasGenres && (sourceLookup.venueId !== source.id || sourceLookup.status === "loading"));
-  const sourceLookupFailed = Boolean(source && !sourceHasGenres && sourceLookup.venueId === source.id && sourceLookup.status === "error");
+  const venueOptions = useMemo(() => [...places].sort((a, b) => a.name.localeCompare(b.name, locale)), [places, locale]);
+  const confirmation = (manualVenueId ? places.find(place => place.id === manualVenueId) : undefined)
+    ?? nearest.find(place => !rejectedIds.includes(place.id));
+  const sourcePlace = confirmedPlace && (places.find(place => place.id === confirmedPlace.id) ?? confirmedPlace);
+  const sourceProgrammes = useMemo(() => sourcePlace ? getCompassSourceProgrammes(sourcePlace, now) : [], [sourcePlace, now]);
+  const currentReference = sourceReference === "venue" || sourceProgrammes.some(event => event.id === sourceReference) ? sourceReference : "";
+  const resolvedSource = useMemo(() => sourcePlace ? getCompassSourceAt(sourcePlace, now,
+    currentReference === "venue" ? "venue" : currentReference ? { eventId: currentReference } : undefined) : undefined,
+  [sourcePlace, now, currentReference]);
+  const sourceVenueId = resolvedSource?.id;
+  const sourceLookupKey = resolvedSource && !currentReference && (!resolvedSource.venueType || resolvedSource.event) && !getCompassGenres(resolvedSource).length
+    ? `${resolvedSource.id}/${resolvedSource.event?.id ?? ""}` : undefined;
+  const lookup = sourceLookup?.key === sourceLookupKey ? sourceLookup : undefined;
+  const sourceLookupLoading = Boolean(sourceLookupKey && (!lookup || lookup.status === "loading"));
+  const sourceLookupFailed = lookup?.status === "error";
   useEffect(() => {
-    if (!sourceVenueId || sourceHasGenres) return;
+    if (!sourceVenueId || !sourceLookupKey) return;
     const controller = new AbortController();
     let cancelled = false;
     let timedOut = false;
-    setSourceLookup({ venueId: sourceVenueId, status: "loading" });
+    setSourceLookup({ key: sourceLookupKey, status: "loading" });
     const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, 8_000);
     void fetch(`/api/travel/music-profile/${encodeURIComponent(sourceVenueId)}`, { cache: "no-store", signal: controller.signal })
       .then(async response => {
         if (!response.ok) throw new Error("Music context unavailable");
         const context = readSourceMusicContext(await response.json());
         if (cancelled || controller.signal.aborted) return;
-        setSource(current => current?.id === sourceVenueId ? { ...current, musicProfile: context.musicProfile, ...(context.event ? { event: context.event } : {}) } : current);
-        setSourceLookup({ venueId: sourceVenueId, status: "ready" });
+        setSourceLookup({ key: sourceLookupKey, status: "ready", context });
       }).catch(() => {
-        if (!cancelled && (!controller.signal.aborted || timedOut)) setSourceLookup({ venueId: sourceVenueId, status: "error" });
+        if (!cancelled && (!controller.signal.aborted || timedOut)) setSourceLookup({ key: sourceLookupKey, status: "error" });
       }).finally(() => clearTimeout(deadline));
     return () => { cancelled = true; clearTimeout(deadline); controller.abort(); };
-  }, [sourceVenueId, sourceHasGenres, sourceLookupAttempt]);
-  const destinationGenres = destination ? getCompassGenres(destination) : [];
+  }, [sourceVenueId, sourceLookupKey, sourceLookupAttempt]);
+  const source = useMemo(() => {
+    const context = lookup?.context;
+    if (!resolvedSource || !context || !context.musicProfile.genres.length) return resolvedSource;
+    if (context.musicProfile.basis === "recent" && sourcePlace) {
+      return getCompassSourceAt({ ...sourcePlace, recentMusicProfile: context.musicProfile }, now);
+    }
+    return context.event && context.event.id === resolvedSource.event?.id
+      ? { ...resolvedSource, musicProfile: context.musicProfile } : resolvedSource;
+  }, [lookup, now, resolvedSource, sourcePlace]);
+  const candidates = useMemo(() => source && position ? compassCandidates(places, source, position, vibe, now) : [], [places, source, position, vibe, now]);
+  useEffect(() => { setIndex((current) => Math.min(current, Math.max(0, candidates.length - 1))); }, [candidates.length]);
+  const destination = candidates[Math.min(index, Math.max(0, candidates.length - 1))];
+  const destinationEvent = destination?.recommendation.basis === "venue" ? undefined : destination?.event;
+  const destinationGenres = destinationEvent && destination ? getCompassGenres(destination) : [];
+  const destinationVenueType = destination?.venueType && compassVenueTypeText(locale, destination.venueType);
+  const sourceGenres = source ? getCompassGenres(source) : [];
+  const sourceVenueType = source?.venueType && compassVenueTypeText(locale, source.venueType);
   const sourceHasCategory = source?.event?.taxonomy.categories.some(category => category !== "other") ?? false;
+  const sourceContextUsable = Boolean(source?.venueType || sourceGenres.length || sourceHasCategory);
   const genreLabel = (genres: ReturnType<typeof getCompassGenres>) => genres.map(key => MUSIC_GENRES.find(genre => genre.key === key)?.label).join(" · ");
   const musicBasisLabel = (place: CompassPlace) => t(getCompassMusicBasis(place) === "recent" ? "musicRecent"
     : place.musicProfile?.evidence === "estimate" ? "musicEstimated"
@@ -144,8 +175,8 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   const delta = ((targetAngle - angle.current + 540) % 360 + 360) % 360 - 180;
   const displayedAngle = angle.current + delta;
   useEffect(() => { angle.current = displayedAngle; }, [displayedAngle]);
-  function chooseVibe(next: "same" | "different" | "nearby") { void enableCompass(true); warmRouteMap(); routeRequest.current?.abort(); setRouteStatus("idle"); setRouteVisible(false); setVibe(next); setIndex(0); setPhase("results"); }
-  function reset() { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("confirm"); setSource(null); setRejectedIds([]); setIndex(0); setRoute(null); setRouteVisible(false); }
+  function chooseVibe(next: "same" | "different" | "nearby") { void enableCompass(true); warmRouteMap(); routeRequest.current?.abort(); setNow(Date.now()); setRouteStatus("idle"); setRouteVisible(false); setVibe(next); setIndex(0); setPhase("results"); }
+  function reset() { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("confirm"); setConfirmedPlace(null); setSourceReference(""); setSourceLookup(undefined); setManualVenueId(""); setRejectedIds([]); setIndex(0); setRoute(null); setRouteVisible(false); }
   function hideRoute() { void enableCompass(true); routeRequest.current?.abort(); setRouteStatus("idle"); setRouteVisible(false); requestAnimationFrame(() => routeButton.current?.focus({ preventScroll: true })); }
   function nudge() { setNudged(false); requestAnimationFrame(() => setNudged(true)); if (nudgeTimer.current) clearTimeout(nudgeTimer.current); nudgeTimer.current = setTimeout(() => setNudged(false), 800); }
   const stopCompass = useCallback(() => {
@@ -231,7 +262,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   }
   return <main className={styles.page} data-compass-phase={!position ? "locate" : phase}>
     <div className={styles.headingRow}>
-      <div><h1 className={styles.heading}>{t("next")}</h1>{position && phase === "results" ? <p className={styles.modeLabel}>{t(vibe === "same" ? "same" : vibe === "different" ? "different" : "nearby")}<small>{t("nearest")}</small></p> : null}</div>
+      <div><h1 className={styles.heading}>{t("next")}</h1>{position && phase === "results" ? <p className={styles.modeLabel}>{t(vibe === "same" ? "same" : vibe === "different" ? "different" : "nearby")}<small>{vibe === "nearby" ? t("nearest") : source?.event?.title ?? source?.name}</small></p> : null}</div>
       {position && phase === "results" ? <button type="button" className={styles.textButton} onClick={() => { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("vibe"); }}>{t("change")}</button> : position && phase === "vibe" ? <button className={styles.resetButton} type="button" onClick={reset} aria-label={t("reset")} title={t("reset")}><LocateFixed size={18} aria-hidden="true" /></button> : null}
     </div>
     {!position ? <section className={styles.step}>
@@ -241,36 +272,57 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
       {error ? <p role="status" className={styles.error}>{error}</p> : null}
     </section> : phase === "confirm" ? <section className={`${styles.step} ${styles.confirm}`} key="confirm">
       <h2 className={styles.title}>{t("here")}</h2>
-      <p className={styles.muted}>{t("nearest")}</p>
+      {!manualVenueId ? <p className={styles.muted}>{t("nearest")}</p> : null}
       {confirmation ? <>
         <div className={styles.place} key={confirmation.id}><MapPin size={24} className="text-primary" aria-hidden="true" /><h3 className={styles.name}>{confirmation.name}</h3><p className={styles.address}>{confirmation.address}</p>
           <p className={styles.muted}>≈ {formatTravelDuration(estimateTravel(position, confirmation).walkMinutes, locale)} {t("walk")}</p></div>
-        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => setRejectedIds((ids) => [...ids, confirmation.id])}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); warmRouteMap(); setSource(confirmation); setPhase("vibe"); }}><Check size={18} />{t("yes")}</button></div>
+        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => { setManualVenueId(""); setRejectedIds(ids => [...ids, confirmation.id]); }}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); warmRouteMap(); setNow(Date.now()); setConfirmedPlace(confirmation); setPhase("vibe"); }}><Check size={18} aria-hidden="true" />{t("yes")}</button></div>
       </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); router.refresh(); }}>{t("refresh")}</button></>}
+      {venueOptions.length ? <details className={styles.manualVenue}>
+        <summary className={styles.textButton}>{t("chooseAnotherVenue")}</summary>
+        <label className={styles.sourceReference}>
+          <span>{t("venueName")}</span>
+          <select value={manualVenueId} onChange={event => setManualVenueId(event.target.value)}>
+            <option value="">{t("nearestVenue")}</option>
+            {venueOptions.map(place => <option key={place.id} value={place.id}>{place.name}{place.address ? ` · ${place.address}` : ""}</option>)}
+          </select>
+        </label>
+      </details> : null}
     </section> : phase === "vibe" ? <section className={`${styles.step} ${styles.vibe}`} key="vibe">
-      <p className={styles.muted}>{source?.name}</p>
+      <p className={styles.muted}>{source?.name}{sourceVenueType ? ` · ${sourceVenueType}` : null}</p>
+      {sourceProgrammes.length ? <label className={styles.sourceReference}>
+        <span>{t("sourceReference")}</span>
+        <select value={currentReference} onChange={event => setSourceReference(event.target.value)}>
+          <option value="">{t("sourceAutomatic")}</option>
+          <option value="venue">{t("sourceVenue")}</option>
+          {sourceProgrammes.map(event => <option key={event.id} value={event.id}>{event.title}{event.time ? ` · ${event.time}` : ""}</option>)}
+        </select>
+      </label> : null}
+      {source?.event && !currentReference ? <p className={styles.sourceEvent}>{source.event.title}</p> : null}
       {source && sourceGenres.length ? <p className={`${styles.muted} ${styles.musicSummary}`}>{genreLabel(sourceGenres)}<span className={styles.musicBasis}>{musicBasisLabel(source)}</span></p> : null}
       <h2 className={styles.title}>{t("vibe")}</h2>
       {sourceLookupLoading ? <p className={styles.lookupStatus} role="status"><LoaderCircle size={14} className="motion-safe:animate-spin" aria-hidden="true" /><span>{t("musicLookup")}</span></p> : null}
-      <button type="button" className={styles.choice} disabled={sourceLookupLoading} onClick={() => chooseVibe("same")}><Music2 size={27} /><span><strong>{t("same")}</strong><small>{t("sameHint")}</small></span></button>
-      <button type="button" className={styles.choice} disabled={sourceLookupLoading} onClick={() => chooseVibe("different")}><Shuffle size={27} /><span><strong>{t("different")}</strong><small>{t("differentHint")}</small></span></button>
-      {sourceLookupFailed ? <>
-        <p className={`${styles.muted} ${styles.vibeNote}`} role="status">{t("musicLookupFailed")}</p>
-        <div className={styles.lookupActions}><button type="button" className={styles.textButton} onClick={() => setSourceLookupAttempt(attempt => attempt + 1)}>{t("refresh")}</button><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></div>
-      </> : sourceLookupLoading ? <button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button>
-        : !sourceGenres.length && !sourceHasCategory ? <><p className={`${styles.muted} ${styles.vibeNote}`}>{t("unknownVibe")}</p><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></>
-          : !sourceGenres.length ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("musicUnknown")}</p> : null}
+      <button type="button" className={styles.choice} disabled={sourceLookupLoading && !sourceContextUsable} onClick={() => chooseVibe("same")}><Music2 size={27} aria-hidden="true" /><span><strong>{t("same")}</strong><small>{t("sameHint")}</small></span></button>
+      <button type="button" className={styles.choice} disabled={sourceLookupLoading && !sourceContextUsable} onClick={() => chooseVibe("different")}><Shuffle size={27} aria-hidden="true" /><span><strong>{t("different")}</strong><small>{t("differentHint")}</small></span></button>
+      {sourceLookupFailed ? <p className={`${styles.muted} ${styles.vibeNote}`} role="status">{t("musicLookupFailed")}</p>
+        : !sourceLookupLoading && !sourceContextUsable ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("unknownVibe")}</p>
+          : !sourceLookupLoading && source?.event && !sourceGenres.length ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("musicUnknown")}</p> : null}
+      <div className={styles.lookupActions}>
+        <button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} aria-hidden="true" /></button>
+        {sourceLookupFailed ? <button type="button" className={styles.textButton} onClick={() => setSourceLookupAttempt(attempt => attempt + 1)}>{t("refresh")}</button> : null}
+      </div>
     </section> : <section className={`${styles.step} ${styles.results}`} key="results">
       <div className={styles.footer}>
-        {destination ? <Link href={localizeHref(destination.event ? `/events/${destination.event.id}` : `/venues/${destination.id}`, locale)} className={styles.eventLink}>{t(destination.event ? "details" : "venueDetails")}<ArrowRight size={13} aria-hidden="true" /></Link> : <span />}
+        {destination ? <Link href={localizeHref(destinationEvent ? `/events/${destinationEvent.id}` : `/venues/${destination.id}`, locale)} className={styles.eventLink}>{t(destinationEvent ? "details" : "venueDetails")}<ArrowRight size={13} aria-hidden="true" /></Link> : <span />}
         <button type="button" className={styles.textButton} onClick={reset}>{t("reset")}</button>
       </div>
       {destination && estimate ? <>
-        <div className={styles.resultTitle} key={destination.id}>
+        <div className={styles.resultTitle} aria-live="polite" aria-atomic="true">
           <h2 className={styles.name}>{destination.name}</h2><p className={styles.address}>{destination.address}</p>
-          <p className={styles.open}>{t("open")}{destination.hoursLabel ? ` · ${t("until")} ${destination.hoursLabel}` : ""}</p>
-          {destination.event ? <p className={styles.eventTitle}>{destination.event.title}</p> : null}
+          <p className={styles.open}>{destinationVenueType ? `${destinationVenueType} · ` : ""}{t(destination.openNow ? "open" : "openAtArrival")}{destination.hoursLabel ? ` · ${t("until")} ${destination.hoursLabel}` : ""}</p>
+          {destinationEvent ? <p className={styles.eventTitle}>{destinationEvent.title}{destination.recommendation.programmeTiming === "unknown-start" ? <span className={styles.musicBasis}>{t("unknownStart")}</span> : null}</p> : null}
           {destinationGenres.length ? <p className={`${styles.muted} ${styles.genreLabel}`}>{genreLabel(destinationGenres)}<span className={styles.musicBasis}>{musicBasisLabel(destination)}</span></p> : null}
+          <CompassMatchSpectrum locale={locale} score={destination.recommendation.score} reason={destination.recommendation.reason} />
         </div>
         <div className={styles.directionArea} data-compass-direction="true" data-compass-status={orientationUnavailable || routeStatus === "error" ? "true" : undefined} id="where-next-direction">
           {routeVisible ? <div className={styles.route} aria-busy={routeStatus === "loading"}>

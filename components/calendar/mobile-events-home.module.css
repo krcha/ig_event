@@ -120,28 +120,10 @@
 }
 
 .facetRow button[aria-pressed=true] .facetCount { color: inherit; }
-.facetRow .activeTime { border-color: var(--detail); color: var(--detail); }
 .facetLabel { margin-inline: 2px 3px; font-size: 13px; font-weight: 600; }
-
-.startFilter {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.startFilter > span { flex: none; max-width: 42%; }
-.startFilter .sort { font-size: 16px; font-weight: 500; }
-
-@media (min-width: 768px) {
-  .extraFilters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr); }
-}
 
 @media (max-width: 767px) {
   .stickyFilters nav { height: 100%; }
-  .startFilter { grid-column: 1 / -1; }
   .eventRow:has([data-expanded=true]) .venueHours { display: none; }
 }
 

@@ -7,7 +7,7 @@ import { getEventSessionLabel } from "./event-session";
 import type { CalendarAgendaEvent, CalendarEventSummary } from "./calendar-agenda-types";
 import type { OpenNowEventState } from "../venues/venue-open-now";
 
-/** Keep hours JSON, descriptions and source evidence on the server. */
+/** Keep hours JSON, descriptions, follower counts and source evidence on the server. */
 export function projectCalendarAgendaEvents(
   events: readonly CalendarEventSummary[],
   mobileOrder: ReadonlyMap<string, number>,
@@ -20,6 +20,7 @@ export function projectCalendarAgendaEvents(
     const row = { ...event };
     delete row.description;
     delete row.venueHours;
+    delete row.venueInstagramFollowerCount;
     return {
       ...row,
       category: getEventPrimaryCategory(event),

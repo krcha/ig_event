@@ -6,12 +6,12 @@ import type { CalendarTimeBandKey } from "./calendar-time-bands";
 export type CalendarEventSummary = Pick<PublicEvent,
   "_id" | "title" | "description" | "date" | "time" | "timeStatus" | "dayPeriod" |
   "displayTimeEnd" | "displayTimeLabel" | "displayTimeSource" | "displayTimeStart" |
-  "venue" | "venueId" | "venueCategory" | "venueHours" | "venueLatitude" | "venueLongitude" | "artists" | "eventType" |
+  "venue" | "venueId" | "venueCategory" | "venueHours" | "venueInstagramFollowerCount" | "venueLatitude" | "venueLongitude" | "artists" | "eventType" |
   "ticketPrice" | "attendance" | "attendanceCount" | "attendeeCount" | "attendees" |
   "attendeesCount" | "going" | "goingCount" | "eventTaxonomy" | "performerGenreResearch" | "timeEvidenceKind"
 >;
 
-export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "venueHours"> & {
+export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "venueHours" | "venueInstagramFollowerCount"> & {
   category: EventPrimaryCategory;
   tags: string[];
   mobileOrder: number;

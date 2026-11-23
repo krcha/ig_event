@@ -1,18 +1,16 @@
 "use client";
 
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 import { DISCOVERY_CATEGORIES, MUSIC_GENRES } from "@/lib/taxonomy/event-discovery";
 import {
-  calendarBandLabels,
   musicIntents,
   type DiscoveryCategory,
   type DiscoveryGenre,
   type DiscoveryGenreFilter,
 } from "./calendar-discovery-state";
 import { replaceCalendarDiscoveryFilters } from "./calendar-discovery-query";
-import type { CalendarTimeBandKey } from "@/lib/events/calendar-time-band-definitions";
 import styles from "./mobile-events-home.module.css";
 
 const quickCategories = DISCOVERY_CATEGORIES.filter(({ key }) => key === "party" || key === "live");
@@ -27,12 +25,11 @@ type CategoryFiltersProps = {
   genre?: DiscoveryGenreFilter;
   genreCounts: ReadonlyMap<DiscoveryGenre, number>;
   unknownGenreCount: number;
-  time?: CalendarTimeBandKey;
   format?: "stand-up";
   standUpCount: number;
 };
 
-export function CalendarDiscoveryFilters({ categories, categoryCounts, allCount, hasLegacyFilter, genre, genreCounts, unknownGenreCount, time, format, standUpCount }: CategoryFiltersProps) {
+export function CalendarDiscoveryFilters({ categories, categoryCounts, allCount, hasLegacyFilter, genre, genreCounts, unknownGenreCount, format, standUpCount }: CategoryFiltersProps) {
   const panelId = useId();
   const extraGenresId = useId();
   const selectedMore = categories.filter(key => key !== "party" && key !== "live").length;
@@ -108,11 +105,5 @@ export function CalendarDiscoveryFilters({ categories, categoryCounts, allCount,
         <PublicText text="Stand-up" /><span className={styles.facetCount}>{standUpCount}</span>
       </button>
     </LocalizedElement> : null}
-    {time ? <div className={styles.facetRow}>
-      <LocalizedElement as="button" className={styles.activeTime} type="button" aria-label="Ukloni filter vremena"
-        onClick={() => replaceCalendarDiscoveryFilters({ time: null })}>
-        <PublicText text={calendarBandLabels[time]} /><X aria-hidden="true" size={14} />
-      </LocalizedElement>
-    </div> : null}
   </>;
 }

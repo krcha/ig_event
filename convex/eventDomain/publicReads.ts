@@ -432,7 +432,7 @@ async function loadApprovedWindowRawPage(
 
 export async function getPublicApprovedEventHandler(
   ctx: QueryCtx,
-  args: { id: string },
+  args: { id: string; includeEventTaxonomy?: boolean },
 ) {
   const eventId = ctx.db.normalizeId("events", args.id);
   if (!eventId) return null;
@@ -450,8 +450,12 @@ export async function getPublicApprovedEventHandler(
   if (!projected) return null;
   const structuredDataFacts = getConfirmedEventSchemaFacts(event, projected.venueId);
   const artistDisplayCredits = getEventArtistDisplayCredits(event);
+  const discovery = args.includeEventTaxonomy
+    ? await loadPublicEventDiscoveryLabels(ctx, event, true)
+    : undefined;
   return {
     ...projected,
+    ...discovery,
     ...(structuredDataFacts ? { structuredDataFacts } : {}),
     ...(artistDisplayCredits.some((credit, index) => credit !== projected.artists[index])
       ? { artistDisplayCredits }

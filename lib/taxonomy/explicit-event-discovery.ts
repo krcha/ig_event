@@ -39,7 +39,7 @@ export const genreProof: Record<MusicGenre, RegExp> = {
   "hip-hop": /\b(?:hip hop|hiphop|rap|rep|trap)\b/,
   "rnb-soul": /\b(?:r and b|r n b|rnb|rhythm and blues|ritam i bluz|soul)\b/,
   "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz)(?:a|u|om)?|(?<!rhythm and |ritam i )(?:blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
-  folk: /\b(?:(?<!weird )(?<!freak )(?<!indie )folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*)\b/,
+  folk: /\b(?:(?<!weird )(?<!freak )(?<!indie )folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*|starogradsk\w* (?:muzik\w*|pesm\w*))\b/,
   classical: /\b(?:classical|klasicn\w* muzik\w*|klassichesk\w* muzy\w*|klavirsk\w* resital\w*|piano recital|harpsichord concert|opera|baroque|barok)\b/,
   latin: /\b(?:latino|latin(?: music)?|salsa|bachata|reggaeton|flamenco|kubansk\w* muzik\w*)\b/,
   "afro-amapiano": /\b(?:afrobeats?|afro beats?|amapiano|afro house)\b/,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getPublicApprovedEvent } from "../convex/events.ts";
 import { getPublicVenueMusicEvents, getPublicVenuePage } from "../convex/venues.ts";
 import { addDaysToDateKey } from "../lib/events/nightlife-date.ts";
 
@@ -165,6 +166,20 @@ try {
   assert.equal(projected.get("unknown-time").timeStatus, "unknown");
   assert.equal(projected.get("missing-label").eventTaxonomy, undefined);
   assert.equal(projected.get("stale-label").eventTaxonomy, undefined, "Outdated classifier evidence must remain absent.");
+  const detailFixture = fixture({ events, scrapedPosts: withSources(events), eventDiscoveryLabels: labels,
+    eventPerformerGenreResearch: f.tables.eventPerformerGenreResearch });
+  const plainDetail = await getPublicApprovedEvent._handler(detailFixture.ctx, { id: "performer" });
+  assert.equal(plainDetail._id, "performer");
+  assert.equal(plainDetail.eventTaxonomy, undefined, "Ordinary detail reads only include their existing fields.");
+  assert.ok(!detailFixture.reads.some(read => read.table === "eventDiscoveryLabels"));
+  const reference = await getPublicApprovedEvent._handler(detailFixture.ctx, { id: "performer", includeEventTaxonomy: true });
+  assert.deepEqual(reference.eventTaxonomy.genres, ["house"]);
+  assert.deepEqual(reference.performerGenreResearch, { sources: [{ performer: "Actual Artist", url: profileSource }] });
+  assert.doesNotMatch(JSON.stringify(reference), /PRIVATE_|normalizedFieldsJson|rawExtractionJson|moderationNote|identityUrl/);
+  for (const id of ["pending", "rejected", "ungrounded"]) {
+    assert.equal(await getPublicApprovedEvent._handler(detailFixture.ctx, { id, includeEventTaxonomy: true }), null);
+  }
+  detailFixture.assertUnchanged();
   const eventReads = f.reads.filter(read => read.table === "events");
   assert.equal(eventReads.length, 6);
   for (const index of ["by_venueId_status_date", "by_normalizedVenueHandle_status_date", "by_normalizedVenueIdentity_status_date"]) {

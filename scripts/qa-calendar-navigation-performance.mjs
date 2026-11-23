@@ -211,7 +211,7 @@ assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).va
 legacyOptions.push({ value: "id:venue-b", label: "Other venue", names: ["Old alias"] });
 assert.equal((await selection.resolveCalendarVenueSelection("Old alias", {})).value, "Old alias", "Ambiguous legacy aliases must retain the existing name-matching behavior.");
 
-for (const mobile of [false, true]) for (const sortMode of ["time","late","title","venue", "distance"]) {
+for (const mobile of [false, true]) for (const sortMode of ["time", "popularity", "venue", "distance"]) {
   const VirtualAgendaList = Object.assign(({items,children})=>items.map(children),{qaRender:true});
   const {CalendarAgenda}=compile("components/calendar/calendar-agenda.tsx",{
     react:{useMemo:cb=>cb(),useState:v=>[v,()=>{}],useEffect:()=>{}},"./virtual-agenda-list":{VirtualAgendaList},
@@ -223,7 +223,7 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   const rows=nodes(tree,node=>node.props?.["data-calendar-event-id"]);
   assert.deepEqual(rows.map(node=>node.props["data-calendar-event-id"]),ordered.map(e=>e._id),`The whole ${sortMode} ordering must survive the ${mobile?"mobile":"desktop"} rendering path.`);
   assert.equal(new Set(rows.map(node=>node.props["data-calendar-event-id"])).size,events.length);
-  if(sortMode==="title"||sortMode==="venue"||sortMode==="distance")assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Alphabetical and distance lists cannot be regrouped by time.");
+  if (sortMode !== "time") assert.equal(nodes(tree,node=>node.props?.["data-calendar-time-band"]!==undefined).length,0,"Popularity, venue and distance lists cannot be regrouped by time.");
 }
 
 {
@@ -299,9 +299,9 @@ for (const mobile of [false, true]) for (const sortMode of ["time","late","title
   assert.equal(nodes(categoriesOnly.row(jazz._id), node => node.props?.["data-calendar-genre-label"] === "jazz-blues")[0].props.children, "Džez i bluz");
   assert.match(JSON.stringify(nodes(categoriesOnly.row(hybrid._id), node => node.props?.["data-category-tone"])[0].props.children), /DJ set/);
   const filtered = render("category=party,live&genre=electronic&time=evening");
-  assert.deepEqual(filtered.ids, [hybrid._id], "Category choices are OR, with verified genre and time applied as AND.");
-  assert.equal(filtered.count, 1);
-  assert.equal(filtered.facets.categoryCounts.get("party"), 1);
+  assert.deepEqual(filtered.ids, [hybrid._id, late._id], "Category choices are OR, the genre is AND, and retired time links no longer filter events.");
+  assert.equal(filtered.count, 2);
+  assert.equal(filtered.facets.categoryCounts.get("party"), 2);
   assert.equal(filtered.facets.categoryCounts.get("live"), 1);
   assert.equal(filtered.facets.genreCounts.get("house"), 1, "Legacy title tags must not become verified genre filters.");
   assert.deepEqual(render("genre=unknown").ids, [legacy._id], "Unknown genre matches music without an announced genre only.");
@@ -335,6 +335,20 @@ const agendas = nodes(tree, node => node.type === "CalendarAgenda");
 assert.equal(agendas.length, 1);
 assert.equal(agendas[0].props.events.length, 8);
 assert.ok(!JSON.stringify(agendas[0].props.events).includes("private-sized-hours-data"));
+{
+  pageEvents = events.map((event, index) => ({
+    ...event, venueInstagramFollowerCount: index === events.length - 1 ? 42_424_242 : undefined,
+  }));
+  const popular = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31", sort: "popularity", time: "evening" }) });
+  const agenda = nodes(popular, node => node.type === "CalendarAgenda")[0];
+  assert.equal(agenda.props.events[0]._id, events.at(-1)._id, "The selected-day server route sorts by canonical venue followers before projection.");
+  assert.ok(!JSON.stringify(agenda.props.events).includes("42424242"), "The calendar agenda hydrates the ranked events without follower counts.");
+  const toolbar = nodes(popular, node => node.type === "EventsToolbar")[0];
+  const params = new URL(toolbar.props.openNowHref, seo.SITE_ORIGIN).searchParams;
+  assert.equal(params.get("sort"), "popularity");
+  assert.equal(params.has("time"), false);
+  pageEvents = events;
+}
 const canonicalAgenda = JSON.stringify(agendas[0].props.events);
 for (const locale of localeConfig.LOCALES) {
   pageLocale = locale;

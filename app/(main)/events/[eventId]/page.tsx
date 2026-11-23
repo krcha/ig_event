@@ -4,6 +4,7 @@ import { getEventContentLocales, getLocalizedEventDescription } from "@/lib/i18n
 import { localizeHref, LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
 import { publicText } from "@/lib/i18n/public-messages";
 import { formatPublicDate } from "@/lib/i18n/display";
+import { travelText } from "@/lib/travel/copy";
 
 import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 import type { Metadata } from "next";
@@ -17,6 +18,7 @@ import {
   Clock3,
   ExternalLink,
   MapPin,
+  Shuffle,
 } from "lucide-react";
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
@@ -495,6 +497,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     </div>
                   </details>
                 ) : null}
+
+                <Link className="button-secondary min-h-10 gap-2 px-3" href={`/next/event/${event._id}`} prefetch={false}>
+                  <Shuffle aria-hidden="true" className="h-4 w-4" />{travelText(locale, "compareEvents")}
+                </Link>
 
                 <div className="hidden flex-wrap gap-2 md:flex">
                   <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="full" />

@@ -168,7 +168,7 @@ export const classifyPendingModerationUniqueness = query({
 });
 
 export const getPublicApprovedEvent = query({
-  args: { id: v.string() },
+  args: { id: v.string(), includeEventTaxonomy: v.optional(v.boolean()) },
   handler: getPublicApprovedEventHandler,
 });
 

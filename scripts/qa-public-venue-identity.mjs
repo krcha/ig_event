@@ -22,6 +22,7 @@ const zappa = {
   aliases: ["Old Zappa Hall"],
   category: "club",
   instagramHandle: "zappa_baza",
+  instagramFollowerCount: 15_000,
   latitude: 44.8271,
   location: "Bulevar vojvode Bojovica 30",
   longitude: 20.4519,
@@ -32,6 +33,7 @@ const barka = {
   _id: "venue-zappa-barka",
   aliases: [],
   instagramHandle: "zappa_barka",
+  instagramFollowerCount: 0,
   latitude: 44.8338,
   location: "Usce bb",
   longitude: 20.4346,
@@ -51,6 +53,7 @@ const branchTwo = {
   ...branchOne,
   _id: "venue-branch-two",
   instagramHandle: "same_brand_two",
+  instagramFollowerCount: 7_000,
   latitude: 44.805,
   location: "Second Street 2",
   longitude: 20.475,
@@ -109,6 +112,7 @@ const originalFixtures = [
     venue: "Public source venue text",
     venueAliases: ["Private alias"],
     venueId: "hidden-venue-id",
+    venueInstagramFollowerCount: 100_000,
     venueLocation: "Private location",
   }),
 ];
@@ -168,6 +172,7 @@ try {
   assert.equal(uppercase.venue, "Zappa Baza");
   assert.equal(uppercase.venueId, zappa._id);
   assert.equal(uppercase.instagramHandle, zappa.instagramHandle);
+  assert.equal(uppercase.venueInstagramFollowerCount, zappa.instagramFollowerCount, "Popularity follows the linked venue rather than the stale profile handle.");
   assert.equal(uppercase.venueLocation, zappa.location);
   assert.equal(uppercase.venueLatitude, zappa.latitude);
   assert.equal(uppercase.venueLongitude, zappa.longitude);
@@ -189,6 +194,7 @@ try {
     assert.equal(branchEvent.venueLocation, branch.location);
     assert.equal(branchEvent.venueLatitude, branch.latitude, "Shared names and stale handles must not select another branch's coordinates.");
     assert.equal(branchEvent.venueLongitude, branch.longitude);
+    assert.equal(branchEvent.venueInstagramFollowerCount, branch.instagramFollowerCount);
   }
   for (const eventId of ["removed-location", "partial-location"]) {
     const event = events.find((candidate) => candidate._id === eventId);
@@ -227,6 +233,7 @@ try {
   assert.equal(hidden.venueLocation, undefined);
   assert.equal(hidden.venueLatitude, undefined);
   assert.equal(hidden.venueLongitude, undefined);
+  assert.equal(hidden.venueInstagramFollowerCount, undefined, "A hidden venue must not inherit or expose a copied follower count.");
   assert.equal(hidden.sourceCaption, originalFixtures.at(-1).sourceCaption);
   assert.deepEqual(projectPublicEventVenueDisplay(originalFixtures[0], barka), originalFixtures[0], "A conflicting venue cannot rename a source-bound event.");
   for (const [latitude, longitude] of [

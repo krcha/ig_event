@@ -5,7 +5,7 @@ import ts from "typescript";
 import { travelText } from "../lib/travel/copy.ts";
 import { formatTravelDuration } from "../lib/travel/duration.ts";
 import { bearingDegrees, estimateTravel, haversineMeters, isCoordinates, yandexDestinationHref } from "../lib/travel/location.ts";
-import { matchesVibe, compassCandidates, eventEndedBeforeArrival } from "../lib/travel/compass.ts";
+import { matchesVibe, compassCandidates, compareCompassEvents, compareCompassMusic, eventEndedBeforeArrival, matchesCompassMode } from "../lib/travel/compass.ts";
 import { sortDiscoverByDistance } from "../lib/discover/distance-sort.ts";
 
 const origin = { latitude: 44.8125, longitude: 20.4612 };
@@ -69,6 +69,22 @@ const expired = { ...techno, id: "expired", hours: { ...hours, hoursExpiresAt: n
 assert.deepEqual(compassCandidates([far, source, closed, expired, rock, techno], source, origin, "same", now).map(x => x.id), ["techno", "far"]);
 assert.deepEqual(compassCandidates([far, source, closed, rock, techno], source, origin, "different", now).map(x => x.id), ["rock"]);
 assert.deepEqual(compassCandidates([techno], source, origin, "same", Date.parse("2026-11-18T08:00:00Z")), []);
+
+const taxonomy = (primaryCategory, genres = [], formats = []) => ({ primaryCategory, categories: [primaryCategory], genres, formats });
+const houseDj = taxonomy("party", ["house"], ["dj-set"]);
+const houseLive = taxonomy("live", ["house"], ["concert"]);
+assert.equal(compareCompassEvents(houseDj, houseDj).score, 100);
+assert.ok(matchesCompassMode(compareCompassEvents(houseDj, houseLive).score, "same"));
+assert.ok(compareCompassEvents(houseDj, houseLive).score < 100, "The same genre can be played in a different format.");
+assert.ok(matchesCompassMode(compareCompassEvents(taxonomy("culture", [], ["screening"]), taxonomy("culture", [], ["screening"])).score, "same"));
+assert.ok(matchesCompassMode(compareCompassEvents(taxonomy("culture", [], ["screening"]), taxonomy("food", [], ["tasting"])).score, "different"));
+assert.ok(matchesCompassMode(compareCompassEvents(taxonomy("party", [], ["dj-set"]), taxonomy("live", [], ["concert"])).score, "different"));
+assert.equal(compareCompassEvents(houseDj, taxonomy("party")), undefined);
+assert.equal(compareCompassEvents(houseDj, taxonomy("other")), undefined);
+assert.equal(compareCompassEvents(houseDj, taxonomy("live", ["folk"]), { candidateEstimated: true }), undefined);
+assert.ok(compareCompassEvents(houseDj, houseDj, { candidateEstimated: true }).score < 100);
+assert.ok(matchesCompassMode(compareCompassMusic(["house", "techno"], ["house", "techno", "ambient"]).score, "same"), "A small unclassified component can sit alongside a supported shared core.");
+assert.equal(compareCompassMusic(["house", "techno"], ["house", "techno", "folk"]), undefined, "Explicit crossover does not become a strong recommendation in either direction.");
 
 const locationSource = await readFile(new URL("../components/travel/user-location.tsx", import.meta.url), "utf8");
 assert.doesNotMatch(locationSource, /sessionStorage|console\.|sendBeacon/);
@@ -223,4 +239,4 @@ function compassPermissionHarness() {
 assert.match(flowSource, /function showRoute/);
 assert.match(flowSource, /onClick=\{showRoute\}/);
 assert.doesNotMatch(flowSource, /Heineken|heineken|demoOrigin|demo location/);
-console.log("Travel compass QA passed: GPS distance, genre families/unknowns, confirmed hours/arrival, nearest order and destination-only taxi.");
+console.log("Travel compass QA passed: GPS distance, graded genre and activity comparisons, evidence, confirmed hours/arrival, nearest ties and destination-only taxi.");

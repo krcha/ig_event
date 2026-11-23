@@ -209,6 +209,7 @@ for (const locale of ["en", "ru"]) {
     assert.ok(rewrites.beforeFiles.some((entry) => entry.source === `/${locale}/${route}` && entry.destination === `/${route}`));
   }
   assert.ok(rewrites.beforeFiles.some((route) => route.source === `/${locale}/events/:eventId` && route.destination === "/events/:eventId"));
+  assert.ok(rewrites.beforeFiles.some((route) => route.source === `/${locale}/next/event/:eventId` && route.destination === "/next/event/:eventId"));
   assert.equal(rewrites.beforeFiles.some((route) => route.source === `/${locale}/:path*`), false,
     "A broad rewrite could expose alternate operational or API paths.");
 }

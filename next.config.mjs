@@ -111,6 +111,7 @@ const nextConfig = {
           source: `/${locale}/${page}`, destination: `/${page}`,
         })),
         { source: `/${locale}/events/:eventId`, destination: "/events/:eventId" },
+        { source: `/${locale}/next/event/:eventId`, destination: "/next/event/:eventId" },
         { source: `/${locale}/venues/:venueId`, destination: "/venues/:venueId" },
         { source: `/${locale}/sign-in/:path*`, destination: "/sign-in/:path*" },
         { source: `/${locale}/sign-up/:path*`, destination: "/sign-up/:path*" },

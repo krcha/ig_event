@@ -40,11 +40,12 @@ for (const covered of [undefined, {fromDate:"2026-10-01",beforeDate:"2026-11-01"
 }
 const searchUrl = new URL(buildCalendarFilterUrl("/", [
   ["month", "2026-10"], ["day", "2026-10-29"], ["q", "jazz"],
-], "https://eventzeka.com/?month=2026-10&day=2026-10-29&hide=live,culture,event&open=now&sort=venue"), "https://eventzeka.com");
+], "https://eventzeka.com/?month=2026-10&day=2026-10-29&hide=live,culture,event&open=now&sort=venue&time=night"), "https://eventzeka.com");
 assert.equal(searchUrl.searchParams.get("hide"), "live,culture,event", "Search must preserve the category selected in the live URL.");
 assert.equal(searchUrl.searchParams.get("q"), "jazz");
 assert.equal(searchUrl.searchParams.get("sort"), "venue", "Searching retains the selected venue-name sort.");
 assert.equal(searchUrl.searchParams.get("open"), "now", "Search must preserve active Open now alongside the selected category.");
+assert.equal(searchUrl.searchParams.has("time"), false, "Search drops the retired start-time filter.");
 // Belgrade DST and the existing 07:00 nightlife rollover remain the source of today.
 assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T05:59:00Z")), "2026-10-24");
 assert.equal(getNightlifeDefaultDateKey(new Date("2026-10-25T06:00:00Z")), "2026-10-25");

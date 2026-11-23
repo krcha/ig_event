@@ -70,6 +70,7 @@ export type PublicEvent = {
   venueCategory?: string;
   venueHours?: VenueHoursCacheFields;
   venueId?: string;
+  venueInstagramFollowerCount?: number;
   venueInstagramHandle?: string;
   venueLatitude?: number;
   venueLocation?: string;
@@ -117,6 +118,7 @@ type VenueRecord = {
   hoursJson?: string | null;
   hoursSource?: "osm" | "google" | "manual" | "none" | null;
   hoursTimezone?: string | null;
+  instagramFollowerCount?: number | null;
   latitude?: number | null;
   location?: string | null;
   longitude?: number | null;
@@ -411,6 +413,7 @@ function normalizePublicEvent(
   return {
     ...projectPublicEventVenueDisplay(publicEvent, venue),
     venueId,
+    venueInstagramFollowerCount: venue?.instagramFollowerCount ?? undefined,
     ...(time ? { time } : { time: undefined }),
     timeSource: timeProvenance.source,
     ...(timeProvenance.evidenceText

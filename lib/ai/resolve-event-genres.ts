@@ -14,6 +14,7 @@ import {
   type PerformerGenreResearchResult,
 } from "@/lib/ai/research-performer-genres";
 import { getEventDiscoveryTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
+import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
 import {
   canPublishPerformerGenreSource,
@@ -104,15 +105,16 @@ function validDate(date: string): boolean {
   return Number.isFinite(instant.getTime()) && instant.toISOString().slice(0, 10) === date;
 }
 
-function sourcedMatches(acts: readonly PerformerGenreResearchResult[], lookup: Lookup): PerformerGenreMatch[] {
+function sourcedMatches(acts: readonly PerformerGenreResearchResult[], lookup: Lookup): { matches: PerformerGenreMatch[]; exactListing: boolean } {
   const listingTitle = getEventListingResearchAct(lookup.event)?.billedName;
   const listing = listingTitle ? acts.find((act) => act.listing?.title === listingTitle)?.listing : undefined;
   if (listing && canPublishPerformerGenreSource(listing.identityEvidence.url)) {
     const url = listing.identityEvidence.url;
     const exactStyles = listing.genreEvidence.filter((proof) => proof.url === url && !lookup.excludedGenres.has(proof.genre));
-    if (exactStyles.length) return exactStyles.map(({ genre }) => ({ performer: listing.title, genre, url, identityUrl: url }));
+    if (exactStyles.length) return { exactListing: true,
+      matches: exactStyles.map(({ genre }) => ({ performer: listing.title, genre, url, identityUrl: url })) };
   }
-  return acts.flatMap((act, index) => {
+  const matches = acts.flatMap((act, index) => {
     const billed = lookup.acts[index];
     if (act.status !== "resolved" || act.billedName !== billed.billedName || !act.identityEvidence ||
       !canPublishPerformerGenreSource(act.identityEvidence.url)) return [];
@@ -121,6 +123,14 @@ function sourcedMatches(acts: readonly PerformerGenreResearchResult[], lookup: L
       (!billed.titleOnly || url === identityUrl)).filter(({ genre }) => !lookup.excludedGenres.has(genre))
       .map(({ genre, url }) => ({ performer: act.billedName, genre, url, identityUrl }));
   });
+  return { matches, exactListing: lookup.acts.some(({ titleOnly }) => titleOnly) };
+}
+
+function billedProgrammeCovered(lookup: Lookup, matches: readonly PerformerGenreMatch[]) {
+  const researched = new Set(matches.map(({ performer }) => normalizeTaxonomyText(performer)));
+  const billed = lookup.event.artists.flatMap((artist) =>
+    getPerformerGenreResearchActs({ title: "", artists: [artist] }, lookup.format));
+  return billed.every(({ billedName }) => researched.has(normalizeTaxonomyText(billedName)));
 }
 
 export async function resolveEventGenresBatch(
@@ -140,10 +150,11 @@ export async function resolveEventGenresBatch(
   const explicit = new Map(events.map((event) => [event.key, classifyExplicitEventDiscovery(event)]));
   const needsModel = events.filter(({ key }) => !explicit.get(key)?.complete);
   const classified = needsModel.length
-    ? await (options.classify ?? classifyEventDiscoveryBatch)(needsModel, providerOptions(options, deadlineAt))
-    : { model: "explicit-event-evidence", results: [], usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
-  const byKey = new Map<string | number, EventDiscoveryClassification>(classified.results.map((row) => [row.key, row]));
-  if (classified.results.length !== needsModel.length || byKey.size !== needsModel.length || needsModel.some(({ key }) => !byKey.has(key))) {
+    ? await (options.classify ?? classifyEventDiscoveryBatch)(needsModel, providerOptions(options, deadlineAt)).catch(() => null)
+    : null;
+  const byKey = new Map<string | number, EventDiscoveryClassification>(classified?.results.map((row) => [row.key, row]));
+  if (classified && (classified.results.length !== needsModel.length || byKey.size !== needsModel.length ||
+      needsModel.some(({ key }) => !byKey.has(key)))) {
     throw new Error("Incomplete event genre classification.");
   }
   const lookups: Lookup[] = [];
@@ -151,8 +162,8 @@ export async function resolveEventGenresBatch(
     const modelRow = byKey.get(event.key);
     const local = explicit.get(event.key);
     const titledCategory = local?.titleCategory === "other" ? undefined : local?.titleCategory;
-    let row = modelRow?.taxonomy ? modelRow : local ? { ...local, credits: [], discardedClaims: 0 } : modelRow;
-    if (!row) throw new Error("Missing event genre classification.");
+    let row = modelRow?.taxonomy ? modelRow : local ? { ...local, credits: [], discardedClaims: 0 }
+      : modelRow ?? { taxonomy: null, evidence: [], credits: [], discardedClaims: 0 };
     if (!event.currentTaxonomy && local && (titledCategory || local.taxonomy.categories.length > 1) && modelRow?.taxonomy) {
       const primaryCategory = titledCategory ?? (modelRow.taxonomy.primaryCategory === "other"
         ? local.taxonomy.primaryCategory : modelRow.taxonomy.primaryCategory);
@@ -181,6 +192,10 @@ export async function resolveEventGenresBatch(
         ? "instagram" : "announcement" : "unknown",
       auditJson: JSON.stringify({ credits: event.currentTaxonomy ? [] : row.credits, evidence, discardedClaims: row.discardedClaims }),
     };
+    if (!classified && !local?.complete && !event.currentTaxonomy) {
+      result.deferred = true;
+      return result;
+    }
     const fallback = taxonomy ?? getEventDiscoveryTaxonomy(event);
     const format = getPerformerGenreResearchFormat(fallback);
     const corroborated = taxonomy && corroborateLiveProgrammeGenre(event, taxonomy);
@@ -203,25 +218,9 @@ export async function resolveEventGenresBatch(
     return result;
   });
 
-  const toEstimate = lookups.filter(({ acts }) => acts.some(({ titleOnly }) => !titleOnly));
-  const estimated = toEstimate.length && Date.now() < deadlineAt
-    ? await (options.estimate ?? estimatePerformerGenresBatch)(toEstimate.map(({ event, acts }) => ({
-      key: event.key, eventTitle: event.title, acts: acts.filter(({ titleOnly }) => !titleOnly),
-    })), providerOptions(options, deadlineAt)).catch(() => undefined) : undefined;
-  for (const { event, result, excludedGenres } of toEstimate) {
-    const genres = estimated?.results.get(event.key);
-    const compatible = genres?.filter((genre) => !excludedGenres.has(genre));
-    if (compatible?.length) {
-      result.method = "estimate";
-      result.estimatedGenres = compatible;
-      result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), estimateModel: estimated?.model });
-    } else if (!genres) {
-      result.deferred = true;
-    }
-  }
-
   const groups = groupWebLookups(lookups.filter(({ event, result }) => result.method === "unknown" && validDate(event.date)))
     .map((lookups) => ({ lookups, retried: false }));
+  const skipEstimates = new Set<string>();
   let nextGroup = 0;
   let searchCalls = 0;
   await Promise.all(Array.from({ length: Math.min(groups.length, WEB_CONCURRENCY) }, async () => {
@@ -264,13 +263,22 @@ export async function resolveEventGenresBatch(
             delete result.deferred;
             if (!getPerformerGenreResearchFormat(result.taxonomy)) continue;
           }
-          const matches = sourcedMatches(acts as PerformerGenreResearchResult[], lookup);
+          const { matches, exactListing } = sourcedMatches(acts as PerformerGenreResearchResult[], lookup);
           if (matches.length) {
-            result.method = "web";
-            result.webResearch = { model: found.model, matches,
-              auditJson: JSON.stringify({ responseId: found.responseId, searchCalls: found.searchCalls, acts }) };
-            delete result.deferred;
+            const audit = { responseId: found.responseId, searchCalls: found.searchCalls, acts, exactListing };
+            if (exactListing || billedProgrammeCovered(lookup, matches)) {
+              result.method = "web";
+              result.webResearch = { model: found.model, matches, auditJson: JSON.stringify(audit) };
+            } else {
+              skipEstimates.add(result.eventId);
+              result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), partialProgramme: audit });
+            }
           }
+          if (!result.webResearch && acts.some((act) => act?.status === "ambiguous")) {
+            skipEstimates.add(result.eventId);
+            result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), ambiguousPerformerIdentity: true });
+          }
+          delete result.deferred;
         }
       } catch (error) {
         for (const { result } of group) if (result.method === "unknown") result.deferred = true;
@@ -283,6 +291,24 @@ export async function resolveEventGenresBatch(
       }
     }
   }));
-  return { model: classified.model, results, usage: classified.usage, estimateUsage: estimated?.usage,
+  const toEstimate = lookups.filter(({ result, acts }) => result.method === "unknown" &&
+    !skipEstimates.has(result.eventId) && acts.some(({ titleOnly }) => !titleOnly));
+  const estimated = toEstimate.length && Date.now() < deadlineAt
+    ? await (options.estimate ?? estimatePerformerGenresBatch)(toEstimate.map(({ event, acts }) => ({
+      key: event.key, eventTitle: event.title, acts: acts.filter(({ titleOnly }) => !titleOnly),
+    })), providerOptions(options, deadlineAt)).catch(() => undefined) : undefined;
+  for (const { event, result, excludedGenres } of toEstimate) {
+    const genres = estimated?.results.get(event.key);
+    const compatible = genres?.filter((genre) => !excludedGenres.has(genre));
+    if (compatible?.length) {
+      result.method = "estimate";
+      result.estimatedGenres = compatible;
+      result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), estimateModel: estimated?.model });
+    } else if (!genres) {
+      result.deferred = true;
+    }
+  }
+  return { model: classified?.model ?? "explicit-event-evidence", results,
+    usage: classified?.usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, estimateUsage: estimated?.usage,
     searchCalls, localClassified: events.length - needsModel.length };
 }

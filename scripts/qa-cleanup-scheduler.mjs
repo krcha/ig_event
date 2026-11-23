@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { getFunctionName } from "convex/server";
 import crons from "../convex/crons.ts";
+import { advance as advanceEventDiscovery } from "../convex/internal/eventDiscoveryExecutor.ts";
 import {
   cleanupIngestionArtifactsUntilDone,
   cleanupOrphanedMediaAssetsUntilDone,
@@ -16,6 +17,7 @@ assert.deepEqual(Object.keys(jobs).sort(), [
   "cleanup orphaned media assets",
   "cleanup visitor analytics",
   "delete expired events",
+  "enrich upcoming event discovery",
   "recover automatic moderation evidence",
 ]);
 assert.deepEqual(jobs["cleanup visitor analytics"], {
@@ -28,6 +30,42 @@ assert.deepEqual(jobs["recover automatic moderation evidence"], {
   args: [{}],
   schedule: { type: "interval", minutes: 5 },
 });
+assert.deepEqual(jobs["enrich upcoming event discovery"], {
+  name: "internal/eventDiscoveryExecutor:advance",
+  args: [{}],
+  schedule: { type: "interval", minutes: 10 },
+});
+
+const discoveryEnv = ["EVENT_DISCOVERY_EXECUTOR_ORIGIN", "AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN", "CRON_SECRET"];
+const previousEnv = new Map(discoveryEnv.map((key) => [key, process.env[key]]));
+const previousFetch = globalThis.fetch;
+try {
+  for (const key of discoveryEnv) delete process.env[key];
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push(url.origin);
+    assert.equal(url.pathname, "/api/cron/event-discovery");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.Authorization, "Bearer fixture-cron-secret");
+    assert.equal(options.redirect, "error");
+    return new Response(null, { status: 200 });
+  };
+  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: false, reason: "executor_not_configured" });
+  process.env.CRON_SECRET = "fixture-cron-secret";
+  process.env.AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN = "https://existing-origin.invalid";
+  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: true, reason: "executor_advanced" });
+  process.env.EVENT_DISCOVERY_EXECUTOR_ORIGIN = "https://discovery-origin.invalid";
+  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: true, reason: "executor_advanced" });
+  process.env.EVENT_DISCOVERY_EXECUTOR_ORIGIN += "/some-path";
+  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: false, reason: "invalid_executor_origin" });
+  assert.deepEqual(calls, ["https://existing-origin.invalid", "https://discovery-origin.invalid"]);
+} finally {
+  globalThis.fetch = previousFetch;
+  for (const [key, value] of previousEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
 assert.deepEqual(jobs["approve server-verified unique events"], {
   name: "internal/automaticUniqueApproval:sweepUntilDone",
   args: [{ maxPages: 60 }],

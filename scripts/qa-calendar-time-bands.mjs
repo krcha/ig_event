@@ -231,10 +231,9 @@ const kindToggleSource = readFileSync(
   "components/calendar/event-kind-toggle-chips.tsx",
   "utf8",
 );
-assert.match(calendarSource,/sortMode === "title" \|\| sortMode === "venue"/);
-assert.match(calendarSource,/const ungrouped = alphabetical \|\| sortMode === "distance"/,
-  "Alphabetical and distance selections must both retain their full ordering instead of regrouping by time.");
-assert.match(calendarSource,/AGENDA_BAND_ORDER\[sortMode === "late"/);
+assert.match(calendarSource,/const ungrouped = sortMode !== "time"/,
+  "Popularity, venue and distance selections must retain their full ordering instead of regrouping by time.");
+assert.match(calendarSource,/AGENDA_BAND_ORDER\.map/);
 assert.match(calendarSource,/events: visible/);
 assert.match(calendarSource,/events: orderedVisible/,
   "The ungrouped selection must render the complete sorted matching set.");

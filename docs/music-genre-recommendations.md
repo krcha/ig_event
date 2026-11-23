@@ -1,65 +1,76 @@
-# Music genre recommendations
+# Music and venue recommendations
 
-The existing event-discovery agent remains the source of saved genre labels. Its
-three stages (event classification, known-performer estimates and cited research)
-share the canonical guide in `lib/taxonomy/music-genre-relations.ts`. Related and
-contrasting genres are recommendation metadata, never extra claims inserted into
-the event's actual `genres` array. Existing identity, source-quote, version,
-publication and stale-write checks remain in force.
+The public `/next` compass uses the selected venue's current programme, a
+specific programme selected by the user, or the venue type. The comparison
+link on an approved event's detail page opens `/next/event/[eventId]`. It
+uses the saved taxonomy for that exact occurrence and shows upcoming matches
+in a fourteen-day window starting on the reference date or the current
+Belgrade outing date, whichever is later. That view works without location
+permission. The compass uses distance and opening hours for an immediate visit.
 
 ## Matching
 
-The shared relation model returns same, close, contrast, mixed or unknown. Close
-and contrast edges are explicit application recommendations, not universal claims
-that musical genres have objective opposites. They are symmetric and never use
-transitive closure or contrast-by-negation. For example, House/Techno are close;
-House/Rock contrast. A mixed House/Rock programme cannot be called completely
-different from House. Missing evidence stays unknown.
+The ordered scale runs from strong contrast (0) to the same music or activity
+(100). Similar results score at least 70 and different results at most 30.
+The reason attached to each result describes the matching evidence. Scores
+are product rules; distance resolves ties on the compass. Sharing a format or
+venue type supports a different score from sharing explicit genres.
 
-The same flow uses same/close matches. The different flow requires a supported
-contrast. Known non-musical activity categories remain separate from music-genre
-comparison. Distance sorting runs after eligibility and does not reorder results
-by an invented model confidence score.
+`lib/taxonomy/music-genre-relations.ts` defines one-hop relationships.
+House and techno are related; electronic dance music and regional folk can
+be strong contrast. A mixed programme with a clear musical overlap cannot
+become a strong contrast. Estimates can help find similar results and have
+less weight than sourced evidence. Verified venue contrast remains available
+when the programme has insufficient evidence, and is presented as a venue
+suggestion. A known, open cocktail bar can match another cocktail bar even
+without a listing.
 
-## Programme and source context
+`lib/travel/venue-profile.ts` contains the reviewed Belgrade profiles and
+their sources. It binds existing records to their venue identity and checks
+the address for venues without a reviewed record ID. Opening hours and
+coordinates continue to come from the public directory. A venue profile
+describes the venue even when its current programme changes.
 
-Choose one relevant occurrence per venue, favoring the most recent announced
-start that has not ended. A later programme does not donate its genres to an
-earlier one. Unknown start times retain their uncertainty; a future bill cannot
-establish the current source venue's music. Genre provenance distinguishes an
-announcement, cited performer research and an AI estimate.
+## Background enrichment
 
-When current music is not known, the confirmed source venue may use a clearly
-labeled recent-programme context. It requires at least three distinct music
-dates within thirty days and a supported direction on at least two thirds of
-the twelve most recent dates. Unknown nights count against coverage. Current
-programme evidence wins; an announced non-music activity cannot inherit old
-music. History alone never establishes a destination's current programme.
+The existing event-discovery agent runs after daily ingestion. The Convex
+upcoming discovery sweep also picks up public events from other ingestion and
+approval paths, revised occurrences, and candidates with only a prior estimate.
+The sweep uses an indexed date cursor, daily budget, short lease, stale-write
+checks and retry intervals. It calls the same authenticated Node route on the
+configured web origin. The executor reads `EVENT_DISCOVERY_EXECUTOR_ORIGIN` or
+falls back to `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` in Convex, with
+`CRON_SECRET` matching the web process.
 
-## Bounded reads
+Explicit occurrence text is preferred. When more evidence is needed, the
+worker searches for the specific dated programme or matching performer and
+keeps cited research ahead of model estimates. Ambiguous identity or partially
+researched lineups can stay unresolved; published occurrences remain available.
+The saved genres represent claims about the event. Similarity is calculated
+from the current taxonomy when ranking and never produces extra genre claims.
 
-The initial page reads only the current outing's events. After a venue is
-confirmed, the first-party music-profile endpoint reads stored labels for that
-venue through the additive `venues:getPublicVenueMusicEvents` query. It reuses
-the existing public-grounding path, restricts canonical venue IDs, returns an
-explicit public-field allowlist and reads at most twenty-four historical and
-twelve upcoming cards. No schema change, migration or AI request is involved.
+## Programme and public reads
 
-The Node caller supplies explicit Belgrade outing and next-civil-date arguments,
-so the query cache cannot hold yesterday's window merely because no document
-changed. The API caches/deduplicates results in bounded memory for sixty seconds,
-limits concurrent lookups and times out. The browser cancels stale venue reads
-and distinguishes actual missing data from a failed lookup. GPS is not included
-in the profile request.
+The compass loads a bounded current calendar window and retains a small
+per-venue programme list. It resolves the source programme at the current
+time and the destination programme at estimated arrival, including the
+next civil date around midnight. Unknown start times are labeled separately.
 
-Paid enrichment runs through the existing background agent or a separately
-invoked, scope-limited operator. A click on the compass never launches research.
+The existing optional source venue lookup reuses the bounded public music
+profile read with an explicit field allowlist. History can describe the
+usual source programme when appropriately labeled. It requires three
+distinct music dates within the preceding thirty days and a supported
+direction on at least two-thirds of the twelve most recent dates. Dated
+programme evidence wins. History does not establish current music at a
+destination.
+
+All click-time reads use stored data. Clicking a comparison never starts
+paid enrichment. The public comparison reference uses the approved event
+detail's public visibility checks and only requests taxonomy for that read.
 
 ## Release checks
 
-The release gate includes genre relation/prompt checks, actual Convex query
-grounding and output tests, and programme/history/arrival tests. Browser checks
-cover compact phone layouts, source lookup success/empty/error/cancellation,
-long factual text and a route map replacing the compass. Production deployment
-requires the additive query to be verified before web promotion. The existing
-schema, ingestion, moderation and source event records are preserved.
+`npm run qa:travel` covers compass ranking, programme and arrival handling,
+route safeguards, and event-only ranking. Genre relation and bounded public
+projection checks are also part of `npm run qa:release`. The Convex changes
+must be live before promoting the web release that calls the updated queries.

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import {
+  claimUpcomingBatch,
+  completeUpcomingBatch,
   listDailyInputs,
   listGenreResearchInputs,
   listRecentInputs,
@@ -398,6 +400,7 @@ function dailyQueueFixture() {
   const events = new Map();
   const labels = new Map();
   const webRows = new Map();
+  let enrichmentState = null;
   const posts = [];
   const receipts = [];
   const pages = [];
@@ -459,13 +462,14 @@ function dailyQueueFixture() {
     ingestionRunHandleReceipts: () => receipts,
     eventDiscoveryLabels: () => [...labels.values()],
     eventPerformerGenreResearch: () => [...webRows.values()],
+    eventDiscoveryEnrichmentState: () => enrichmentState ? [enrichmentState] : [],
   };
   const lookupKeys = {
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
     by_creation_time: ["_creationTime", "_creationTime"],
-    by_publicationState_date: ["publicationState", "date"],
+    by_publicationState_date: ["publicationState", "date"], by_key: ["key"],
   };
   const dailyCtx = {
     auth: ctx.auth,
@@ -508,6 +512,11 @@ function dailyQueueFixture() {
         } };
       },
       insert: async (table, data) => {
+        if (table === "eventDiscoveryEnrichmentState") {
+          assert.equal(enrichmentState, null);
+          enrichmentState = { _id: "enrichment-state", ...data };
+          return;
+        }
         assert.ok(["eventDiscoveryLabels", "eventPerformerGenreResearch"].includes(table));
         const byEvent = table === "eventDiscoveryLabels" ? labels : webRows;
         assert.ok(!byEvent.has(data.eventId));
@@ -518,10 +527,15 @@ function dailyQueueFixture() {
         assert.equal(byEvent.get(data.eventId)?._id, id);
         byEvent.set(data.eventId, { ...data, _id: id });
       },
+      patch: async (id, data) => {
+        assert.equal(id, enrichmentState?._id);
+        Object.assign(enrichmentState, data);
+      },
     },
   };
   labels.get("already-classified").eventId = "already-classified";
-  return { dailyCtx, events, labels, webRows, run, pages, localRow, localDetail, neighbor };
+  return { dailyCtx, events, labels, webRows, run, pages, localRow, localDetail, neighbor,
+    enrichmentState: () => enrichmentState };
 }
 
 try {
@@ -670,7 +684,7 @@ try {
       estimatedGenres: ["techno"],
       webResearch: webResult(),
     }),
-    dailyResult("estimate", { estimatedGenres: ["techno", "house"], webResearch: webResult() }),
+    dailyResult("estimate", { estimatedGenres: ["techno", "house"] }),
     dailyResult("nonmusic", { taxonomy: nonMusic, estimatedGenres: ["rock"] }),
     dailyResult("unbilled", { estimatedGenres: ["pop"] }),
   ), { written: 4, unchanged: 0, stale: 0 });
@@ -681,12 +695,12 @@ try {
   assert.deepEqual(await projection("estimate", false), { eventTaxonomy: party }, "Consumers that opt out do not see estimated genres.");
   assert.deepEqual(await projection("nonmusic"), { eventTaxonomy: nonMusic });
   assert.deepEqual(await projection("unbilled"), { eventTaxonomy: party }, "A generic title cannot stand in for a billed performer.");
-  assert.equal(daily.webRows.size, 0, "Web research cannot supersede an announced genre or model estimate.");
-  assert.deepEqual(await recordDaily(dailyResult("legacy-sibling", { webResearch: webResult() }),
+  assert.equal(daily.webRows.size, 0, "Web research cannot supersede an announced genre.");
+  assert.deepEqual(await recordDaily(dailyResult("legacy-sibling", { estimatedGenres: ["techno"], webResearch: webResult() }),
     dailyResult("ambiguous", { webResearch: webResult([researchMatches[2]]) })), { written: 2, unchanged: 0, stale: 0 });
   assert.deepEqual(await projection("legacy-sibling"), {
     eventTaxonomy: { ...party, genres: ["house"] }, performerGenreResearch: { sources: [{ url: eventUrl, performer: "Selka" }] },
-  }, "Web proof is stored with the new classification and keeps its provenance.");
+  }, "Cited web proof takes priority over an estimate and keeps its provenance.");
   assert.deepEqual(await projection("ambiguous"), { eventTaxonomy: party }, "A web result for a different artist is ignored.");
   assert.deepEqual(await recordDaily(dailyResult("split", {
     taxonomy: { ...party, genres: ["techno"] },
@@ -700,6 +714,43 @@ try {
     [{ url: eventUrl, performer: daily.events.get("split").title.toUpperCase() }], "An exact listing title can corroborate web genre even when the event has billed artists.");
   assert.deepEqual(await recordDaily(dailyResult("single")), { written: 0, unchanged: 1, stale: 0 }, "Replaying the daily batch cannot remove existing genres.");
   assert.ok(!(await readDaily()).has("single"));
+
+  const sweep = dailyQueueFixture();
+  const upcomingIds = ["single", "estimate", "other-run", "no-post", "hidden", "legacy-sibling-pending", "ambiguous"];
+  for (const event of sweep.events.values()) {
+    event.date = upcomingIds.includes(event._id) ? "2099-11-08" : "2000-01-01";
+  }
+  for (const [eventId, taxonomy, auditJson] of [
+    ["single", announced, "{}"],
+    ["estimate", party, '{"estimatedGenres":["techno"]}'],
+    ["ambiguous", party, JSON.stringify({ upcomingGenreRetryAt: Date.now() + 60_000 })],
+  ]) {
+    sweep.labels.set(eventId, { _id: `label-${eventId}`, eventId, eventUpdatedAt: 100,
+      version: EVENT_DISCOVERY_VERSION, model: "fixture", taxonomy, auditJson });
+  }
+  const owner = "00000000-aaaa-4444-bbbb-000000000001";
+  const secondOwner = "00000000-aaaa-4444-bbbb-000000000002";
+  const claim = (runner = owner) => claimUpcomingBatch._handler(sweep.dailyCtx, { serviceSecret: "", owner: runner });
+  const complete = (runner, results) => completeUpcomingBatch._handler(sweep.dailyCtx,
+    { serviceSecret: "", owner: runner, model: "fixture", results });
+  const claimed = await claim();
+  assert.equal(claimed.state, "claimed");
+  assert.deepEqual(claimed.events.map(({ key }) => key).sort(), ["estimate", "no-post", "other-run"],
+    "A background sweep covers manual and legacy ingestion, including estimates. It skips pending, hidden and already grounded rows.");
+  assert.deepEqual(claimed.events.find(({ key }) => key === "estimate").currentTaxonomy, party);
+  assert.equal((await claim(secondOwner)).state, "busy");
+  assert.equal((await complete(secondOwner, [])).completed, false);
+  sweep.events.get("no-post").updatedAt++;
+  assert.deepEqual(await complete(owner, [dailyResult("estimate", { webResearch: webResult() }),
+    dailyResult("no-post"), dailyResult("other-run", { taxonomy: nonMusic })]),
+  { completed: true, counts: { written: 2, unchanged: 0, stale: 1 } });
+  const upgraded = await loadPublicEventDiscoveryLabels(sweep.dailyCtx, sweep.events.get("estimate"), true);
+  assert.deepEqual(upgraded.eventTaxonomy.genres, ["house"]);
+  assert.equal(upgraded.performerGenreResearch.estimated, undefined);
+  assert.equal(sweep.labels.has("no-post"), false, "An edit invalidates the in-flight result.");
+  assert.equal(sweep.enrichmentState().attempted, 3);
+  assert.deepEqual((await claim()).events.map(({ key }) => key), ["no-post"]);
+  assert.deepEqual(await complete(owner, []), { completed: true, counts: { written: 0, unchanged: 0, stale: 0 } });
 
   const backfill = dailyQueueFixture();
   const setBackfillLabel = (eventId, taxonomy, auditJson = "{}") => backfill.labels.set(eventId, {

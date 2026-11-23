@@ -420,6 +420,26 @@ for source correction; only exact quoted evidence accepted by deterministic
 conflict rules may reclassify a hold. Approval and public reads independently
 recheck the persisted review, current source, retained media, and public facts.
 
+### Event discovery enrichment
+
+The completed daily runner follows ingestion with a genre-classification pass.
+The Convex `enrich upcoming event discovery` cron also calls the authenticated
+`POST /api/cron/event-discovery` route every ten minutes. It covers upcoming
+approved, publishable events from manual, resumed and older workflows, including
+events approved or corrected after ingestion. An exact programme announcement
+or a verified match for the billed performers takes priority over a model estimate.
+
+Set `EVENT_DISCOVERY_EXECUTOR_ORIGIN` in Convex to the web origin when the
+existing `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` is unavailable. Convex uses the
+same `CRON_SECRET` as the web service. The web service uses its existing
+`OPENAI_API_KEY`. Without an origin or secret the Convex cron exits without
+calling the web service. Without an OpenAI key the sweep route reports `idle`.
+
+The sweep persists its cursor and leases one batch of up to 12 events per
+invocation, with a daily allowance of 96 candidate events in Belgrade time.
+Transient provider failures retry on a later sweep with at least an hour of
+backoff. Reads and writes recheck publication eligibility and event revision.
+
 All lanes preserve human decisions, duplicate ambiguity, source-generation
 fences and existing publication checks. Deployment requires matching web and
 Convex changes; local QA does not activate this worker in production.

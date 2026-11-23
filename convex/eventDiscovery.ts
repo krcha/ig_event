@@ -7,7 +7,7 @@ import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
 import { normalizeEventTime } from "../lib/events/event-time";
-import { formatUtcDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
+import { formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
 import { classifyExplicitEventDiscovery } from "../lib/taxonomy/explicit-event-discovery";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
@@ -24,6 +24,9 @@ import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 
 const CAPTION_MAX_LENGTH = 2200;
+const UPCOMING_DAILY_BUDGET = 96;
+const ENRICHMENT_LEASE_MS = 240_000;
+const ENRICHMENT_RETRY_MS = 60 * 60 * 1000;
 const genreKeys: ReadonlySet<string> = new Set(MUSIC_GENRES.map(({ key }) => key));
 
 const eventInputFields = {
@@ -40,11 +43,13 @@ const discoveryInputFields = {
   ...eventInputFields, date: v.string(), time: v.optional(v.string()), eventType: v.string(), sourceCaption: v.optional(v.string()),
 };
 const dailyInput = v.object(discoveryInputFields);
+const upcomingInput = v.object({ ...discoveryInputFields, currentTaxonomy: v.optional(eventDiscoveryTaxonomy) });
 const unknownGenreInput = v.object({ ...discoveryInputFields, currentTaxonomy: eventDiscoveryTaxonomy });
 const webGenreResult = v.object({ model: v.string(), matches: v.array(performerGenreMatch), auditJson: v.string() });
 const genreDiscoveryResult = v.object({
   eventId: v.id("events"), expectedUpdatedAt: v.number(), taxonomy: v.union(eventDiscoveryTaxonomy, v.null()),
   auditJson: v.string(), estimatedGenres: v.optional(v.array(musicGenre)), webResearch: v.optional(webGenreResult),
+  deferred: v.optional(v.literal(true)),
 });
 const genreDiscoveryCounts = v.object({ written: v.number(), unchanged: v.number(), stale: v.number() });
 type GenreDiscoveryResult = Infer<typeof genreDiscoveryResult>;
@@ -462,9 +467,6 @@ function verifiedGenreFallback(event: Doc<"events">, taxonomy: EventDiscoveryTax
 } {
   const format = getPerformerGenreResearchFormat(taxonomy);
   if (!format) return {};
-  if (result.estimatedGenres?.length && getPerformerGenreResearchActs(event, format).some(({ titleOnly }) => !titleOnly)) {
-    return { estimatedGenres: result.estimatedGenres };
-  }
   const webResearch = result.webResearch;
   if (webResearch?.matches.length) {
     const performerActs = getPerformerGenreResearchActs(event, format).filter(({ titleOnly }) => !titleOnly);
@@ -474,12 +476,20 @@ function verifiedGenreFallback(event: Doc<"events">, taxonomy: EventDiscoveryTax
       return { webResearch };
     }
   }
+  if (result.estimatedGenres?.length && getPerformerGenreResearchActs(event, format).some(({ titleOnly }) => !titleOnly)) {
+    return { estimatedGenres: result.estimatedGenres };
+  }
   return {};
 }
 
 function serializeGenreAudit(audit: Record<string, unknown>, estimatedGenres: MusicGenre[] | undefined) {
   delete audit.estimatedGenres;
   return JSON.stringify(estimatedGenres ? { estimatedGenres, ...audit } : audit);
+}
+
+function enrichmentAudit(result: GenreDiscoveryResult, now: number): Record<string, unknown> {
+  return { ...readEventEvidenceRecord(result.auditJson), upcomingGenreRetryAt:
+    now + (result.deferred ? ENRICHMENT_RETRY_MS : EMPTY_RESEARCH_RETRY_MS) };
 }
 
 async function storeWebGenreResearch(ctx: MutationCtx, event: Doc<"events">, webResearch: WebGenreResult) {
@@ -536,11 +546,116 @@ export const recordDailyBatch = mutation({
       }
       const { estimatedGenres, webResearch } = verifiedGenreFallback(event, taxonomy ?? getEventDiscoveryTaxonomy(event), result);
       await ctx.db.insert("eventDiscoveryLabels", { eventId, eventUpdatedAt: event.updatedAt,
-        version: EVENT_DISCOVERY_VERSION, model, taxonomy, auditJson: serializeGenreAudit(readEventEvidenceRecord(auditJson), estimatedGenres) });
+        version: EVENT_DISCOVERY_VERSION, model, taxonomy, auditJson: serializeGenreAudit(enrichmentAudit(result, Date.now()), estimatedGenres) });
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
       counts.written++;
     }
     return counts;
+  },
+});
+
+function loadEnrichmentState(ctx: Pick<QueryCtx, "db">) {
+  return ctx.db.query("eventDiscoveryEnrichmentState").withIndex("by_key", (q) => q.eq("key", "upcoming")).unique();
+}
+
+async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, now: number) {
+  if (event.status !== "approved" || event.publicationState !== "publishable" ||
+      event.date < getNightlifeDefaultDateKey(new Date(now))) return null;
+  const row = await loadLabel(ctx, event._id);
+  const current = labelIsCurrent(row, event.updatedAt) ? row : null;
+  const taxonomy = current?.taxonomy;
+  if (taxonomy?.genres.length) return null;
+  const format = taxonomy && getPerformerGenreResearchFormat(taxonomy);
+  if (!format && taxonomy && taxonomy.primaryCategory !== "other") return null;
+  if (current) {
+    const retryAt = readEventEvidenceRecord(current.auditJson).upcomingGenreRetryAt;
+    if (typeof retryAt === "number" && retryAt > now) return null;
+    if (format) {
+      const research = await loadGenreResearch(ctx, event._id);
+      if (researchIsCurrent(research, event.updatedAt) && research?.matches.length) return null;
+    }
+  }
+  return { row, current, currentTaxonomy: format && taxonomy ? taxonomy : undefined };
+}
+
+export const claimUpcomingBatch = mutation({
+  args: { serviceSecret: v.string(), owner: v.string() },
+  returns: v.object({ state: v.union(v.literal("busy"), v.literal("idle"), v.literal("scanned"), v.literal("claimed")),
+    events: v.array(upcomingInput) }),
+  handler: async (ctx, { serviceSecret, owner }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    if (!/^[0-9a-f-]{36}$/iu.test(owner)) throw new Error("Invalid genre enrichment owner.");
+    const state = await loadEnrichmentState(ctx);
+    const now = Date.now();
+    if (state?.lease && state.lease.until > now) return { state: "busy" as const, events: [] };
+    const dayKey = getBelgradeDayKey(now);
+    const attempted = state?.dayKey === dayKey ? state.attempted : 0;
+    const budget = UPCOMING_DAILY_BUDGET - attempted;
+    if (budget <= 0) return { state: "idle" as const, events: [] };
+    const cursor = state?.cursor ?? null;
+    const fromDate = cursor && state ? state.fromDate : getNightlifeDefaultDateKey(new Date(now));
+    const page = await ctx.db.query("events").withIndex("by_publicationState_date", (q) =>
+      q.eq("publicationState", "publishable").gte("date", fromDate)).paginate({ cursor, numItems: Math.min(12, budget) });
+    const events = (await Promise.all(page.page.map(async (event) => {
+      const discovery = await upcomingEnrichmentState(ctx, event, now);
+      if (!discovery) return null;
+      return { ...await discoveryCandidate(ctx, event),
+        ...(discovery.currentTaxonomy ? { currentTaxonomy: discovery.currentTaxonomy } : {}) };
+    }))).filter((event) => event !== null);
+    const nextCursor = page.isDone ? null : page.continueCursor;
+    const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, nextCursor,
+      events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
+    const updated = { fromDate, cursor: lease ? cursor : nextCursor, dayKey, attempted: attempted + events.length };
+    if (state) await ctx.db.patch(state._id, { ...updated, lease });
+    else await ctx.db.insert("eventDiscoveryEnrichmentState", { key: "upcoming", ...updated, ...(lease ? { lease } : {}) });
+    return { state: lease ? "claimed" as const : nextCursor ? "scanned" as const : "idle" as const, events };
+  },
+});
+
+export const completeUpcomingBatch = mutation({
+  args: { serviceSecret: v.string(), owner: v.string(), model: v.string(), results: v.array(genreDiscoveryResult) },
+  returns: v.object({ completed: v.boolean(), counts: genreDiscoveryCounts }),
+  handler: async (ctx, { serviceSecret, owner, model, results }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    validateGenreDiscoveryBatch(model, results);
+    const state = await loadEnrichmentState(ctx);
+    const lease = state?.lease;
+    const now = Date.now();
+    const counts = { written: 0, unchanged: 0, stale: 0 };
+    if (!state || !lease || lease.owner !== owner || lease.until <= now) return { completed: false, counts };
+    const claimed = new Map(lease.events.map(({ eventId, expectedUpdatedAt }) => [eventId, expectedUpdatedAt]));
+    for (const result of results) {
+      const { eventId, expectedUpdatedAt, taxonomy } = result;
+      const event = await ctx.db.get(eventId);
+      if (!event || claimed.get(eventId) !== expectedUpdatedAt || event.updatedAt !== expectedUpdatedAt) {
+        counts.stale++;
+        continue;
+      }
+      const enrichment = await upcomingEnrichmentState(ctx, event, now);
+      if (!enrichment) {
+        counts.unchanged++;
+        continue;
+      }
+      if (!await captionClaimsAreCurrent(ctx, event, readCaptionClaims(result.auditJson))) {
+        counts.stale++;
+        continue;
+      }
+      const savedTaxonomy = taxonomy ?? enrichment.current?.taxonomy ?? null;
+      const { estimatedGenres, webResearch } = verifiedGenreFallback(event, savedTaxonomy ?? getEventDiscoveryTaxonomy(event), result);
+      const currentAudit = enrichmentAudit(result, now);
+      const previousEstimate = enrichment.current && !currentAudit.partialProgramme && !currentAudit.ambiguousPerformerIdentity
+        ? readEstimatedGenres(enrichment.current.auditJson) : undefined;
+      const audit = { ...readEventEvidenceRecord(enrichment.current?.auditJson), ...currentAudit };
+      const label = { eventId, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model,
+        taxonomy: savedTaxonomy, auditJson: serializeGenreAudit(audit, webResearch || savedTaxonomy?.genres.length ? undefined :
+          estimatedGenres ?? previousEstimate) };
+      if (enrichment.row) await ctx.db.replace(enrichment.row._id, label);
+      else await ctx.db.insert("eventDiscoveryLabels", label);
+      if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
+      counts.written++;
+    }
+    await ctx.db.patch(state._id, { cursor: lease.nextCursor, lease: undefined });
+    return { completed: true, counts };
   },
 });
 

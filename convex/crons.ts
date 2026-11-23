@@ -66,6 +66,13 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "enrich upcoming event discovery",
+  { minutes: 10 },
+  internal.internal.eventDiscoveryExecutor.advance,
+  {},
+);
+
 crons.daily("cleanup visitor analytics", { hourUTC: 3, minuteUTC: 23 }, internal.analytics.cleanup, {});
 
 export default crons;

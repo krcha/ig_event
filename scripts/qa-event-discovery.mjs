@@ -455,7 +455,7 @@ const chainedInputs = [
   candidate("instagram", { title: "Echo", sourceCaption: "Večeras puštamo house.", artists: ["Ari"], currentTaxonomy }),
   candidate("announcement", { description: "Večeras puštamo techno.", artists: ["Bea"] }),
   candidate("estimate", { artists: ["Laurent Garnier"] }),
-  candidate("cited", { artists: ["Selka", "Xqwzt"] }),
+  candidate("cited", { artists: ["Selka"] }),
   candidate("title-listing", { title: "Echo Archive", description: "Koncert u klubu." }),
   candidate("no-act", { title: "Saturday Night", description: "DJ set." }),
   candidate("failed-search", { artists: ["Broken Act", "Other Act"] }),
@@ -476,8 +476,8 @@ const chained = await resolveEventGenresBatch(chainedInputs, {
       c: [claim("talk", "sourceCaption", "panel diskusija")] })]);
   },
   estimate: async (items) => {
-    assert.deepEqual(items.map(({ key }) => key), ["estimate", "cited", "failed-search"],
-      "Exact source evidence, title-only events and non-music rows skip the no-search estimator.");
+    assert.deepEqual(items.map(({ key }) => key), ["estimate", "failed-search"],
+      "The estimator only sees named acts left unresolved after cited search.");
     return { model: "fixture-estimate", results: new Map(items.map(({ key }) => [key, key === "estimate" ? ["techno"] : []])), usage: estimate.usage };
   },
   research: async (items, webOptions) => {
@@ -508,8 +508,8 @@ const chained = await resolveEventGenresBatch(chainedInputs, {
   },
 });
 assert.deepEqual(checkedBatches, [
-  [["Selka", false], ["Xqwzt", false], ["Echo Archive", true], ["Saturday Night", true]], [["Broken Act", false], ["Other Act", false]],
-], "Only still-unresolved music rows are sent to bounded, cited web research.");
+  [["Laurent Garnier", false], ["Selka", false], ["Echo Archive", true], ["Saturday Night", true]], [["Broken Act", false], ["Other Act", false]],
+], "Unannounced genres go to bounded, cited web research before an estimate.");
 assert.deepEqual(chained.results.map(({ method, deferred }) => [method, Boolean(deferred)]), [
   ["instagram", false], ["announcement", false], ["estimate", false], ["web", false], ["web", false],
   ["unknown", false], ["unknown", true], ["unknown", false],
@@ -528,6 +528,19 @@ assert.equal(chained.searchCalls, 1);
 assert.equal(chained.localClassified, 7);
 assert.deepEqual(chained.estimateUsage, estimate.usage);
 
+const partialProgramme = await resolveEventGenresBatch([candidate("partial", { artists: ["Selka", "Xqwzt"] })], {
+  ...options,
+  estimate: () => assert.fail("An incomplete set of billed-artist evidence cannot become a full estimate."),
+  research: async (items) => ({ model: "fixture-web", attempts: 1, searchCalls: 1, usage: estimate.usage,
+    results: new Map(items.map(({ key, billedName }) => {
+      const proof = { url: eventUrl, domain: "ra.co", title: "Lineup", quote: "Selka plays house." };
+      return [key, { billedName, status: billedName === "Selka" ? "resolved" : "unverified",
+        identityEvidence: proof, identityCorroboration: null, genres: ["house"], genreEvidence: [{ ...proof, genre: "house" }] }];
+    })) }),
+});
+assert.equal(partialProgramme.results[0].method, "unknown");
+assert.ok(JSON.parse(partialProgramme.results[0].auditJson).partialProgramme);
+
 const allLocal = await resolveEventGenresBatch([
   candidate("direct", { title: "Petak", sourceCaption: "DJ pušta house i techno.", artists: ["Mina"] }),
   candidate("sports", { title: "Prenos utakmice" }),
@@ -536,6 +549,13 @@ assert.equal(allLocal.localClassified, 2);
 assert.equal(allLocal.usage.totalTokens, 0);
 assert.deepEqual(allLocal.results.map(({ method, taxonomy }) => [method, taxonomy.primaryCategory, taxonomy.genres]),
   [["instagram", "party", ["house", "techno"]], ["unknown", "other", []]]);
+
+const providerUnavailable = await resolveEventGenresBatch([
+  candidate("still-direct", { sourceCaption: "DJ pušta house i techno.", artists: ["Mina"] }),
+  candidate("deferred-classification", { title: "Projekcija", sourceCaption: "Projekcija filma i panel diskusija." }),
+], { ...options, classify: async () => { throw new Error("Temporary provider failure"); }, estimate: neverTransport, research: neverTransport });
+assert.deepEqual(providerUnavailable.results.map(({ method, deferred }) => [method, Boolean(deferred)]),
+  [["instagram", false], ["unknown", true]], "A classification outage leaves source-supported rows usable and unresolved rows retriable.");
 
 const fallbackInput = { key: 0, billedName: "Echo Archive", eventTitle: "Echo Archive", venue: "Bridge Hall",
   date: "2026-11-08", trustedFormat: "live", titleOnly: true };

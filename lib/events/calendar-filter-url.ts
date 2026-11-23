@@ -15,6 +15,7 @@ export function buildCalendarFilterUrl(
     const value = rawValue.trim();
     if (value) params.set(key, value);
   }
+  params.delete("time");
   const categories = params.get("category")?.split(",")
     .filter((value) => DISCOVERY_CATEGORIES.some(({ key }) => key === value));
   if (categories?.length && !params.get("hide")) params.set("category", categories.join(","));
