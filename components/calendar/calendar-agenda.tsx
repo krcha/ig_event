@@ -3,7 +3,7 @@ import { PublicText, LocalizedElement, PublicEventCount } from "@/components/i18
 
 
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
-import { Fragment, useMemo } from "react";
+import { useMemo } from "react";
 import { VirtualAgendaList } from "./virtual-agenda-list";
 import { CalendarEventPreviews, CalendarEventPreviewRow } from "./calendar-event-preview";
 import { CalendarDiscoveryFilters } from "./calendar-discovery-filters";
@@ -17,16 +17,12 @@ import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/l
 import { sortAgendaEvents } from "@/lib/events/agenda-sort";
 import { useUserLocation } from "@/components/travel/user-location";
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
-import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_CATEGORY_TONES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
 import styles from "./mobile-events-home.module.css";
 
 const categoryLabels = new Map(DISCOVERY_CATEGORIES.map(({ key, label }) => [key, label]));
 const formatLabels = new Map(DISCOVERY_FORMATS.map(({ key, label }) => [key, label]));
 const genreLabels = new Map(MUSIC_GENRES.map(({ key, label }) => [key, label]));
-const categoryTones = {
-  party: "club", live: "live", culture: "culture", exhibition: "culture",
-  participate: "event", food: "event", talk: "culture", other: "event",
-} as const satisfies Record<DiscoveryCategory, CalendarAgendaEvent["category"]>;
 const musicFormats = {
   live: new Set<DiscoveryFormat>(["live-performance", "concert", "tribute"]),
   party: new Set<DiscoveryFormat>(["dj-set", "party"]),
@@ -42,35 +38,6 @@ type Props = {
   clearFiltersHref: string;
 };
 
-function PerformerGenreProvenance({ genres, research }: {
-  genres: readonly DiscoveryGenre[];
-  research: NonNullable<CalendarAgendaEvent["performerGenreResearch"]>;
-}) {
-  const sources = new Map<string, string>();
-  for (const { url, performer } of research.sources) {
-    try {
-      const source = new URL(url);
-      if ((source.protocol === "https:" || source.protocol === "http:") && !source.username && !source.password && !sources.has(source.href)) {
-        sources.set(source.href, performer.trim() || source.hostname);
-      }
-    } catch {
-      // Keep the genre values even when a source link is unavailable.
-    }
-  }
-
-  if (research.estimated && !genres.length && !sources.size) return null;
-
-  return <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs leading-5 text-muted-foreground" data-calendar-genre-provenance={research.estimated ? "estimate" : "performer"}>
-    {genres.length || !research.estimated ? <span>{!research.estimated ? <><PublicText text="Žanr prema izvoru" />{genres.length ? " · " : null}</> : null}
-      {genres.map((genre, index) => <Fragment key={genre}>{index ? ", " : null}<PublicText text={genreLabels.get(genre)} /></Fragment>)}
-    </span> : null}
-    {[...sources].map(([href, performer]) => <a key={href} href={href} target="_blank" rel="noopener noreferrer"
-      className="min-w-0 break-words text-detail underline underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-detail">
-      <PublicText text="Izvor za žanr" />{" · "}{performer}
-    </a>)}
-  </p>;
-}
-
 function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean) {
   const { primaryCategory, formats } = taxonomy;
   const categoryLabel = primaryCategory === "party" ? "Žurke"
@@ -80,9 +47,9 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     ? formats.find(key => musicFormats[primaryCategory].has(key))
     : formats[0];
   const formatLabel = format ? formatLabels.get(format) : undefined;
-  const primaryGenre = event.performerGenreResearch ? undefined : taxonomy.genres[0];
-  const normalizedFormat = formatLabel?.toLowerCase();
-  const secondaryTags = normalizedFormat ? event.tags.filter(tag => tag.trim().toLowerCase() !== normalizedFormat) : event.tags;
+  const shownLabels = new Set([formatLabel, ...taxonomy.genres.map(genre => genreLabels.get(genre))]
+    .flatMap(label => label ? [label.toLowerCase()] : []));
+  const secondaryTags = event.tags.filter(tag => !shownLabels.has(tag.trim().toLowerCase()));
   const known = Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown";
   const venueHours = !known && event.presentation.kind === "venue_hours"
     ? event.presentation.label === "Open 24 hours" ? "24 h" : event.presentation.label
@@ -109,14 +76,15 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
         {event.venueId ? <Link className={styles.venueName} href={`/venues/${event.venueId}`} prefetch={false}>{event.venue}</Link> : <p className={styles.venueName}>{event.venue}</p>}
         {event.sessionLabel ? <span className={styles.session} data-event-session="true"><PublicText text={event.sessionLabel} /></span> : null}
         <div className={styles.rowMeta}>
-          <span className={styles.categoryLabel} data-category-tone={categoryTones[primaryCategory]}><span aria-hidden="true" /><PublicText text={categoryLabel} />
+          <span className={styles.categoryLabel} data-category-tone={DISCOVERY_CATEGORY_TONES[primaryCategory]}><span aria-hidden="true" /><PublicText text={categoryLabel} />
             {formatLabel ? <> · <PublicText text={formatLabel} /></> : null}
           </span>
-          {primaryGenre ? <span className={styles.mobileGenre} data-calendar-genre-label={primaryGenre}><PublicText text={genreLabels.get(primaryGenre)} /></span> : null}
+          {taxonomy.genres.map(genre => <span key={genre} className={styles.genreLabel} data-calendar-genre-label={genre}>
+            <PublicText text={genreLabels.get(genre)} />
+          </span>)}
           <EventMetaRow event={event} presentation={{ category: event.category, tags: secondaryTags }} />
         </div>
         {venueHours ? <p className={styles.venueHours} data-time-source="venue_hours"><PublicText text={`Radno vreme mesta: ${venueHours}`} /></p> : null}
-        {event.performerGenreResearch ? <PerformerGenreProvenance genres={taxonomy.genres} research={event.performerGenreResearch} /> : null}
         <OpenNowStatus eventId={event._id} state={event.openNowState} />
       </div>
       <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="icon" />

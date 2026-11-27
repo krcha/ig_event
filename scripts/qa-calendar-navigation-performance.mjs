@@ -345,10 +345,13 @@ assert.equal(agendas[0].props.events.length, 8);
 assert.ok(!JSON.stringify(agendas[0].props.events).includes("private-sized-hours-data"));
 {
   pageEvents = events.map((event, index) => ({
-    ...event, venueInstagramFollowerCount: index === events.length - 1 ? 42_424_242 : undefined,
+    ...event, performerGenreResearch: { sources: [{ performer: "Sample act", url: "https://example.org/music-profile" }] },
+    venueInstagramFollowerCount: index === events.length - 1 ? 42_424_242 : undefined,
   }));
   const popular = await page({ searchParams: Promise.resolve({ month: "2026-10", day: "2026-10-31", sort: "popularity", time: "evening" }) });
   const agenda = nodes(popular, node => node.type === "CalendarAgenda")[0];
+  assert.ok(agenda.props.events.every(event => !Object.hasOwn(event, "performerGenreResearch")),
+    "The home agenda carries searchable genre values without shipping artist research links to the client.");
   assert.equal(agenda.props.events[0]._id, events.at(-1)._id, "The selected-day server route sorts by canonical venue followers before projection.");
   assert.ok(!JSON.stringify(agenda.props.events).includes("42424242"), "The calendar agenda hydrates the ranked events without follower counts.");
   const toolbar = nodes(popular, node => node.type === "EventsToolbar")[0];

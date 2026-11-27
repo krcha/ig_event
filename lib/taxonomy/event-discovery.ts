@@ -1,4 +1,4 @@
-import { getEventPrimaryCategory, type EventCategoryInput } from "./event-categories";
+import { getEventPrimaryCategory, type EventCategoryInput, type EventPrimaryCategory } from "./event-categories";
 import { classifyExplicitEventDiscovery, summaryCancelsEvent } from "./explicit-event-discovery";
 import { canonicalizeEventType } from "./venue-types";
 
@@ -14,6 +14,11 @@ export const DISCOVERY_CATEGORIES = [
   { key: "talk", label: "Razgovori i predavanja" },
   { key: "other", label: "Ostali događaji" },
 ] as const;
+
+export const DISCOVERY_CATEGORY_TONES = {
+  party: "club", live: "live", culture: "culture", exhibition: "culture",
+  participate: "event", food: "event", talk: "culture", other: "event",
+} as const satisfies Record<DiscoveryCategory, EventPrimaryCategory>;
 
 export const MUSIC_GENRES = [
   { key: "electronic", label: "Elektronska muzika" },

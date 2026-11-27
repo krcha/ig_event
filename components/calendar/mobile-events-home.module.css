@@ -22,7 +22,7 @@
   overflow-wrap: anywhere;
 }
 
-.mobileGenre { display: none; }
+.genreLabel { color: var(--muted-foreground); font-size: 12px; }
 
 .locationSort { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 16px; padding-block: 5px; }
 .locationSort p { flex: 1 1 190px; font-size: 12px; line-height: 18px; color: var(--muted-foreground); }
@@ -32,7 +32,7 @@
 .locationSort button:focus-visible { outline: 2px solid var(--detail); outline-offset: 3px; }
 
 @media (width < 40rem) {
-  .mobileGenre { display: inline; color: var(--muted-foreground); font-size: 10px; }
+  .genreLabel { font-size: 10px; }
 }
 
 .stickyFilters nav {

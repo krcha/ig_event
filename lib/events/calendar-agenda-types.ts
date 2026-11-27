@@ -9,7 +9,7 @@ export type CalendarEventSummary = Pick<PublicEvent,
   "displayTimeEnd" | "displayTimeLabel" | "displayTimeSource" | "displayTimeStart" |
   "venue" | "venueId" | "venueCategory" | "venueHours" | "venueInstagramFollowerCount" | "venueLatitude" | "venueLongitude" | "artists" | "eventType" |
   "ticketPrice" | "attendance" | "attendanceCount" | "attendeeCount" | "attendees" |
-  "attendeesCount" | "going" | "goingCount" | "eventTaxonomy" | "performerGenreResearch" | "timeEvidenceKind"
+  "attendeesCount" | "going" | "goingCount" | "eventTaxonomy" | "timeEvidenceKind"
 >;
 
 export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "venueHours" | "venueInstagramFollowerCount"> & {

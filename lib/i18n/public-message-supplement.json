@@ -117,8 +117,5 @@
   "Žanr nije naveden": {"sr":"Žanr nije naveden","en":"Genre not listed","ru":"Жанр не указан"},
   "Još žanrova": {"sr":"Još žanrova","en":"More genres","ru":"Другие жанры"},
   "Manje žanrova": {"sr":"Manje žanrova","en":"Fewer genres","ru":"Меньше жанров"},
-  "Format događaja": {"sr":"Format događaja","en":"Event format","ru":"Формат события"},
-  "Žanr prema izvoru": {"sr":"Žanr prema izvoru","en":"Sourced genre","ru":"Жанр по источнику"},
-  "Procena žanra prema izvođaču": {"sr":"Procena žanra prema izvođaču","en":"Genre estimate based on performer","ru":"Предполагаемый жанр по исполнителю"},
-  "Izvor za žanr": {"sr":"Izvor za žanr","en":"Genre source","ru":"Источник жанра"}
+  "Format događaja": {"sr":"Format događaja","en":"Event format","ru":"Формат события"}
 }

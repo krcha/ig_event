@@ -23,6 +23,8 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import type { FunctionReference } from "convex/server";
 import { EventCategoryPill, EventMetaRow, EventPriceChip, EventSecondaryTags } from "@/components/events/event-meta";
+import { getEventTags } from "@/lib/taxonomy/event-categories";
+import { DISCOVERY_CATEGORY_TONES, DISCOVERY_FORMATS, MUSIC_GENRES, type EventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
 import { EventSessionLabel } from "@/components/events/event-session-label";
 import { EventCalendarBackLink } from "@/components/calendar/calendar-scroll-restoration";
 import { ReadMoreText } from "@/components/ui/read-more-text";
@@ -112,6 +114,7 @@ type EventRecord = {
   going?: number | string;
   goingCount?: number | string;
   eventType: string;
+  eventTaxonomy?: EventDiscoveryTaxonomy;
   status: "pending" | "approved" | "rejected";
 };
 
@@ -192,7 +195,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
 
   const convex = new ConvexHttpClient(convexUrl);
   const { event, venues } = await loadPublicEventDetailData<EventRecord, VenueRecord>({
-    loadEvent: () => convex.query(getPublicApprovedEventQuery, { id: eventId }) as Promise<EventRecord | null>,
+    loadEvent: () => convex.query(getPublicApprovedEventQuery, { id: eventId, includeEventTaxonomy: true }) as Promise<EventRecord | null>,
     loadVenues: (loadedEvent) =>
       loadedEvent.venueId
         ? (convex.query(listPublicVenueFieldsByIdsQuery, {
@@ -332,6 +335,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   if (!event) {
     notFound();
   }
+  const taxonomy = event.eventTaxonomy;
+  const discoveryTags = taxonomy && [
+    ...DISCOVERY_FORMATS.filter(format => taxonomy.formats.includes(format.key)).map(format => format.label),
+    ...MUSIC_GENRES.filter(genre => taxonomy.genres.includes(genre.key)).map(genre => genre.label),
+  ];
+  const discoveryMeta = taxonomy ? {
+    category: DISCOVERY_CATEGORY_TONES[taxonomy.primaryCategory],
+    tags: discoveryTags?.length ? discoveryTags : getEventTags(event),
+  } : undefined;
   const artistCredits = event.artistDisplayCredits ?? event.artists;
   const eventTime = resolveEventTimePresentation(event);
   const preferredText = event.sourceCaption?.trim() || event.description?.trim() || "";
@@ -390,8 +402,8 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
               <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-7">
                 <div className="flex flex-wrap gap-2">
-                  <EventCategoryPill className="text-xs" event={event} />
-                  <EventSecondaryTags className="text-xs" event={event} />
+                  <EventCategoryPill className="text-xs" event={event} category={discoveryMeta?.category} />
+                  <EventSecondaryTags className="text-xs" event={event} tags={discoveryMeta?.tags} />
                   <EventPriceChip className="text-xs" value={event.ticketPrice} />
                 </div>
 
@@ -442,7 +454,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                         {event.venueLocation}
                       </p>
                     ) : null}
-                    <EventMetaRow className="pointer-events-none relative z-10 mt-2 pl-6" event={event} />
+                    <EventMetaRow className="pointer-events-none relative z-10 mt-2 pl-6" event={event} presentation={discoveryMeta} />
                   </div>
                 </div>
 

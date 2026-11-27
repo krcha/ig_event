@@ -202,7 +202,6 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
     artists: event.artists,
     eventType: event.eventType,
     eventTaxonomy: event.eventTaxonomy,
-    performerGenreResearch: event.performerGenreResearch,
     ticketPrice: event.ticketPrice,
     attendance: event.attendance,
     attendanceCount: event.attendanceCount,
