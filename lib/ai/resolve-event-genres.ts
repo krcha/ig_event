@@ -13,7 +13,7 @@ import {
   type PerformerGenreResearchInput,
   type PerformerGenreResearchResult,
 } from "@/lib/ai/research-performer-genres";
-import { getEventDiscoveryTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
+import { getStoredOrLegacyEventTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
 import {
@@ -196,7 +196,7 @@ export async function resolveEventGenresBatch(
       result.deferred = true;
       return result;
     }
-    const fallback = taxonomy ?? getEventDiscoveryTaxonomy(event);
+    const fallback = taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
     const format = getPerformerGenreResearchFormat(fallback);
     const corroborated = taxonomy && corroborateLiveProgrammeGenre(event, taxonomy);
     if (corroborated) {

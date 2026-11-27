@@ -82,6 +82,13 @@ and skips events with an established genre.
 
 ## Legacy Data Compatibility
 
+When an occurrence has no saved discovery taxonomy, the calendar and event
+comparison can recover explicit activity, format and genre evidence from its
+own title and description. The calendar resolves this on the server before
+dropping the description from the compact agenda. A shared Instagram caption
+can cover several dates and is excluded from this fallback. Saved discovery
+values take precedence. Reading an event does not write a label or call a model.
+
 The four legacy categories are a public presentation taxonomy. Existing Convex fields,
 canonical extraction types, ingestion, and moderation keep their current
 contracts. Existing records remain readable without a migration or re-scrape.

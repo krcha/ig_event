@@ -1,5 +1,6 @@
 import type { PublicEvent } from "./public-events";
 import type { EventPrimaryCategory } from "../taxonomy/event-categories";
+import type { EventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
 import type { OpenNowEventState } from "../venues/venue-open-now";
 import type { CalendarTimeBandKey } from "./calendar-time-bands";
 
@@ -12,6 +13,7 @@ export type CalendarEventSummary = Pick<PublicEvent,
 >;
 
 export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "venueHours" | "venueInstagramFollowerCount"> & {
+  eventTaxonomy: EventDiscoveryTaxonomy;
   category: EventPrimaryCategory;
   tags: string[];
   mobileOrder: number;

@@ -1,5 +1,6 @@
 import "server-only";
 import { getEventPrimaryCategory, getEventTags } from "../taxonomy/event-categories";
+import { getEventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
 import { resolveEventTimePresentation } from "./event-time-presentation";
 import { normalizeEventTime } from "./event-time";
 import { getCalendarTimeBandKey } from "./calendar-time-bands";
@@ -23,6 +24,7 @@ export function projectCalendarAgendaEvents(
     delete row.venueInstagramFollowerCount;
     return {
       ...row,
+      eventTaxonomy: getEventDiscoveryTaxonomy(event),
       category: getEventPrimaryCategory(event),
       tags: getEventTags(event),
       mobileOrder: mobileOrder.get(event._id) ?? 0,

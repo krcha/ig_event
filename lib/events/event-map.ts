@@ -6,6 +6,8 @@ import { getOpenNowEventWindow, matchesOpenNowEvent } from "../venues/venue-open
 
 export const MAP_MIN_DATE = "2000-01-01";
 export const MAP_MAX_DATE = "2099-12-31";
+// A venue's pin number must agree in the server HTML and the hydrated map.
+const mapNameCollator = new Intl.Collator("sr-Latn", { sensitivity: "base" });
 
 export function getEventMapOpenNowDateKey(now: Date | number = Date.now()): string {
   return getNightlifeDefaultDateKey(now instanceof Date ? now : new Date(now), { rolloverHour: 6 });
@@ -139,8 +141,13 @@ export function attachReviewedEventMapAddresses(
   });
 }
 
+function compareKeys(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function compareEvents(left: PublicEvent, right: PublicEvent): number {
-  const dateOrder = left.date.localeCompare(right.date);
+  const dateOrder = compareKeys(left.date, right.date);
   if (dateOrder !== 0) {
     return dateOrder;
   }
@@ -157,12 +164,11 @@ function compareEvents(left: PublicEvent, right: PublicEvent): number {
     return leftTime - rightTime;
   }
 
-  return left.title.localeCompare(right.title, undefined, { sensitivity: "base" }) ||
-    left._id.localeCompare(right._id);
+  return mapNameCollator.compare(left.title, right.title) || compareKeys(left._id, right._id);
 }
 
 function normalizeVenueLabel(value: string): string {
-  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 export function buildEventMapData(events: readonly PublicEvent[]): {
@@ -204,8 +210,7 @@ export function buildEventMapData(events: readonly PublicEvent[]): {
   }
 
   const locations = [...locationsById.values()].sort((left, right) =>
-    left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) ||
-    left.id.localeCompare(right.id),
+    mapNameCollator.compare(left.name, right.name) || compareKeys(left.id, right.id),
   );
 
   return { locations, unmappedEvents };

@@ -220,6 +220,20 @@ assert.deepEqual(
 );
 assert.deepEqual(buildEventMapData([]), { locations: [], unmappedEvents: [] });
 
+const belgradeNames = [
+  makeEvent({ _id: "upper", venueId: "A", venue: "SAKURA RESTORAN", title: "Night" }),
+  makeEvent({ _id: "lower", venueId: "a", venue: "Sakura restoran", title: "Night" }),
+  makeEvent({ _id: "sh", venueId: "sh", venue: "ŠAKAL | Tequila & Mezcal Bar", title: "Šakal" }),
+  makeEvent({ _id: "s", venueId: "sh", venue: "ŠAKAL | Tequila & Mezcal Bar", title: "Sakura" }),
+];
+for (const rows of [belgradeNames, [...belgradeNames].reverse()]) {
+  const locations = buildEventMapData(rows).locations;
+  assert.deepEqual(locations.map(({ venueId }) => venueId), ["A", "a", "sh"],
+    "Map pins use Serbian alphabetical order and stable IDs for equivalent names on server and client.");
+  assert.deepEqual(locations[2].events.map(({ _id }) => _id), ["s", "sh"],
+    "Tied event times use the same Serbian alphabetical order as their venues.");
+}
+
 const overnightHours = {
   hoursJson: JSON.stringify({
     generatedAt: "2026-10-16T12:00:00.000Z",

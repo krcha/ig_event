@@ -17,7 +17,7 @@ import { AGENDA_BAND_ORDER, AGENDA_SORT_OPTIONS, type AgendaSortMode } from "@/l
 import { sortAgendaEvents } from "@/lib/events/agenda-sort";
 import { useUserLocation } from "@/components/travel/user-location";
 import type { CalendarAgendaEvent } from "@/lib/events/calendar-agenda-types";
-import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, getEventDiscoveryTaxonomy, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, MUSIC_GENRES, eventMatchesMusicGenre, type DiscoveryFormat } from "@/lib/taxonomy/event-discovery";
 import styles from "./mobile-events-home.module.css";
 
 const categoryLabels = new Map(DISCOVERY_CATEGORIES.map(({ key, label }) => [key, label]));
@@ -32,7 +32,7 @@ const musicFormats = {
   party: new Set<DiscoveryFormat>(["dj-set", "party"]),
 };
 
-type AgendaItem = { event: CalendarAgendaEvent; taxonomy: ReturnType<typeof getEventDiscoveryTaxonomy> };
+type AgendaItem = { event: CalendarAgendaEvent; taxonomy: CalendarAgendaEvent["eventTaxonomy"] };
 
 type Props = {
   events: CalendarAgendaEvent[];
@@ -131,7 +131,7 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
   const items = useMemo(() => {
     const distinct = new Map<string, AgendaItem>();
     for (const event of events) {
-      if (!distinct.has(event._id)) distinct.set(event._id, { event, taxonomy: getEventDiscoveryTaxonomy(event) });
+      if (!distinct.has(event._id)) distinct.set(event._id, { event, taxonomy: event.eventTaxonomy });
     }
     return Array.from(distinct.values());
   }, [events]);

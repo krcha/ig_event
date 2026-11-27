@@ -64,6 +64,11 @@ direction on at least two-thirds of the twelve most recent dates. Dated
 programme evidence wins. History does not establish current music at a
 destination.
 
+Older occurrences without a saved taxonomy use the same explicit programme
+evidence as the calendar. For example, a description announcing an evening
+of soul, jazz and blues can support a jazz match. A performer's name alone
+does not establish a genre.
+
 All click-time reads use stored data. Clicking a comparison never starts
 paid enrichment. The public comparison reference uses the approved event
 detail's public visibility checks and only requests taxonomy for that read.

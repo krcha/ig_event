@@ -1,5 +1,6 @@
 import { getEventPrimaryCategory, type EventCategoryInput } from "./event-categories";
-import { canonicalizeEventType } from "./venue-types";
+import { classifyExplicitEventDiscovery } from "./explicit-event-discovery";
+import { canonicalizeEventType, normalizeTaxonomyText } from "./venue-types";
 
 export const EVENT_DISCOVERY_VERSION = 1;
 
@@ -70,9 +71,10 @@ export type EventDiscoveryTaxonomy = {
   formats: DiscoveryFormat[];
 };
 
-export function getEventDiscoveryTaxonomy(
-  event: EventCategoryInput & { eventTaxonomy?: EventDiscoveryTaxonomy },
-): EventDiscoveryTaxonomy {
+type DiscoveryEvent = EventCategoryInput & { eventTaxonomy?: EventDiscoveryTaxonomy; venue?: string; date?: string };
+
+/** Baseline used by enrichment to distinguish durable labels from newly derived evidence. */
+export function getStoredOrLegacyEventTaxonomy(event: DiscoveryEvent): EventDiscoveryTaxonomy {
   if (event.eventTaxonomy) return event.eventTaxonomy;
   const legacy = getEventPrimaryCategory(event);
   const type = canonicalizeEventType(event.eventType);
@@ -84,6 +86,31 @@ export function getEventDiscoveryTaxonomy(
         ? "food"
         : "other";
   return { primaryCategory, categories: [primaryCategory], genres: [], formats: [] };
+}
+
+function summaryCancelsEvent(title: string | undefined, description: string | undefined): boolean {
+  if (!description) return false;
+  const name = normalizeTaxonomyText(title);
+  return description.slice(0, 500).split(/[.!?;\n]/).some((sentence) => {
+    const match = /^(?:(?:the|this) )?(.+?) (?:was |is |has been |je )?(?:cancell?ed|otkazan[aoie]?)(?: (?:due to|because|zbog) .+)?$/.exec(normalizeTaxonomyText(sentence));
+    return match && (match[1] === name || match[1] === "event" || match[1] === "dogadjaj");
+  });
+}
+
+export function getEventDiscoveryTaxonomy(event: DiscoveryEvent): EventDiscoveryTaxonomy {
+  if (event.eventTaxonomy) return event.eventTaxonomy;
+  if (summaryCancelsEvent(event.title, event.description)) {
+    return { primaryCategory: "other", categories: ["other"], genres: [], formats: [] };
+  }
+  const baseline = getStoredOrLegacyEventTaxonomy(event);
+  // Legacy rows have an occurrence-specific summary, while their Instagram
+  // caption may advertise several different events. Never pass that caption
+  // through this fallback, including when called on a full detail record.
+  const discovery = classifyExplicitEventDiscovery({
+    title: event.title ?? "", description: event.description, artists: event.artists,
+    venue: event.venue, date: event.date,
+  }, baseline.primaryCategory);
+  return discovery?.complete ? discovery.taxonomy : baseline;
 }
 
 const ELECTRONIC_GENRES: readonly MusicGenre[] = [

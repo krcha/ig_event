@@ -10,7 +10,7 @@ import { normalizeEventTime } from "../lib/events/event-time";
 import { formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
 import { classifyExplicitEventDiscovery } from "../lib/taxonomy/explicit-event-discovery";
-import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getEventDiscoveryTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
+import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getStoredOrLegacyEventTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
   PERFORMER_GENRE_RESEARCH_VERSION,
@@ -188,7 +188,7 @@ export async function loadPublicEventDiscoveryLabels(
 ) {
   const label = await loadLabel(ctx, event._id);
   if (!label || !labelIsCurrent(label, event.updatedAt)) return;
-  const taxonomy = label.taxonomy ?? getEventDiscoveryTaxonomy(event);
+  const taxonomy = label.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
   if (includePerformerGenreResearch && getPerformerGenreResearchFormat(taxonomy)) {
     const enriched = projectGenreFallback(taxonomy, label, await loadGenreResearch(ctx, event._id));
     if (enriched) return enriched;
@@ -210,7 +210,7 @@ const researchCandidate = v.object({
 function getResearchTarget(event: Doc<"events"> | null, label: Doc<"eventDiscoveryLabels"> | null) {
   if (!event || event.status !== "approved" || event.publicationState !== "publishable" ||
     !label || !labelIsCurrent(label, event.updatedAt)) return;
-  const format = getPerformerGenreResearchFormat(label.taxonomy ?? getEventDiscoveryTaxonomy(event));
+  const format = getPerformerGenreResearchFormat(label.taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
   if (!format) return;
   const acts = getPerformerGenreResearchActs(event, format);
   if (!acts.length) return;
@@ -544,7 +544,7 @@ export const recordDailyBatch = mutation({
         counts.stale++;
         continue;
       }
-      const { estimatedGenres, webResearch } = verifiedGenreFallback(event, taxonomy ?? getEventDiscoveryTaxonomy(event), result);
+      const { estimatedGenres, webResearch } = verifiedGenreFallback(event, taxonomy ?? getStoredOrLegacyEventTaxonomy(event), result);
       await ctx.db.insert("eventDiscoveryLabels", { eventId, eventUpdatedAt: event.updatedAt,
         version: EVENT_DISCOVERY_VERSION, model, taxonomy, auditJson: serializeGenreAudit(enrichmentAudit(result, Date.now()), estimatedGenres) });
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
@@ -641,7 +641,7 @@ export const completeUpcomingBatch = mutation({
         continue;
       }
       const savedTaxonomy = taxonomy ?? enrichment.current?.taxonomy ?? null;
-      const { estimatedGenres, webResearch } = verifiedGenreFallback(event, savedTaxonomy ?? getEventDiscoveryTaxonomy(event), result);
+      const { estimatedGenres, webResearch } = verifiedGenreFallback(event, savedTaxonomy ?? getStoredOrLegacyEventTaxonomy(event), result);
       const currentAudit = enrichmentAudit(result, now);
       const previousEstimate = enrichment.current && !currentAudit.partialProgramme && !currentAudit.ambiguousPerformerIdentity
         ? readEstimatedGenres(enrichment.current.auditJson) : undefined;
@@ -662,7 +662,7 @@ export const completeUpcomingBatch = mutation({
 async function loadUnknownGenreState(ctx: Pick<QueryCtx, "db">, event: Doc<"events">) {
   const label = await loadLabel(ctx, event._id);
   const currentLabel = label && labelIsCurrent(label, event.updatedAt) ? label : null;
-  const taxonomy = currentLabel?.taxonomy ?? getEventDiscoveryTaxonomy(event);
+  const taxonomy = currentLabel?.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
   if (taxonomy.genres.length) return { label, currentLabel, taxonomy, known: true };
   if (!getPerformerGenreResearchFormat(taxonomy)) return null;
   const known = !!currentLabel && !!projectGenreFallback(taxonomy, currentLabel, await loadGenreResearch(ctx, event._id));
@@ -787,7 +787,7 @@ async function isUpcomingDiscoveryPublic(ctx: Pick<QueryCtx, "db">, event: Doc<"
 async function upcomingDiscoveryChange(ctx: Pick<QueryCtx, "db">, event: Doc<"events">) {
   const label = await loadLabel(ctx, event._id);
   const currentLabel = label && labelIsCurrent(label, event.updatedAt) ? label : null;
-  const current = currentLabel?.taxonomy ?? getEventDiscoveryTaxonomy(event);
+  const current = currentLabel?.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
   const before = pickCategoryState(current);
   const candidate = await discoveryCandidate(ctx, event);
   const classified = classifyExplicitEventDiscovery(candidate);

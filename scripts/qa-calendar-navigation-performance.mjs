@@ -84,6 +84,7 @@ const discoveryState = compile("components/calendar/calendar-discovery-state.ts"
   "@/lib/taxonomy/event-categories": categories,
 });
 const projection = compile("lib/events/calendar-agenda-projection.ts", {
+  "../taxonomy/event-discovery": discovery,
   "server-only": {}, "../taxonomy/event-categories": categories, "./event-time-presentation": presentation,
   "./event-time": eventTime, "./calendar-time-bands": bands, "./event-session": sessions,
 });
@@ -265,7 +266,12 @@ for (const mobile of [false, true]) for (const sortMode of ["time", "popularity"
     ...projected[3], band: "night",
     eventTaxonomy: { primaryCategory: "party", categories: ["party"], genres: ["techno"], formats: ["dj-set"] },
   };
-  const legacy = { ...projected[4], title: "House party", eventType: "nightlife", band: "evening" };
+  const [legacy] = projection.projectCalendarAgendaEvents([
+    { ...events[4], title: "Friday night", description: "Doors open at 22:00.", eventType: "nightlife" },
+  ], new Map(), new Map());
+  const [described] = projection.projectCalendarAgendaEvents([
+    { ...events[0], _id: "described", title: "Friday trio", description: "Live jazz concert.", eventType: "live music" },
+  ], new Map(), new Map());
   const standUp = {
     ...projected[5], band: "evening",
     eventTaxonomy: { primaryCategory: "culture", categories: ["culture"], genres: [], formats: ["stand-up"] },
@@ -274,9 +280,9 @@ for (const mobile of [false, true]) for (const sortMode of ["time", "popularity"
     ...projected[6], band: "evening",
     eventTaxonomy: { primaryCategory: "culture", categories: ["culture"], genres: [], formats: ["screening"] },
   };
-  const render = (query) => {
+  const render = (query, day = [hybrid, jazz, late, legacy, hybrid, standUp, film]) => {
     discoveryParams = new URLSearchParams(query);
-    const tree = CalendarAgenda({ events: [hybrid, jazz, late, legacy, hybrid, standUp, film], openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
+    const tree = CalendarAgenda({ events: day, openNowActive: false, hasActiveFilters: false, clearFiltersHref: "/" });
     const rows = nodes(tree, node => node.props?.["data-calendar-event-id"]);
     return {
       ids: rows.map(node => node.props["data-calendar-event-id"]),
@@ -303,6 +309,10 @@ for (const mobile of [false, true]) for (const sortMode of ["time", "popularity"
   assert.equal(filtered.facets.categoryCounts.get("live"), 1);
   assert.equal(filtered.facets.genreCounts.get("house"), 1, "Legacy title tags must not become verified genre filters.");
   assert.deepEqual(render("genre=unknown").ids, [legacy._id], "Unknown genre matches music without an announced genre only.");
+  assert.deepEqual(render("category=live&genre=jazz-blues", [described]).ids, [described._id],
+    "The genre filter must retain explicit programme evidence from a server-only description.");
+  assert.deepEqual(render("genre=unknown", [described]).ids, []);
+  assert.ok(!Object.hasOwn(described, "description"));
   const comedy = render("category=culture&format=stand-up");
   assert.deepEqual(comedy.ids, [standUp._id], "Stand-up narrows the culture category without matching films.");
   assert.equal(comedy.facets.standUpCount, 1);

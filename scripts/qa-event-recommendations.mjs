@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { localizeHref, resolveLocaleRequestPath } from "../i18n/config.ts";
+import { getEventDiscoveryTaxonomy, getStoredOrLegacyEventTaxonomy } from "../lib/taxonomy/event-discovery.ts";
 import { getEventRecommendationWindow, rankEventRecommendations } from "../lib/travel/event-recommendations.ts";
 import { getCompassVenueType, getReviewedCompassVenueProfile } from "../lib/travel/venue-profile.ts";
 
@@ -42,6 +43,57 @@ assert.deepEqual(getEventRecommendationWindow(timbe.date, now), { fromDate: "202
 const rnb = event("rnb", "R&B and soul", ["rnb-soul"]);
 assert.deepEqual(rankEventRecommendations(timbe, [timbe, stellar, rnb], now).same.map(({ event }) => event._id), ["rnb"]);
 assert.deepEqual(rankEventRecommendations(event("unknown", "Unspecified DJ set", []), [stellar, rnb], now), { same: [], different: [] });
+
+// Public summaries can carry usable evidence before a discovery label is saved.
+const swing = event("swing", "Vous Ete's Swing", [], {
+  eventTaxonomy: undefined, eventType: "live music", venue: "Bluz i Pivo", artists: ["Vous Ete's Swing"],
+  description: "An evening of soul, jazz, blues, gospel and swing.",
+});
+assert.deepEqual(getEventDiscoveryTaxonomy(swing).genres, ["rnb-soul", "jazz-blues"]);
+assert.deepEqual(getStoredOrLegacyEventTaxonomy(swing).genres, [], "Read-time evidence must not mark a missing durable enrichment as known.");
+const jazz = event("jazz", "Announced jazz concert", ["jazz-blues"]);
+const fromSummary = rankEventRecommendations(swing, [swing, jazz, techno], now);
+assert.deepEqual(fromSummary.same.map(({ event, match }) => [event._id, match.score]), [["jazz", 94]]);
+assert.deepEqual(fromSummary.different.map(({ event, match }) => [event._id, match.score]), [["techno", 20]]);
+assert.deepEqual(rankEventRecommendations(jazz, [swing], now).same.map(({ match }) => match.score), [94]);
+const filmFestival = { title: "32. ФЕСТИВАЛ АУТОРСКОГ ФИЛМА", eventType: "event",
+  description: "Избор филмова из актуелног фестивалског програма; Мала сала." };
+assert.deepEqual(getEventDiscoveryTaxonomy(filmFestival), {
+  primaryCategory: "culture", categories: ["culture"], formats: ["festival"], genres: [],
+});
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Чучук Стана последњи сат", eventType: "event",
+  description: "Премијера представе; игра Драгица Ужарева." }).formats, ["theatre"]);
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "VOLIM TE JOS", eventType: "nightlife",
+  description: "All-night DJ program." }).formats, ["dj-set"]);
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Goran Korunović, Sara Arsenović", eventType: "arts & culture",
+  description: "Book presentation; Goran Korunović participates and Sara Arsenović moderates." }).primaryCategory, "talk");
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Rock quiz", eventType: "nightlife",
+  description: "Music quiz about rock." }), {
+  primaryCategory: "participate", categories: ["participate"], formats: ["quiz"], genres: [],
+});
+const nameOnly = { eventType: "live music", title: "KYOTO JAZZ MASSIVE ft. EOANDO",
+  artists: ["KYOTO JAZZ MASSIVE", "EOANDO"], venue: "Sinnerman Jazz Club",
+  sourceCaption: "Friday DJ set: techno and house." };
+assert.deepEqual(getEventDiscoveryTaxonomy(nameOnly).genres, []);
+for (const description of ["Live jazz concert.", "Jazz live concert."]) {
+  assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Evening programme", eventType: "live music", description }), {
+    primaryCategory: "live", categories: ["live"], formats: ["concert"], genres: ["jazz-blues"],
+  });
+}
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Evening programme", eventType: "event",
+  description: "A quiz about a live jazz concert." }), {
+  primaryCategory: "participate", categories: ["participate"], formats: ["quiz"], genres: [],
+});
+assert.deepEqual(getEventDiscoveryTaxonomy({ ...nameOnly, description: "No live music. Background jazz playlist." }).genres, []);
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Jazz live concert", eventType: "live music",
+  description: "No jazz. We play rock music." }).genres, ["rock"]);
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Film festival", eventType: "arts & culture",
+  description: "Film festival cancelled." }), {
+  primaryCategory: "other", categories: ["other"], formats: [], genres: [],
+});
+assert.deepEqual(getEventDiscoveryTaxonomy({ title: "Film festival", eventType: "arts & culture",
+  description: "Guest appearance cancelled. Film festival is going ahead." }).formats, ["festival"]);
+assert.equal(getEventDiscoveryTaxonomy({ ...swing, eventTaxonomy: house.eventTaxonomy }), house.eventTaxonomy);
 
 const ljubavnica = {
   _id: "k17dqbjstn1wtsxn9mhsj7d2h98gaw8p", instagramHandle: "@LJUBAVNICA_BAR",
