@@ -58,8 +58,13 @@ function reusableDay(client: ConvexHttpClient, day: DateWindow) {
 }
 
 function requestDays(client: ConvexHttpClient, days: DateWindow[]) {
-  const batch = readDates(client, { fromDate: days[0].fromDate, beforeDate: days[days.length - 1].beforeDate });
+  // Keep the Convex range key stable even when Compass has already read a day
+  // inside it. Reuse cached/pending days and publish only the missing results.
+  let batch: ReturnType<typeof readDates> | undefined;
   return days.map(day => {
+    const reused = reusableDay(client, day);
+    if (reused) return reused;
+    batch ??= readDates(client, { fromDate: days[0].fromDate, beforeDate: days[days.length - 1].beforeDate });
     const key = cacheKey(client, day);
     const load = batch.then(events => {
       const rows = events.filter(event => event.date === day.fromDate);
@@ -82,16 +87,9 @@ export async function loadRecommendationWindow(client: ConvexHttpClient, window:
   let failed = false;
   async function worker() {
     while (!failed && next < days.length) {
-      const first = next++;
+      const first = next;
+      next = Math.min(first + batchLimit, days.length);
       try {
-        const reused = reusableDay(client, days[first]);
-        if (reused) {
-          parts[first] = await reused;
-          continue;
-        }
-        // Read adjacent misses in one paginated range. Cache and share individual civil
-        // days so concurrent Compass and Compare requests still reuse their overlap.
-        while (next < days.length && next - first < batchLimit && !reusableDay(client, days[next])) next++;
         const batch = await Promise.all(requestDays(client, days.slice(first, next)));
         batch.forEach((rows, offset) => { parts[first + offset] = rows; });
       } catch (error) {

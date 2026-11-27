@@ -23,6 +23,7 @@ import * as publicSort from "../lib/events/public-event-sort.ts";
 import * as venueNormalization from "../lib/pipeline/venue-normalization.ts";
 import * as calendarWindows from "../lib/events/public-calendar-windows.ts";
 import * as readCache from "../lib/events/public-event-read-cache.ts";
+import { rankEventRecommendations } from "../lib/travel/event-recommendations.ts";
 import * as compressedJson from "../lib/http/compressed-json.ts";
 
 import * as agendaSort from "../lib/events/agenda-sort.ts";
@@ -639,4 +640,37 @@ console.log("Calendar navigation QA passed: one responsive tree, compact metadat
   assert.ok((await loadRecommendationWindow(isolated, window)).error);
   fail = false;
   assert.equal((await loadRecommendationWindow(isolated, window)).events.length, 14);
+
+  // Warming a single GPS programme day must preserve the shared Convex keys
+  // of a subsequent 14-day comparison, including an empty, already-read day.
+  const compareWindow = { fromDate: "2026-11-28", beforeDate: "2026-12-12" };
+  const days = calendarWindows.buildPublicCalendarDateWindows(compareWindow.fromDate, compareWindow.beforeDate, 1);
+  const ranges = calendarWindows.buildPublicCalendarDateWindows(compareWindow.fromDate, compareWindow.beforeDate, 3);
+  const key = ({ fromDate, beforeDate }) => fromDate + "/" + beforeDate;
+  const now = Date.parse("2026-11-27T17:00:00Z");
+  const candidates = days.filter((_, index) => index !== 7).flatMap(({ fromDate: date }) => ["house", "folk"].map(genre => ({
+    _id: date + genre, date, title: genre, venue: "Test venue", status: "approved", genreEstimated: false,
+    eventTaxonomy: { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: [genre] },
+  })));
+  const reference = { ...candidates[0], _id: "reference" };
+  const expected = rankEventRecommendations(reference, candidates, now);
+  assert.equal(expected.same.length, 6);
+  assert.equal(expected.different.length, 6);
+  for (const warm of [[], [0], [7], [0, 7], [0, 1, 2]]) {
+    const requested = [];
+    const isolatedClient = { url: "https://partial-cache.example/" + warm.join("-"), async query(_ref, args) {
+      requested.push(key(args));
+      const page = candidates.filter(event => event.date >= args.fromDate && event.date < args.beforeDate);
+      return { page, isDone: true, continueCursor: "" };
+    } };
+    for (const index of warm) await loadRecommendationWindow(isolatedClient, days[index]);
+    requested.length = 0;
+    const actual = await loadRecommendationWindow(isolatedClient, compareWindow);
+    const expectedKeys = ranges.filter(range => days.some((day, index) =>
+      day.fromDate >= range.fromDate && day.fromDate < range.beforeDate && !warm.includes(index))).map(key);
+    assert.deepEqual(requested.sort(), expectedKeys.sort(), "Warmed days " + warm.join(",") + " must preserve the original RPC ranges.");
+    assert.deepEqual(actual.events, candidates, "Each original event appears once, in chronological order. Empty days stay empty.");
+    assert.deepEqual(rankEventRecommendations(reference, actual.events, now), expected);
+  }
+
 }
