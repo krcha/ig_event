@@ -603,3 +603,40 @@ assert.equal(readCache.isPriorityCalendarWindow("2026-10-31", "2026-11-01", dayN
 assert.equal(readCache.isPriorityCalendarWindow("2026-10-31", "2026-11-03", dayNow), false);
 assert.equal(readCache.isPriorityCalendarWindow("2031-10-31", "2031-11-01", dayNow), false);
 console.log("Calendar navigation QA passed: one responsive tree, compact metadata parity, independent day rendering, exact counts, bounded reads, near-term cache protection, expiry and recovery.");
+
+{
+  const { loadRecommendationWindow } = compile("lib/travel/recommendation-window.ts", {
+    "server-only": {}, "../../convex/_generated/api": { api: { events: { listPublicRecommendationWindowPaginated: "recommendations" } } },
+    "../events/public-calendar-windows": calendarWindows, "../events/public-event-read-cache": readCache,
+  });
+  const calls = [];
+  let active = 0, peak = 0, fail = false;
+  const client = { url: "https://compare.example", async query(ref, args) {
+    assert.equal(ref, "recommendations");
+    active++;
+    peak = Math.max(peak, active);
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      calls.push(args);
+      if (fail) throw new Error("unavailable");
+      return args.cursor === null ? { page: [], isDone: false, continueCursor: "page2" }
+        : { page: [{ _id: args.fromDate }], isDone: true, continueCursor: "" };
+    } finally { active--; }
+  } };
+  const window = { fromDate: "2026-11-27", beforeDate: "2026-12-11" };
+  const [first, concurrent] = await Promise.all([loadRecommendationWindow(client, window), loadRecommendationWindow(client, window)]);
+  assert.equal(first.events.length, 14);
+  assert.deepEqual(concurrent, first);
+  assert.equal(peak, 2);
+  assert.equal(calls.length, 28, "Two references share all reads, including continuations after an empty page.");
+  assert.deepEqual(await loadRecommendationWindow(client, window), first);
+  assert.equal(calls.length, 28);
+  const overlap = await loadRecommendationWindow(client, { fromDate: "2026-11-28", beforeDate: "2026-12-12" });
+  assert.equal(calls.length, 30, "Changing the reference day reloads only the new day.");
+  assert.equal(overlap.events[0]._id, "2026-11-28");
+  const isolated = { ...client, url: "https://other.example" };
+  fail = true;
+  assert.ok((await loadRecommendationWindow(isolated, window)).error);
+  fail = false;
+  assert.equal((await loadRecommendationWindow(isolated, window)).events.length, 14);
+}

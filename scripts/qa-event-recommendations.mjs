@@ -33,6 +33,15 @@ const pending = event("pending", "Pending house", ["house"], { status: "pending"
 const later = event("later", "Out of window house", ["house"], { date: "2026-12-12" });
 
 const electro = rankEventRecommendations(stellar, [stellar, techno, house, folk, mixed, estimate, expired, pending, later], now);
+const compactCandidates = [stellar, techno, house, folk, mixed, estimate, expired, pending, later].map(row => ({
+  _id: row._id, title: row.title, venue: row.venue, date: row.date, time: row.time, status: row.status,
+  eventTaxonomy: getEventDiscoveryTaxonomy(row), genreEstimated: row.performerGenreResearch?.estimated === true,
+}));
+const compactMatches = rankEventRecommendations(stellar, compactCandidates, now);
+for (const mode of ["same", "different"]) {
+  const outcome = ({ event, match }) => [event._id, match.score, match.reason];
+  assert.deepEqual(compactMatches[mode].map(outcome), electro[mode].map(outcome));
+}
 assert.deepEqual(electro.same.map(({ event }) => event._id), ["house", "techno"]);
 assert.deepEqual(electro.different.map(({ event }) => event._id), ["folk"]);
 assert.ok(electro.same[0].match.score > electro.same[1].match.score);

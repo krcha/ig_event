@@ -12,7 +12,8 @@ import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
 import { getDisplayEventTime } from "@/lib/events/event-time";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
-import { loadPublicCalendarEventsWindow, type PublicEvent } from "@/lib/events/public-events";
+import type { PublicEvent } from "@/lib/events/public-events";
+import { loadRecommendationWindow } from "@/lib/travel/recommendation-window";
 import { formatPublicDate } from "@/lib/i18n/display";
 import { localizedMetadata } from "@/lib/i18n/seo";
 import { travelText } from "@/lib/travel/copy";
@@ -34,7 +35,8 @@ export default async function CompareEventPage({ params }: PageProps) {
 
   const convexUrl = getCalendarConvexUrl();
   if (!convexUrl) throw new Error("Convex is not configured yet.");
-  const reference = await new ConvexHttpClient(convexUrl).query(
+  const client = new ConvexHttpClient(convexUrl);
+  const reference = await client.query(
     api.events.getPublicApprovedEvent,
     { id: eventId, includeEventTaxonomy: true },
   ) as PublicEvent | null;
@@ -42,7 +44,7 @@ export default async function CompareEventPage({ params }: PageProps) {
 
   const now = Date.now();
   const window = getEventRecommendationWindow(reference.date, now);
-  const { events, error } = await loadPublicCalendarEventsWindow({ ...window, includeEventTaxonomy: true });
+  const { events, error } = await loadRecommendationWindow(client, window);
   const results = rankEventRecommendations(reference, events, now);
   const t = (key: Parameters<typeof travelText>[1]) => travelText(locale, key);
   const dateLabel = (date: string) => formatPublicDate(locale, date, { day: "numeric", month: "short" });

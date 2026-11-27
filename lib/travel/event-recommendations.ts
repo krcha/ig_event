@@ -1,6 +1,6 @@
 import { addDaysToDateKey, getNightlifeDefaultDateKey } from "../events/nightlife-date";
 import type { PublicEvent } from "../events/public-events";
-import { getEventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
+import { getEventDiscoveryTaxonomy, type EventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
 import { compareCompassEvents, eventEndedBeforeArrival, matchesCompassMode } from "./compass";
 
 export function getEventRecommendationWindow(referenceDate: string, now: number) {
@@ -9,7 +9,12 @@ export function getEventRecommendationWindow(referenceDate: string, now: number)
   return { fromDate, beforeDate: addDaysToDateKey(fromDate, 14) };
 }
 
-export function rankEventRecommendations(reference: PublicEvent, events: readonly PublicEvent[], now: number) {
+export type RecommendationCandidate = Pick<PublicEvent, "_id" | "title" | "venue" | "date" | "time" | "timeStatus" | "status"> & {
+  eventTaxonomy: EventDiscoveryTaxonomy;
+  genreEstimated: boolean;
+};
+
+export function rankEventRecommendations(reference: PublicEvent, events: readonly (PublicEvent | RecommendationCandidate)[], now: number) {
   const window = getEventRecommendationWindow(reference.date, now);
   const referenceTaxonomy = getEventDiscoveryTaxonomy(reference);
   const matches = events.flatMap((event) => {
@@ -18,9 +23,10 @@ export function rankEventRecommendations(reference: PublicEvent, events: readonl
       eventEndedBeforeArrival({ date: event.date, time: event.timeStatus === "unknown" ? undefined : event.time }, now)) {
       return [];
     }
-    const match = compareCompassEvents(referenceTaxonomy, getEventDiscoveryTaxonomy(event), {
+    const compact = "genreEstimated" in event;
+    const match = compareCompassEvents(referenceTaxonomy, compact ? event.eventTaxonomy : getEventDiscoveryTaxonomy(event), {
       sourceEstimated: reference.performerGenreResearch?.estimated,
-      candidateEstimated: event.performerGenreResearch?.estimated,
+      candidateEstimated: compact ? event.genreEstimated : event.performerGenreResearch?.estimated,
     });
     return match ? [{ event, match }] : [];
   });
