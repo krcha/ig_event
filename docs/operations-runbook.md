@@ -460,6 +460,12 @@ daily allowance, with 12 slots reserved until Belgrade noon and six until
 18:00. A new event revision or new direct evidence can resolve
 locally during a search cooldown. The daily ingestion callback schedules
 the same idempotent local worker. Only the shared sweep reserves paid work.
+A newly linked Instagram handle can qualify a previously ambiguous artist for
+one budgeted recheck. The booking credit has to match the artist in the
+occurrence and its dated source. The resolver records the set of credited
+handles it reviewed so the same evidence cannot repeatedly clear a cooldown.
+The artist profile still needs independent verification before its style is
+reused.
 
 For an existing deployment, initialize the registry with the internal mutation
 `performerRegistry:kickBackfill {}` and inspect `performerRegistry:getBackfillStatus {}`.

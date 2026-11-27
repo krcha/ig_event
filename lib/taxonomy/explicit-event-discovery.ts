@@ -33,10 +33,10 @@ export const genreProof: Record<MusicGenre, RegExp> = {
   trance: /\b(?:trance|psytrance|psy trance|psajtrens|trans muzik\w*)\b/,
   "drum-and-bass": /\b(?:drum (?:and |n )?bass|dram (?:end |en |n )?bejs|dnb|jungle)\b/,
   "disco-funk": /\b(?:disco|disko|funk|fank|funky|fanki)\b/,
-  pop: /\b(?:pop(?! up\b)|britpop|electropop|synthpop|hyperpop|schlager)\b/,
+  pop: /\b(?:pop(?! up\b)|britpop|electropop|synthpop|hyperpop|schlager|slager)\b/,
   rock: /\b(?:rock(?:a|u|om)?|rok|folk rok(?:a|u|om)|rokenrol\w*|rockabilly|r n r)\b/,
   "indie-alternative": /\b(?:indie|indi|alternativ\w*|post ?(?:punk|pank)|emo|grunge|shoegaze|doomgaze|new wave|darkwave|industrial|ebm|aggrotech|futurepop|dark electro|americana)\b/,
-  "metal-punk": /\b(?:metal|(?<!post )(?:pank|punk)|metalcore|thrashcore|post hardcore|screamo)\b/,
+  "metal-punk": /\b(?:metal(?:a|u|om)?|(?<!post )(?:pank|punk)|metalcore|thrashcore|post hardcore|screamo)\b/,
   "hip-hop": /\b(?:hip ?hop(?:a|u|om)?|rap|rep|trap)\b/,
   "rnb-soul": /\b(?:r and b|r n b|rnb|rhythm and blues|ritam i bluz|soul)\b/,
   "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz)(?:a|u|om)?|(?<!rhythm and |ritam i )(?:blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
@@ -198,6 +198,35 @@ function isGenreList(words: string): boolean {
   return !remainder.replace(/\b(?:i|ili|ni|niti|and|or|nor)\b/g, " ").trim();
 }
 
+// In a show listing, take styles from the words describing the programme.
+// A club name, opening band's name, review or artist biography is not a style.
+const OTHER_SHOW_CONTEXT = /\b(?:tribute|tribut\w*|covers?|oma[zj]\w*|listening|preslusavanj\w*|slusaonic\w*|about|film\w*|bioskop\w*|theat\w*|pozoris\w*|panel|talk|screening|podcast|playlist|radio|recap|previous|formerly|regularly|venue|poznat\w* po|cancel\w*|otkazan\w*|postponed|no|not|without|bez|nije|nema|mozda|maybe)\b/;
+const SHOW_STYLE_QUALIFIERS = /\b(?:sludge|doom|prog|progressive|ex yu|hits?|millennials)\b/g;
+
+function confirmedShowStyles(words: string, names: readonly string[]) {
+  const styles = styleWords(words, names);
+  return styles && isGenreList(styles.replace(SHOW_STYLE_QUALIFIERS, " "))
+    ? GENRES.filter(genre => genreProof[genre].test(styles)) : [];
+}
+
+function showStyles(original: string, names: readonly string[]) {
+  const raw = readDatedProgrammeRow(original)?.bill ?? original;
+  const text = normalizeTaxonomyText(raw);
+  if (OTHER_SHOW_CONTEXT.test(text) || NON_MUSIC_CONTEXT.test(text)) return;
+  const show = /^(?:(?:a|an|the) )?(.*?)\b(show|gig|concert|svirka|koncert|party|club night)(?: (?:with|featuring) (.+))?$/.exec(text);
+  // A Serbian announcement can describe the coming performance in the future tense.
+  const sound = /(?:^|\s)((?:će|ce) se oriti [\p{L}\s]{1,65} notama\s+[^.!?;]+)/iu.exec(raw);
+  const selection = /^(([\p{L}&'’ -]{1,40}?) (?:nostalgija|nostalgia night|u svim svojim nijansama|across its shades))(?=\s*[,;.!?]|$)/iu.exec(raw);
+  if (!show && !sound && !selection) return;
+  const role: "party" | "live" = selection || show && (show[2] === "party" || show[2] === "club night") ? "party" : "live";
+  const stylePhrases = selection ? [normalizeTaxonomyText(selection[2])] :
+    sound ? [normalizeTaxonomyText(sound[1]).split(" notama ")[1]!] : [show![1], show![3] ?? ""];
+  const styles = [...new Set(stylePhrases.flatMap(phrase => confirmedShowStyles(phrase, names)))];
+  if (!styles.length) return;
+  const quote = selection?.[1] ?? sound?.[1] ?? raw;
+  if (quote.length <= 120) return { quote, styles, role };
+}
+
 function isNegated(words: string, index: number, match: string, includeGenreList = false): boolean {
   if (NEGATIVE_END.test(words.slice(index + match.length))) return true;
   const before = words.slice(0, index);
@@ -235,8 +264,17 @@ export function hasExplicitGenreEvidence(input: ExplicitDiscoveryInput, source: 
   const proof = styleWords(normalizeTaxonomyText(quote), names);
   if (names.some((name) => containsTerm(name, proof)) &&
     !containsTerm(styleWords(normalizeTaxonomyText(input[source]), names), proof)) return false;
-  return clauses(input[source] ?? "").some((part) => part.quote.includes(quote) && discoveryQuoteMatchesOccurrence(part.quote, input.date) && !NON_MUSIC_CONTEXT.test(part.words) &&
-    hasAffirmedMatch(styleWords(part.words, names), proof, genreProof[genre], true));
+  return clauses(input[source] ?? "").some((part) => {
+    if (!part.quote.includes(quote) || !discoveryQuoteMatchesOccurrence(part.quote, input.date) || NON_MUSIC_CONTEXT.test(part.words)) return false;
+    const programme = showStyles(quote, names);
+    if (programme?.styles.includes(genre)) {
+      const current = showStyles(part.quote, names);
+      const title = normalizeTaxonomyText(input.title);
+      return Boolean(current?.styles.includes(genre)) && !OTHER_SHOW_CONTEXT.test(title) && !NON_MUSIC_CONTEXT.test(title) && !isExternalMusicRoleExcluded(input, programme.role) &&
+        !getExcludedDiscoveryGenres(input, DISCOVERY_TEXT_SOURCES).has(genre);
+    }
+    return hasAffirmedMatch(styleWords(part.words, names), proof, genreProof[genre], true);
+  });
 }
 
 export function getExcludedDiscoveryGenres(input: ExplicitDiscoveryInput, sources: readonly DiscoveryTextSource[] = ["sourceCaption", "occurrenceText"]): ReadonlySet<MusicGenre> {
@@ -254,6 +292,38 @@ export function getExcludedDiscoveryGenres(input: ExplicitDiscoveryInput, source
     }
   }
   return excluded;
+}
+
+/** A genre may be explicit in this listing while the activity itself is unresolved. */
+export function scopedProgrammeGenreEvidence(input: ExplicitDiscoveryInput, music: EventDiscoveryTaxonomy): ExplicitDiscoveryEvidence[] {
+  if (!["live", "party"].includes(music.primaryCategory) || hasConflictingProgrammeEvidence(input) ||
+    isExternalMusicRoleExcluded(input, music.primaryCategory as "live" | "party")) return [];
+  const current = classifyExplicitEventDiscovery({ ...input, currentTaxonomy: { ...music, genres: [] } });
+  const excluded = getExcludedDiscoveryGenres(input, DISCOVERY_TEXT_SOURCES);
+  const result: ExplicitDiscoveryEvidence[] = [];
+  for (const claim of current?.evidence ?? []) {
+    if (claim.kind !== "genre" || excluded.has(claim.label as MusicGenre)) continue;
+    for (const source of ["sourceCaption", "occurrenceText"] as const) {
+      const raw = input[source] ?? "";
+      // A clipping boundary may have removed the end of a negative statement.
+      if (!raw || raw.length >= SOURCE_LIMIT[source] || raw.trimEnd().endsWith("…") || raw.trimEnd().endsWith("...")) continue;
+      let quote = claim.source === source ? claim.quote : undefined;
+      if (!quote && claim.source === "description") {
+        // Corroborate a translated genre list with the announced evening in the
+        // original source. Individual biographies elsewhere in the caption do not qualify.
+        for (const part of clauses(raw)) {
+          if (!discoveryQuoteMatchesOccurrence(part.quote, input.date) || !/\b(?:ocekuje nas|pred nama je) vece\b.*\bmuzik\w*\b/.test(part.words)) continue;
+          const list = /[–—-]\s*(uz\s+[^.!?;]{3,115})[.!?]?$/iu.exec(part.quote)?.[1];
+          if (list && hasExplicitGenreEvidence(input, source, list, claim.label as MusicGenre)) { quote = list; break; }
+        }
+      }
+      if (quote && hasExplicitGenreEvidence(input, source, quote, claim.label as MusicGenre)) {
+        result.push({ ...claim, source, quote });
+        break;
+      }
+    }
+  }
+  return result;
 }
 
 export function corroborateLiveProgrammeGenre(input: ExplicitDiscoveryInput, taxonomy: EventDiscoveryTaxonomy): {
@@ -385,7 +455,7 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
   let billedSelection = false;
   if (!input.currentTaxonomy && !categorySet.size) {
     const billed = billedMusicProgramme(input, bySource);
-    if (billed) {
+    if (billed && !isExternalMusicRoleExcluded(input, billed.category)) {
       const { category, format, source, quote } = billed;
       billedSelection = category === "party" && !format;
       categorySet.add(category);
@@ -421,6 +491,7 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
       for (const { quote, words } of bySource[source]) {
         const context = styleWords(words, names);
         if (NON_MUSIC_CONTEXT.test(context)) continue;
+        const programme = showStyles(quote, names);
         const isStyleHeading = (source === "title" || source === "description") && PROGRAMME_STYLE_SUFFIX.test(context) &&
           isGenreList(context.replace(PROGRAMME_STYLE_SUFFIX, "").replace(/\blive\b/g, " "));
         const isBilledStyleList = PROGRAMME_STYLE_PREFIX.test(context) &&
@@ -430,14 +501,19 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
           (source === "title" && (Boolean(input.currentTaxonomy) && isGenreList(context) ||
             ACTIVITIES.some(({ category, cue }) => (category === "party" || category === "live") && cue.test(context))));
         for (const genre of GENRES) {
-          if (excluded.has(genre) || !genreProof[genre].test(context) || !hasExplicitGenreEvidence(input, source, quote, genre)) continue;
-          if (!strong || quote.length > 120) {
+          const programmeQuote = programme && categories.includes(programme.role) && programme.styles.includes(genre) ? programme.quote : undefined;
+          const genreQuote = programmeQuote ?? quote;
+          if (excluded.has(genre) || !genreProof[genre].test(context) || !hasExplicitGenreEvidence(input, source, genreQuote, genre)) continue;
+          // A separately named influence ("disco roots", "disco koreni") does
+          // not put that style on the bill or make an explicit selection incomplete.
+          if (programme && !programmeQuote && !genreProof[genre].test(context.replace(/\b\w+ (?:roots|koreni)\b/g, " "))) continue;
+          if ((!strong && !programmeQuote) || genreQuote.length > 120) {
             plausibleGenres.add(genre);
             continue;
           }
           if (!genres.has(genre)) {
             genres.add(genre);
-            evidence.push({ kind: "genre", label: genre, source, quote });
+            evidence.push({ kind: "genre", label: genre, source, quote: genreQuote });
           }
         }
       }

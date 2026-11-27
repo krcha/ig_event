@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { getFunctionName } from "convex/server";
+import { listDailyInputs } from "../convex/eventDiscovery.ts";
+import {
+  loadScopedPerformerHandles,
+  scopedPerformerHandles,
+} from "../convex/occurrencePerformerCredits.ts";
+import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 import {
   advanceBackfill,
   getBackfillStatus,
@@ -473,6 +479,390 @@ try {
       null,
     )[0].proof,
     undefined,
+  );
+  const credited = memory();
+  credited.put("venues", { _id: "venue-a", publicStatus: "published" });
+  const withCredit = (id, artists, date, row, caption, other = {}) =>
+    pub(id, artists, {
+      date,
+      createdAt: 10,
+      _creationTime: 10,
+      instagramPostId: id,
+      instagramPostUrl: "https://www.instagram.com/p/" + id + "/",
+      sourceCaption: caption,
+      normalizedFieldsJson: JSON.stringify({ rowSourceText: row, ...other }),
+    });
+  const teodora = withCredit(
+    "teodora",
+    ["Teodora Šćepanović"],
+    "2026-11-27",
+    "TEODORA ŠĆEPANOVIĆ; petak 27/11",
+    "Omiljene pesme.\n@teodora.scepanovic ponovo je sa nama 27. novembra u Lavashu!\nRezervacije na broj.",
+  );
+  const riskExcerpt = "PETAK / @risk.jockey veče muzike 90ih";
+  const risk = withCredit(
+    "risk",
+    ["RISK JOCKEY"],
+    "2026-11-27",
+    "PETAK, 27. NOVEMBAR 20.00H\nRISK JOCKEY 90’S NIGHT",
+    riskExcerpt + "\nSUBOTA / @other.dj",
+    {
+      multiEventSplitDetected: true,
+      carouselTextEvidence: [{ source: "caption", text: riskExcerpt }],
+    },
+  );
+  const ponorExcerpt =
+    "SUB 28.11. u 20h - Cloud Session 323 ponor: otnl & pallifaty @pallifaty";
+  const duo = withCredit(
+    "duo",
+    ["otnl", "pallifaty"],
+    "2026-11-28",
+    ponorExcerpt,
+    "PET 27.11. Petkov koncert @otnl\n" + ponorExcerpt,
+    { multiEventSplitDetected: true },
+  );
+  const actualCredits = [
+    [{ performer: "Teodora Šćepanović", handle: "teodora.scepanovic" }],
+    [{ performer: "RISK JOCKEY", handle: "risk.jockey" }],
+    [{ performer: "pallifaty", handle: "pallifaty" }],
+  ];
+  const fixtureEvents = [teodora, risk, duo];
+  for (const [i, e] of fixtureEvents.entries()) {
+    credited.put("events", e);
+    const saved = structuredClone(e.artists);
+    assert.deepEqual(
+      await loadScopedPerformerHandles(credited.ctx, e),
+      actualCredits[i],
+    );
+    await syncPerformerRegistryForEvent(credited.ctx, e._id);
+    assert.deepEqual(
+      e.artists,
+      saved,
+      "Source-bound artist fields remain byte-identical",
+    );
+  }
+  const appearances = [
+    ...credited.table("performerRegistryAppearances").values(),
+  ];
+  assert.deepEqual(
+    appearances.map((a) => [a.name, a.handle]),
+    [
+      ["Teodora Šćepanović", "teodora.scepanovic"],
+      ["RISK JOCKEY", "risk.jockey"],
+      ["otnl", undefined],
+      ["pallifaty", "pallifaty"],
+    ],
+  );
+  assert.ok(
+    appearances.every((a) => !a.independent && !a.profileId),
+    "A handle alone contributes no artist identity or genre proof",
+  );
+
+  const tagLine = "SAT / @vuk_vukosavljevic @itsrossv @milhousemusic",
+    vukRow = "28 NOVEMBER / SATURDAY NIGHT";
+  const vukFields = {
+    multiEventSplitDetected: true,
+    carouselTextEvidence: [{ source: "caption", text: tagLine }],
+    carouselDisplaySlideIndex: 4,
+    carouselSourceSlideIndexes: [4],
+    carouselPosterEvidence: [
+      { slide_index: 4, text: vukRow },
+      { slide_index: 4, text: "VUK VUKOSAVLJEVIĆ × MILHØUSE × ROSSA" },
+    ],
+  };
+  const vuk = withCredit(
+    "vuk",
+    ["VUK VUKOSAVLJEVIĆ", "MILHØUSE", "ROSSA", "@itsrossv", "@milhousemusic"],
+    "2026-11-28",
+    vukRow,
+    "FRI / @friday\n" + tagLine,
+    vukFields,
+  );
+  assert.deepEqual(await loadScopedPerformerHandles(credited.ctx, vuk), [
+    { performer: "VUK VUKOSAVLJEVIĆ", handle: "vuk_vukosavljevic" },
+  ]);
+  const duleRow = "SUBOTA, 28. NOVEMBAR 20.00H\nDULE RADETIĆ\nBAŠ HITOVI",
+    duleLine = "SUBOTA / @bash_hitovi @dule.radetic";
+  const dule = withCredit(
+    "dule",
+    ["DULE RADETIĆ", "@bash_hitovi"],
+    "2026-11-28",
+    duleRow,
+    "PETAK / @risk.jockey\n" + duleLine,
+    {
+      multiEventSplitDetected: true,
+      carouselTextEvidence: [{ source: "caption", text: duleLine }],
+    },
+  );
+  assert.deepEqual(await loadScopedPerformerHandles(credited.ctx, dule), [
+    { performer: "DULE RADETIĆ", handle: "dule.radetic" },
+  ]);
+  for (const alternate of [
+    { ...vukFields, carouselDisplaySlideIndex: 3 },
+    {
+      ...vukFields,
+      carouselPosterEvidence: [
+        { slide_index: 4, text: vukRow },
+        { slide_index: 3, text: "VUK VUKOSAVLJEVIĆ × MILHØUSE × ROSSA" },
+      ],
+    },
+    {
+      ...vukFields,
+      carouselPosterEvidence: [
+        { slide_index: 4, text: "27 NOVEMBER / FRIDAY NIGHT" },
+        { slide_index: 4, text: "VUK VUKOSAVLJEVIĆ × MILHØUSE × ROSSA" },
+      ],
+    },
+    {
+      ...vukFields,
+      carouselPosterEvidence: [
+        { slide_index: 4, text: vukRow },
+        { slide_index: 4, text: "Foto: VUK VUKOSAVLJEVIĆ" },
+      ],
+    },
+    {
+      ...vukFields,
+      carouselTextEvidence: [
+        {
+          source: "caption",
+          text: "FRI / @vuk_vukosavljevic @itsrossv @milhousemusic",
+        },
+      ],
+    },
+  ]) {
+    assert.deepEqual(
+      scopedPerformerHandles(vuk, alternate, vukRow, tagLine),
+      [],
+    );
+  }
+  assert.deepEqual(
+    scopedPerformerHandles(
+      { ...vuk, artists: vuk.artists.filter((a) => a !== "@itsrossv") },
+      vukFields,
+      vukRow,
+      tagLine,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    scopedPerformerHandles(
+      { ...vuk, sourceCaption: "Sponzori:\n" + tagLine },
+      vukFields,
+      vukRow,
+      tagLine,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    scopedPerformerHandles(
+      { ...vuk, eventType: "learning" },
+      vukFields,
+      vukRow,
+      tagLine,
+    ),
+    [],
+  );
+  const raw = "TEODORA ŠĆEPANOVIĆ; petak 27/11";
+  for (const bad of [
+    "Subota 28.11. @teodora.scepanovic ponovo je sa nama.",
+    "November 28: @teodora.scepanovic ponovo je sa nama.",
+    "Teodora Šćepanović @teodora.scepanovic – fotograf",
+    "📸 Teodora Šćepanović @teodora.scepanovic",
+    "Rezervacije: Teodora Šćepanović @teodora.scepanovic",
+    "Sponzor: Teodora Šćepanović @teodora.scepanovic",
+    "@teodora.scepanovic ne nastupa",
+    "@teodora.scepanovic ponovo je sa nama.\nNastup je otkazan.",
+    "@teodora.scepanovic",
+    "PETAK: @teodora_scepanovic nastupa i @teodora.scepanovic nastupa.",
+  ]) {
+    assert.deepEqual(scopedPerformerHandles(teodora, {}, raw, bad), [], bad);
+  }
+  assert.deepEqual(
+    scopedPerformerHandles(
+      { ...teodora, venueInstagramHandle: "teodora.scepanovic" },
+      {},
+      raw,
+      teodora.sourceCaption,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    scopedPerformerHandles(
+      teodora,
+      { sourceAccountName: "Teodora Šćepanović" },
+      raw,
+      teodora.sourceCaption,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    scopedPerformerHandles(
+      teodora,
+      { sourceOccurrencePlanUnverified: true },
+      raw,
+      teodora.sourceCaption,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    scopedPerformerHandles(
+      { ...teodora, artists: ["Teo-dora Šćepanović"] },
+      {},
+      raw,
+      teodora.sourceCaption,
+    ),
+    [],
+  );
+  const foreign = {
+    ...risk,
+    normalizedFieldsJson: JSON.stringify({
+      multiEventSplitDetected: true,
+      rowSourceText: "Petak RISK JOCKEY 27.11.",
+    }),
+  };
+  assert.deepEqual(
+    await loadScopedPerformerHandles(credited.ctx, foreign),
+    [],
+    "A neighbouring Instagram excerpt is unavailable to this appearance",
+  );
+  // The public-worker-compatible optional field must reach the ordinary resolver without changing billedName.
+  const svc = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "fixture-handle-secret";
+  try {
+    const run = {
+      _id: "run-credits",
+      mode: "daily",
+      status: "completed",
+      dailyDayKey: "2026-11-27",
+      createdAt: 1,
+      finishedAt: 20,
+    };
+    credited.put("ingestionRuns", run);
+    for (const e of fixtureEvents) {
+      credited.put("scrapedPosts", {
+        _id: "post-" + e._id,
+        postId: e.instagramPostId,
+        handle: e._id,
+      });
+      credited.put("ingestionRunHandleReceipts", {
+        _id: "receipt-" + e._id,
+        runId: run._id,
+        handle: e._id,
+        scrapedPostId: "post-" + e._id,
+      });
+    }
+    const daily = await listDailyInputs._handler(credited.ctx, {
+      runId: run._id,
+      cursor: null,
+      serviceSecret: process.env.CRON_SECRET,
+    });
+    assert.deepEqual(
+      daily.events.map((e) => e.performerHandles),
+      actualCredits,
+    );
+    assert.deepEqual(
+      daily.events.map((e) => e.artists),
+      fixtureEvents.map((e) => e.artists),
+    );
+    const seen = [];
+    const classification = {
+      primaryCategory: "party",
+      categories: ["party"],
+      formats: ["party"],
+      genres: [],
+    };
+    const unresolved = await resolveEventGenresBatch(
+      daily.events.map((e) => ({ ...e, currentTaxonomy: classification })),
+      {
+        classify: async (rows) => ({
+          model: "mock",
+          usage: {},
+          results: rows.map(({ key }) => ({
+            key,
+            taxonomy: null,
+            credits: [],
+            evidence: [],
+            discardedClaims: 0,
+          })),
+        }),
+        research: async (rows) => {
+          seen.push(...rows);
+          return {
+            model: "mock",
+            usage: {},
+            attempts: 1,
+            searchCalls: 0,
+            results: new Map(
+              rows.map((r) => [
+                r.key,
+                {
+                  status: "unverified",
+                  billedName: r.billedName,
+                  genres: [],
+                  identityEvidence: null,
+                  genreEvidence: [],
+                },
+              ]),
+            ),
+          };
+        },
+        estimate: async (rows) => ({
+          model: "mock",
+          usage: {},
+          results: new Map(rows.map((r) => [r.key, []])),
+        }),
+      },
+    );
+    assert.deepEqual(
+      seen.map((r) => [r.billedName, r.billedHandle]),
+      appearances.map((a) => [a.name, a.handle]),
+    );
+    assert.ok(
+      unresolved.results.every((r) => !r.webResearch),
+      "A billing handle never turns an unverified provider response into evidence",
+    );
+  } finally {
+    if (svc === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = svc;
+  }
+  // A verified external profile can be reused later even when the Instagram handles
+  // were credited only in each occurrence's source, not persisted in events.artists.
+  const oldBill = withCredit(
+    "named-origin",
+    ["Ena Selka"],
+    "2026-11-20",
+    "PETAK 20.11. Ena Selka",
+    "PETAK 20.11. Ena Selka @ena.selka",
+  );
+  const newBill = {
+    ...withCredit(
+      "named-target",
+      ["Ena Selka"],
+      "2026-11-27",
+      "PETAK 27.11. Ena Selka",
+      "PETAK 27.11. Ena Selka @ena.selka",
+    ),
+    venueId: "venue-b",
+    eventType: "event",
+  };
+  credited.put("venues", { _id: "venue-b", publicStatus: "published" });
+  for (const e of [oldBill, newBill]) credited.put("events", e);
+  credited.put("eventPerformerGenreResearch", research([act], oldBill._id));
+  await syncPerformerRegistryForEvent(credited.ctx, oldBill._id);
+  assert.ok(
+    [...credited.table("performerRegistryProfiles").values()].some(
+      (p) => p.identityKey === "handle:ena.selka",
+    ),
+  );
+  const reused = await lookupPerformerRegistryProgramme(credited.ctx, newBill);
+  assert.equal(reused.category, "party");
+  assert.equal(reused.matches[0].url, identity.url);
+  assert.deepEqual(
+    await lookupPerformerRegistryProgramme(credited.ctx, {
+      ...newBill,
+      sourceCaption: "",
+    }),
+    { matches: [] },
   );
   const back = memory();
   back.put("venues", { _id: "venue-a", publicStatus: "published" });

@@ -9,7 +9,13 @@ export const BILLED_PROGRAMME_REVIEW_VERSION = 1;
 export type PerformerGenreSource = { url: string; performer: string };
 export type PerformerGenreMatch = PerformerGenreSource & { genre: MusicGenre; identityUrl: string };
 export type PerformerGenreFormat = "dj-set" | "concert" | "live-performance" | "party" | "live";
+export type PerformerHandleCredit = { performer: string; handle: string };
 export type PerformerGenreAct = { billedName: string; billedHandle?: string; titleOnly?: boolean };
+
+export function billedHandleContextKey(credits: readonly PerformerHandleCredit[] | undefined) {
+  if (!credits?.length) return;
+  return JSON.stringify(credits.map(({ performer, handle }) => [performer, handle.toLowerCase()]).sort(([a], [b]) => a.localeCompare(b)));
+}
 
 export function getEventListingResearchAct(event: { title: string }): PerformerGenreAct | undefined {
   const title = event.title.trim();
@@ -36,6 +42,7 @@ export function getPerformerGenreResearchFormat(
 export function getPerformerGenreResearchActs(event: {
   title: string;
   artists: readonly string[];
+  performerHandles?: readonly PerformerHandleCredit[];
 }, format: PerformerGenreFormat, useListingTitle = false): PerformerGenreAct[] {
   const acts = new Map<string, PerformerGenreAct>();
   for (const artist of event.artists) {
@@ -45,7 +52,9 @@ export function getPerformerGenreResearchActs(event: {
     const normalized = normalizeTaxonomyText(name);
     if (name.length < 2 || name.length > 100 ||
       !normalized || /^(?:dj|tba|tbc|lineup|specijalni gost|special guest|unknown|nepoznato|various artists)$/u.test(normalized)) continue;
-    const handle = explicitHandle?.[2] ?? /^@([\w.]{2,30})$/u.exec(name)?.[1];
+    const scoped = event.performerHandles?.find(c => c.performer === name)?.handle;
+    const handle = explicitHandle?.[2] ?? /^@([\w.]{2,30})$/u.exec(name)?.[1] ??
+      (scoped && /^[a-z0-9_][a-z0-9._]{0,28}[a-z0-9_]$/i.test(scoped) ? scoped : undefined);
     acts.set(normalized, { billedName: name, ...(handle ? { billedHandle: handle } : {}) });
   }
   if (acts.size && acts.size <= 2) return [...acts.values()];
@@ -70,7 +79,7 @@ export function getPerformerGenreResearchActs(event: {
 }
 
 /** Only an actual named billing can turn a profile into programme context. */
-export function getBilledProgrammeActs(event: { title: string; artists: readonly string[] }): PerformerGenreAct[] {
+export function getBilledProgrammeActs(event: { title: string; artists: readonly string[]; performerHandles?: readonly PerformerHandleCredit[] }): PerformerGenreAct[] {
   if (!event.artists.length || event.artists.length > 2) return [];
   const acts = getPerformerGenreResearchActs(event, "live").filter(act => !act.titleOnly);
   return acts.length === event.artists.length && titleContainsOnlyBilledArtists(event.title, acts.map(act => act.billedName))

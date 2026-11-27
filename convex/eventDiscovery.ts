@@ -6,12 +6,12 @@ import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } fr
 import { requireAdminOrServiceSecret } from "./authz";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
-import { canonicalizeSourceUrl } from "../lib/domain/source-url";
+import { loadScopedPerformerHandles, occurrenceTextFromEvidence, readScopedInstagramCaption, scopedPerformerHandles } from "./occurrencePerformerCredits";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
 import { normalizeEventTime } from "../lib/events/event-time";
 import { addDaysToDateKey, formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
-import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, isExternalMusicRoleExcluded, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
+import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, isExternalMusicRoleExcluded, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, scopedProgrammeGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getStoredOrLegacyEventTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
@@ -21,6 +21,8 @@ import {
   getEventListingResearchAct,
   BILLED_PROGRAMME_REVIEW_VERSION,
   getBilledProgrammeActs,
+  billedHandleContextKey,
+  type PerformerHandleCredit,
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
@@ -28,8 +30,6 @@ import { categoryWindow, discoveryBudgets, type CategoryScanPhase, PRIORITY_CATE
 import { revalidateEventDiscoveryClassification } from "../lib/ai/classify-event-discovery";
 import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
-
-const CAPTION_MAX_LENGTH = 2200;
 
 const ENRICHMENT_LEASE_MS = 240_000;
 const ENRICHMENT_RETRY_MS = 60 * 60 * 1000;
@@ -43,6 +43,7 @@ const eventInputFields = {
   occurrenceText: v.optional(v.string()),
   venue: v.string(),
   artists: v.array(v.string()),
+  performerHandles: v.optional(v.array(v.object({performer:v.string(),handle:v.string()}))),
 };
 const eventInput = v.object(eventInputFields);
 const discoveryInputFields = {
@@ -104,52 +105,6 @@ function upcomingEvents(ctx: QueryCtx, fromDate: string) {
     q.eq("publicationState", "publishable").gte("date", fromDate)).order("asc");
 }
 
-async function readScopedInstagramCaption(
-  ctx: Pick<QueryCtx, "db">, event: Doc<"events">, fields: Record<string, unknown>,
-) {
-  const raw = event.sourceCaption?.trim().slice(0, CAPTION_MAX_LENGTH);
-  const source = canonicalizeSourceUrl("instagram", event.instagramPostUrl ?? event.canonicalSourceUrl);
-  if (!raw || !source.ok || fields.sourceOccurrencePlanUnverified === true) return;
-  const sharedByEvidence = fields.multiEventSplitDetected === true || fields.dateRangeExpanded === true ||
-    ["multiEventSplitCount", "splitEventTotal", "dateRangeExpandedCount", "expandedDateTotal"].some((key) => {
-      const count = fields[key];
-      return typeof count === "number" && count > 1;
-    });
-  const sharedByIndex = async () => {
-    const other = (rows: Doc<"events">[]) => rows.some(({ _id }) => _id !== event._id);
-    if (event.instagramPostId && other(await ctx.db.query("events").withIndex("by_instagramPostId", (q) =>
-      q.eq("instagramPostId", event.instagramPostId)).take(2))) return true;
-    const { canonicalUrl } = source.value;
-    if (event.canonicalSourceUrl === canonicalUrl) {
-      return other(await ctx.db.query("events").withIndex("by_canonicalSourceUrl", (q) =>
-        q.eq("canonicalSourceUrl", canonicalUrl)).take(2));
-    }
-    if (event.normalizedInstagramPostUrl === canonicalUrl) {
-      return other(await ctx.db.query("events").withIndex("by_normalizedInstagramPostUrl", (q) =>
-        q.eq("normalizedInstagramPostUrl", canonicalUrl)).take(2));
-    }
-    const originalUrl = event.instagramPostUrl;
-    return !!originalUrl && other(await ctx.db.query("events").withIndex("by_instagramPostUrl", (q) =>
-      q.eq("instagramPostUrl", originalUrl)).take(2));
-  };
-  if (!sharedByEvidence && !await sharedByIndex()) return raw;
-
-  // Shared posts can contain several lineups. Reuse only evidence assigned to
-  // this occurrence during extraction and present verbatim in the source.
-  const excerpts = [fields.rowSourceText, fields.splitSourceLine];
-  if (Array.isArray(fields.carouselTextEvidence)) {
-    for (const item of fields.carouselTextEvidence.slice(0, 8)) {
-      if (item?.source === "caption") excerpts.push(item.text);
-    }
-  }
-  const exact = excerpts.flatMap((item) => {
-    const text = typeof item === "string" ? item.trim() : "";
-    return text && text !== raw && raw.includes(text) ? [text] : [];
-  });
-  const scoped = [...new Set(exact)].join("\n\n").slice(0, CAPTION_MAX_LENGTH);
-  return scoped || undefined;
-}
-
 function readCaptionClaims(auditJson: string) {
   const { evidence } = readEventEvidenceRecord(auditJson);
   return Array.isArray(evidence) ? evidence.filter((claim) => claim?.source === "sourceCaption") : [];
@@ -159,11 +114,6 @@ function readDirectGenreClaims(auditJson: string) {
   const { evidence } = readEventEvidenceRecord(auditJson);
   return Array.isArray(evidence) ? evidence.filter((claim) => claim?.kind === "genre" &&
     ["sourceCaption", "occurrenceText", "title", "description"].includes(claim.source)) : [];
-}
-
-function occurrenceTextFromEvidence(evidence: Record<string, unknown>) {
-  const row = evidence.rowSourceText ?? evidence.splitSourceLine;
-  return typeof row === "string" && row.trim() ? row.slice(0, 800) : undefined;
 }
 
 function readEstimatedGenres(auditJson: string): MusicGenre[] {
@@ -197,6 +147,13 @@ export async function loadPublicEventDiscoveryLabels(
   const label = await loadLabel(ctx, event._id);
   if (!label || !labelIsCurrent(label, event.updatedAt)) return;
   const taxonomy = label.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
+  if (!label.taxonomy && Array.isArray(readEventEvidenceRecord(label.auditJson).scopedProgrammeGenres)) {
+    const full = await ctx.db.get(event._id);
+    if (full) {
+      const genres = await currentScopedProgrammeGenres(ctx, full, label);
+      if (genres.length) return { eventTaxonomy: { ...taxonomy, genres } };
+    }
+  }
   const registryCategory = label.model === REGISTRY_MODEL || readEventEvidenceRecord(label.auditJson).performerRegistryCategory === true;
   const includeGenre = includePerformerGenreResearch && !!getPerformerGenreResearchFormat(taxonomy);
   let research = includeGenre ? await loadGenreResearch(ctx, event._id) : null;
@@ -245,10 +202,15 @@ async function queuedResearchTarget(
   retryBefore: number,
 ) {
   const target = getResearchTarget(event, label);
-  if (!target) return null;
+  if (!target || !event) return null;
+  if (label && !label.taxonomy && Array.isArray(readEventEvidenceRecord(label.auditJson).scopedProgrammeGenres) &&
+    (await currentScopedProgrammeGenres(ctx, event, label)).length) return null;
   const row = await loadGenreResearch(ctx, target.key);
-  return row && researchIsCurrent(row, target.expectedUpdatedAt) &&
-    (row.matches.length || row.researchedAt > retryBefore) ? null : target;
+  if (row && researchIsCurrent(row, target.expectedUpdatedAt) && (row.matches.length || row.researchedAt > retryBefore)) return null;
+  const performerHandles = await loadScopedPerformerHandles(ctx,event);
+  return performerHandles.length
+    ? { ...target, acts: getPerformerGenreResearchActs({ ...event, performerHandles },target.format) }
+    : target;
 }
 
 export const listGenreResearchInputs = query({
@@ -452,8 +414,10 @@ async function discoveryCandidate(ctx: Pick<QueryCtx, "db">, event: Doc<"events"
   const occurrenceText = occurrenceTextFromEvidence(evidence);
   const sourceCaption = await readScopedInstagramCaption(ctx, event, evidence);
   const time = confirmedDiscoveryTime(event, evidence);
+  const performerHandles = scopedPerformerHandles(event, evidence, occurrenceText, sourceCaption);
   return { key: event._id, expectedUpdatedAt: event.updatedAt, title: event.title, venue: event.venue,
     date: event.date, eventType: event.eventType, artists: event.artists.slice(0, 20),
+    ...(performerHandles.length ? { performerHandles } : {}),
     ...(time ? { time } : {}),
     ...(event.description ? { description: event.description.slice(0, 800) } : {}),
     ...(occurrenceText ? { occurrenceText } : {}), ...(sourceCaption ? { sourceCaption } : {}) };
@@ -553,9 +517,10 @@ export const listDailyInputs = query({
         await ingestionWork(ctx, event._id)) return null;
       // The per-publication transaction will persist any reusable data even if
       // this older daily callback races the freshly scheduled local mutation.
-      const programme = await lookupPerformerRegistryProgramme(ctx, event);
+      const candidate = await discoveryCandidate(ctx, event);
+      const programme = await lookupPerformerRegistryProgramme(ctx, event, candidate.performerHandles ?? []);
       if (programme.matches.length || programme.category) return null;
-      return discoveryCandidate(ctx, event);
+      return candidate;
     }));
     return { events: events.filter((event) => event !== null), cursor: page.isDone ? null : page.continueCursor };
   },
@@ -623,10 +588,13 @@ function loadEnrichmentState(ctx: Pick<QueryCtx, "db">) {
 }
 
 function dueForFirstBilledReview(event: Doc<"events">, taxonomy: EventDiscoveryTaxonomy | null | undefined,
-  audit: Record<string, unknown>, now: number) {
-  if (audit.performerReviewVersion === BILLED_PROGRAMME_REVIEW_VERSION || audit.ambiguousPerformerIdentity ||
-    audit.partialProgramme || audit.performerReviewDeferred || typeof audit.upcomingGenreRetryAt !== "number" ||
+  audit: Record<string, unknown>, now: number, handles?: readonly PerformerHandleCredit[]) {
+  if (audit.performerReviewDeferred || typeof audit.upcomingGenreRetryAt !== "number" ||
     audit.upcomingGenreRetryAt <= now + ENRICHMENT_RETRY_MS) return false;
+  const key = billedHandleContextKey(handles);
+  const newIdentityEvidence = key !== undefined && audit.billedHandleContext !== key;
+  if (!newIdentityEvidence && (audit.performerReviewVersion === BILLED_PROGRAMME_REVIEW_VERSION ||
+    audit.ambiguousPerformerIdentity || audit.partialProgramme)) return false;
   const music = getPerformerGenreResearchFormat(taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
   return music ? getPerformerGenreResearchActs(event, music).some(act => !act.titleOnly) :
     (!taxonomy || taxonomy.primaryCategory === "other") && getBilledProgrammeActs(event).length > 0;
@@ -645,6 +613,7 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
   let preferPerformerResearch = false;
   if (current) {
     const audit = readEventEvidenceRecord(current.auditJson);
+    if (!taxonomy && Array.isArray(audit.scopedProgrammeGenres) && (await currentScopedProgrammeGenres(ctx, event, current)).length) return null;
     const music = format ?? getPerformerGenreResearchFormat(getStoredOrLegacyEventTaxonomy(event));
     const previousVersion = audit.performerReviewVersion !== BILLED_PROGRAMME_REVIEW_VERSION;
     preferPerformerResearch = Boolean((previousVersion || audit.performerReviewDeferred === true) && music && readEstimatedGenres(current.auditJson).length &&
@@ -654,7 +623,9 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
       // Existing completed v0 attempts searched only a listing for an unknown
       // programme. Give the regular, budgeted sweep one chance to verify a billed
       // act. Transient retries and current-version negative results keep their delay.
-      const upgrade = dueForFirstBilledReview(event, taxonomy, audit, now);
+      const handles = await loadScopedPerformerHandles(ctx, event);
+      const upgrade = dueForFirstBilledReview(event, taxonomy, audit, now, handles);
+      if (upgrade && handles.length && music) preferPerformerResearch = true;
       if (!upgrade) return null;
       if (!format) {
         const candidate = await discoveryCandidate(ctx, event);
@@ -691,6 +662,20 @@ function readPriorityEvidence(auditJson: string): CategoryEvidence[] {
     claim.quote.trim().length > 0 && claim.quote.length <= 120);
 }
 
+function scopedProof(event: Doc<"events">, candidate: Awaited<ReturnType<typeof discoveryCandidate>>, music: EventDiscoveryTaxonomy) {
+  const fields = readEventEvidenceRecord(event.normalizedFieldsJson);
+  if (fields.sourceOccurrencePlanUnverified === true || fields.sourceOccurrenceAmbiguousProvenance === true) return [];
+  return scopedProgrammeGenreEvidence(candidate, music);
+}
+
+async function currentScopedProgrammeGenres(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, label: Doc<"eventDiscoveryLabels">) {
+  const stored = readEventEvidenceRecord(label.auditJson).scopedProgrammeGenres;
+  if (!Array.isArray(stored) || !stored.length || !labelIsCurrent(label, event.updatedAt)) return [];
+  const fresh = scopedProof(event, await discoveryCandidate(ctx, event), getStoredOrLegacyEventTaxonomy(event));
+  return fresh.filter(claim => stored.some(old => old?.label === claim.label && old.source === claim.source && old.quote === claim.quote))
+    .map(claim => claim.label as MusicGenre);
+}
+
 async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, existing: Doc<"eventDiscoveryLabels"> | null,
   candidate: Awaited<ReturnType<typeof discoveryCandidate>>, taxonomy: EventDiscoveryTaxonomy, evidence: CategoryEvidence[], model: string) {
   const current = existing && labelIsCurrent(existing, event.updatedAt) ? existing : null;
@@ -700,7 +685,8 @@ async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, exis
   const direct = musical ? classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
   const summary = musical ? classifyExplicitEventDiscovery({ title: candidate.title, description: candidate.description,
     date: candidate.date, venue: candidate.venue, artists: candidate.artists, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
-  const genreProof = [...evidence, ...(direct?.evidence ?? []), ...(summary?.evidence ?? [])].filter(claim =>
+  const previousScoped = musical && Array.isArray(audit.scopedProgrammeGenres) ? scopedProof(event, candidate, taxonomy) : [];
+  const genreProof = [...evidence, ...previousScoped, ...(direct?.evidence ?? []), ...(summary?.evidence ?? [])].filter(claim =>
     musical && claim.kind === "genre" && genreKeys.has(claim.label) && !excluded.has(claim.label as MusicGenre) &&
     hasExplicitGenreEvidence(candidate, claim.source, claim.quote, claim.label as MusicGenre));
   const genres = [...new Set(genreProof.map(claim => claim.label as MusicGenre))].slice(0, 5);
@@ -712,6 +698,7 @@ async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, exis
   // genre. A newly confirmed music programme gives the regular sweep new input.
   delete audit.upcomingGenreRetryAt;
   delete audit.performerRegistryCategory;
+  delete audit.scopedProgrammeGenres;
   const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model,
     taxonomy: { ...taxonomy, genres }, auditJson: serializeGenreAudit({ ...audit, evidence: proof,
       categoryPriority: { version: PRIORITY_CATEGORY_VERSION, confirmedAt: Date.now(), model } }, estimate.length ? estimate : undefined) };
@@ -748,7 +735,7 @@ async function setIngestionWork(ctx: MutationCtx, event: Doc<"events">, needed: 
 
 async function usableRegistryProgramme(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, candidate: Awaited<ReturnType<typeof discoveryCandidate>>,
   taxonomy: EventDiscoveryTaxonomy | null) {
-  const programme = await lookupPerformerRegistryProgramme(ctx, event);
+  const programme = await lookupPerformerRegistryProgramme(ctx, event, candidate.performerHandles ?? []);
   const programmeRole = (taxonomy ?? getStoredOrLegacyEventTaxonomy(event)).categories.find(c => c === "party" || c === "live");
   if ((programme.category && isExternalMusicRoleExcluded(candidate, programme.category)) ||
     (programmeRole && isExternalMusicRoleExcluded(candidate, programmeRole))) return { matches: [], category: undefined };
@@ -773,6 +760,10 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
   }
   const candidate = await discoveryCandidate(ctx, event);
   if (hasConflictingProgrammeEvidence(candidate)) {
+    if (current && !current.taxonomy && Array.isArray(audit.scopedProgrammeGenres)) {
+      delete audit.scopedProgrammeGenres;
+      await ctx.db.patch(current._id, { auditJson: JSON.stringify(audit) });
+    }
     await setIngestionWork(ctx, event, false, now);
     return flags;
   }
@@ -809,8 +800,10 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
     if (category) {
       taxonomy = { primaryCategory: category, categories: [category], formats: [], genres: [] };
       if (!known || current?.taxonomy?.primaryCategory !== category) {
+        const retained = Array.isArray(audit.scopedProgrammeGenres) ? scopedProof(event, candidate, taxonomy) : [];
+        if (retained.length) taxonomy = { ...taxonomy, genres: retained.map(claim => claim.label as MusicGenre) };
         const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model: REGISTRY_MODEL,
-          taxonomy, auditJson: JSON.stringify({ performerRegistryCategory: true, source: "performer-registry" }) };
+          taxonomy, auditJson: JSON.stringify({ performerRegistryCategory: true, source: "performer-registry", ...(retained.length ? { evidence: retained } : {}) }) };
         if (row) await ctx.db.replace(row._id, value);
         else await ctx.db.insert("eventDiscoveryLabels", value);
         flags.categoryWritten = true;
@@ -820,6 +813,28 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
       await ctx.db.patch(row._id, { taxonomy: null, auditJson: "{}" });
       known = false;
       taxonomy = null;
+    }
+  }
+  if (!known && (!current?.taxonomy || registryCategory)) {
+    const proof = scopedProof(event, candidate, getStoredOrLegacyEventTaxonomy(event));
+    if (proof.length) {
+      if (JSON.stringify(audit.scopedProgrammeGenres) !== JSON.stringify(proof)) {
+        const auditJson = JSON.stringify({ ...audit, scopedProgrammeGenres: proof });
+        if (current && !registryCategory) await ctx.db.patch(current._id, { auditJson });
+        else {
+          const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION,
+            model: LOCAL_MODEL, taxonomy: null, auditJson: JSON.stringify({ scopedProgrammeGenres: proof }) };
+          if (row) await ctx.db.replace(row._id, value);
+          else await ctx.db.insert("eventDiscoveryLabels", value);
+        }
+        flags.directGenreWritten = true;
+      }
+      await setIngestionWork(ctx, event, false, now);
+      return flags;
+    }
+    if (current && !current.taxonomy && Array.isArray(audit.scopedProgrammeGenres)) {
+      delete audit.scopedProgrammeGenres;
+      await ctx.db.patch(current._id, { auditJson: JSON.stringify(audit) });
     }
   }
   const canUseGenres = getPerformerGenreResearchFormat(taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
@@ -840,7 +855,7 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
     await ctx.db.delete(research._id);
   }
   await setIngestionWork(ctx, event, !known || (!!canUseGenres && !genuine && !cacheHit), now,
-    flags.categoryWritten || dueForFirstBilledReview(event, taxonomy, audit, now) || typeof audit.upcomingGenreRetryAt !== "number" ? now : audit.upcomingGenreRetryAt,
+    flags.categoryWritten || dueForFirstBilledReview(event, taxonomy, audit, now, candidate.performerHandles) || typeof audit.upcomingGenreRetryAt !== "number" ? now : audit.upcomingGenreRetryAt,
     !known ? "category" : event.artists.length ? "performer_genre" : "listing_genre");
   return flags;
 }
@@ -868,11 +883,13 @@ export const backfillPublishedDiscovery = internalMutation({
     requireUpcomingDate(fromDate);
     requireUpcomingDate(throughDate);
     if (fromDate > throughDate) throw new Error("Invalid discovery backfill range.");
+    const pageOptions = { cursor, numItems: 4, maximumBytesRead: 1_500_000 };
     const page = await ctx.db.query("events").withIndex("by_publicationState_date", q =>
-      q.eq("publicationState", "publishable").gte("date", fromDate).lte("date", throughDate)).paginate({ cursor, numItems: 4 });
+      q.eq("publicationState", "publishable").gte("date", fromDate).lte("date", throughDate)).paginate(pageOptions);
     const counts = { scanned: page.page.length, categoryWritten: 0, directGenreWritten: 0, registryGenreWritten: 0 };
     for (const event of page.page) {
       if (!await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
+      await syncPerformerRegistryForEvent(ctx, event._id);
       const flags = await enrichFromAvailableEvidence(ctx, event, Date.now());
       for (const key of ["categoryWritten", "directGenreWritten", "registryGenreWritten"] as const) if (flags[key]) counts[key]++;
     }
@@ -925,7 +942,7 @@ export const claimPriorityCategories = mutation({
         counts.written++;
         continue;
       }
-      const programme = await lookupPerformerRegistryProgramme(ctx, event);
+      const programme = await lookupPerformerRegistryProgramme(ctx, event, candidate.performerHandles ?? []);
       if (programme.category) {
         const applied = await enrichFromAvailableEvidence(ctx, event, now);
         if (applied.categoryWritten) { counts.written++; continue; }
@@ -1011,16 +1028,17 @@ export const claimUpcomingBatch = mutation({
       }
       let discovery = await upcomingEnrichmentState(ctx, event, now);
       if (!discovery) return null;
+      const candidate = await discoveryCandidate(ctx, event);
       if (page) {
-        const programme = await lookupPerformerRegistryProgramme(ctx, event);
+        const programme = await lookupPerformerRegistryProgramme(ctx, event, candidate.performerHandles ?? []);
         if (programme.category || programme.matches.length) {
           await enrichFromAvailableEvidence(ctx, event, now);
           discovery = await upcomingEnrichmentState(ctx, event, now);
           if (!discovery) return null;
         }
       }
-      const performerSearchHints = await lookupPerformerRegistrySearchHints(ctx, event);
-      return { ...await discoveryCandidate(ctx, event),
+      const performerSearchHints = await lookupPerformerRegistrySearchHints(ctx, event, candidate.performerHandles ?? []);
+      return { ...candidate,
         ...(performerSearchHints.length ? { performerSearchHints } : {}),
         ...(discovery.preferPerformerResearch ? { preferPerformerResearch: true } : {}),
         ...(discovery.currentTaxonomy ? { currentTaxonomy: discovery.currentTaxonomy } : {}) };
@@ -1136,6 +1154,8 @@ async function loadUnknownGenreState(ctx: Pick<QueryCtx, "db">, event: Doc<"even
   const currentLabel = label && labelIsCurrent(label, event.updatedAt) ? label : null;
   const taxonomy = currentLabel?.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
   if (taxonomy.genres.length) return { label, currentLabel, taxonomy, known: true };
+  if (currentLabel && !currentLabel.taxonomy && Array.isArray(readEventEvidenceRecord(currentLabel.auditJson).scopedProgrammeGenres) &&
+    (await currentScopedProgrammeGenres(ctx, event, currentLabel)).length) return { label, currentLabel, taxonomy, known: true };
   if (!getPerformerGenreResearchFormat(taxonomy)) return null;
   const known = !!currentLabel && !!projectGenreFallback(taxonomy, currentLabel, await loadGenreResearch(ctx, event._id));
   return { label, currentLabel, taxonomy, known };

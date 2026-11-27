@@ -21,10 +21,12 @@ import {
   BILLED_PROGRAMME_REVIEW_VERSION,
   canPublishPerformerGenreSource,
   getBilledProgrammeActs,
+  billedHandleContextKey,
   getEventListingResearchAct,
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
   type PerformerGenreAct,
+  type PerformerHandleCredit,
   type PerformerGenreFormat,
   type PerformerGenreMatch,
 } from "@/lib/taxonomy/performer-genre-research";
@@ -41,6 +43,7 @@ export type EventGenreCandidate = EventDiscoveryInput & {
   currentTaxonomy?: EventDiscoveryTaxonomy;
   preferPerformerResearch?: boolean;
   performerSearchHints?: { performer: string; profileUrl: string }[];
+  performerHandles?: PerformerHandleCredit[];
 };
 
 export type EventGenreResolution = {
@@ -202,7 +205,8 @@ export async function resolveEventGenresBatch(
       method: taxonomy?.genres.length ? evidence.some((claim) => claim.kind === "genre" && claim.source === "sourceCaption")
         ? "instagram" : "announcement" : "unknown",
       auditJson: JSON.stringify({ credits: event.currentTaxonomy ? [] : row.credits, evidence, discardedClaims: row.discardedClaims,
-        ...(!options.categoryOnly ? { performerReviewVersion: BILLED_PROGRAMME_REVIEW_VERSION } : {}) }),
+        ...(!options.categoryOnly ? { performerReviewVersion: BILLED_PROGRAMME_REVIEW_VERSION,
+          billedHandleContext: billedHandleContextKey(event.performerHandles) } : {}) }),
     };
     if (!classified && !local?.complete && !event.currentTaxonomy) {
       result.deferred = true;

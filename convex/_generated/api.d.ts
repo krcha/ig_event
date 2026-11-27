@@ -132,6 +132,7 @@ import type * as legacyDefinitiveOutputRecoveryAllowlist from "../legacyDefiniti
 import type * as maintenance from "../maintenance.js";
 import type * as mediaActions from "../mediaActions.js";
 import type * as mediaAssets from "../mediaAssets.js";
+import type * as occurrencePerformerCredits from "../occurrencePerformerCredits.js";
 import type * as pendingSourceConflictReclassification from "../pendingSourceConflictReclassification.js";
 import type * as performerRegistry from "../performerRegistry.js";
 import type * as performerRegistryEvidence from "../performerRegistryEvidence.js";
@@ -297,6 +298,7 @@ declare const fullApi: ApiFromModules<{
   maintenance: typeof maintenance;
   mediaActions: typeof mediaActions;
   mediaAssets: typeof mediaAssets;
+  occurrencePerformerCredits: typeof occurrencePerformerCredits;
   pendingSourceConflictReclassification: typeof pendingSourceConflictReclassification;
   performerRegistry: typeof performerRegistry;
   performerRegistryEvidence: typeof performerRegistryEvidence;

@@ -1,3 +1,4 @@
+import type { PerformerHandleCredit } from "../lib/taxonomy/performer-genre-research";
 import type { Infer } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import type { performerEvidence } from "./performerRegistryValues";
@@ -33,12 +34,15 @@ function audit(text: string): Json {
 }
 const validGenre = new Set<string>(MUSIC_GENRES.map(({ key }) => key));
 const compound = /[,;/|]|\s(?:&|\+|x|b2b|feat\.?|ft\.?|vs\.?)\s/i;
-export function registryCredits(artists: readonly string[]): Credit[] {
+export function registryCredits(
+  artists: readonly string[],
+  performerHandles?: readonly PerformerHandleCredit[],
+): Credit[] {
   const credits = new Map<string, Credit>();
   for (const raw of artists) {
     if (compound.test(raw)) continue;
     const [act] = getPerformerGenreResearchActs(
-      { title: "", artists: [raw] },
+      { title: "", artists: [raw], performerHandles },
       "live",
     );
     if (!act || act.titleOnly) continue;
@@ -325,6 +329,7 @@ export function evidenceForCredits(
   event: Doc<"events">,
   row: Doc<"eventPerformerGenreResearch"> | null,
   label: Doc<"eventDiscoveryLabels"> | null,
+  performerHandles?: readonly PerformerHandleCredit[],
 ) {
   const research = currentAudit(
     row,
@@ -339,7 +344,7 @@ export function evidenceForCredits(
   const reviewed = research.genreScope
     ? research
     : object(discovery.reviewedProgramme);
-  return registryCredits(event.artists).map((credit) => {
+  return registryCredits(event.artists, performerHandles).map((credit) => {
     const edit = editorial(credit, event, row, label, reviewed);
     if (edit) return { credit, proof: edit };
     const named = items(research.acts)

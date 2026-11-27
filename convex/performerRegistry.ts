@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { loadScopedPerformerHandles } from "./occurrencePerformerCredits";
+import type { PerformerHandleCredit } from "../lib/taxonomy/performer-genre-research";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalMutation,
@@ -142,17 +144,26 @@ async function liveEvidence(ctx: ReadCtx, a: Appearance, cache: SourceCache) {
         return [];
       const { row, label } = await evidenceInputs(ctx, e._id);
       if (!musicCompatible(e, label)) return [];
-      return evidenceForCredits(e, row, label);
+      const performerHandles = await loadScopedPerformerHandles(ctx, e);
+      return evidenceForCredits(e, row, label, performerHandles);
     })();
     cache.set(a.eventId, pending);
   }
   const entry = (await pending).find(
-    (c) => c.credit.key === a.nameKey && c.credit.handle === a.handle,
+    (c) =>
+      c.credit.key === a.nameKey && (!a.handle || c.credit.handle === a.handle),
   );
   // Revisions may change metadata, remove an appearance or replace its underlying
   // proof. A stale registration never republishes the previous quote or identity.
-  if (entry?.proof && exactJsonValue(entry.proof, a.evidence))
-    return entry.proof;
+  if (!entry?.proof) return;
+  if (exactJsonValue(entry.proof, a.evidence)) return entry.proof;
+  // A pre-handle profile can keep its independently checked facts until sync.
+  // A newly discovered handle itself is published only after that sync.
+  if (!a.handle && !a.evidence.verifiedHandle && entry.proof.verifiedHandle) {
+    const { verifiedHandle, ...oldShape } = entry.proof;
+    if (verifiedHandle && exactJsonValue(oldShape, a.evidence))
+      return a.evidence;
+  }
 }
 function family(url: string) {
   const parts = new URL(url).hostname.split(".");
@@ -265,6 +276,7 @@ async function resolveCredit(
 export async function lookupPerformerRegistryProgramme(
   ctx: ReadCtx,
   event: Event,
+  scopedHandles?: readonly PerformerHandleCredit[],
 ): Promise<{
   matches: PerformerGenreMatch[];
   category?: "party" | "live";
@@ -276,7 +288,10 @@ export async function lookupPerformerRegistryProgramme(
     !(await eligible(ctx, event))
   )
     return empty;
-  const credits = registryCredits(event.artists);
+  const credits = registryCredits(
+    event.artists,
+    scopedHandles ?? (await loadScopedPerformerHandles(ctx, event)),
+  );
   if (credits.length !== event.artists.length || !credits.length) return empty;
   const context = getEventDiscoveryTaxonomy(event);
   if (
@@ -344,6 +359,7 @@ export async function lookupPerformerRegistryForEvent(
 export async function lookupPerformerRegistrySearchHints(
   ctx: ReadCtx,
   event: Event,
+  scopedHandles?: readonly PerformerHandleCredit[],
 ): Promise<{ performer: string; profileUrl: string }[]> {
   if (
     !event.artists.length ||
@@ -351,7 +367,10 @@ export async function lookupPerformerRegistrySearchHints(
     !(await eligible(ctx, event))
   )
     return [];
-  const credits = registryCredits(event.artists);
+  const credits = registryCredits(
+    event.artists,
+    scopedHandles ?? (await loadScopedPerformerHandles(ctx, event)),
+  );
   if (credits.length !== event.artists.length) return [];
   const cache: SourceCache = new Map();
   const hints: { performer: string; profileUrl: string }[] = [];
@@ -473,7 +492,12 @@ export async function syncPerformerRegistryForEvent(
   if (event && event.artists.length && (await eligible(ctx, event))) {
     const { row, label } = await evidenceInputs(ctx, eventId);
     const entries = musicCompatible(event, label)
-      ? evidenceForCredits(event, row, label)
+      ? evidenceForCredits(
+          event,
+          row,
+          label,
+          await loadScopedPerformerHandles(ctx, event),
+        )
       : [];
     if (entries.length > MAX_CREDITS)
       throw new Error(

@@ -463,6 +463,7 @@ function dailyQueueFixture() {
   eventFixture("no-receipt", {}, "no-receipt");
   eventFixture("other-run", {}, "other-run");
   const ingestionQueue = new Map();
+  const appearances = new Map();
   const tables = {
     events: () => [...events.values()],
     scrapedPosts: () => posts,
@@ -471,14 +472,14 @@ function dailyQueueFixture() {
     eventPerformerGenreResearch: () => [...webRows.values()],
     eventDiscoveryIngestionQueue: () => [...ingestionQueue.values()],
     performerRegistryProfiles: () => [],
-    performerRegistryAppearances: () => [],
+    performerRegistryAppearances: () => [...appearances.values()],
     eventDiscoveryEnrichmentState: () => enrichmentState ? [enrichmentState] : [],
   };
   const lookupKeys = {
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
-    by_priority_readyAt: ["priority", "readyAt"], by_name: ["nameKey"], by_event: ["eventId"],
+    by_priority_readyAt: ["priority", "readyAt"], by_identity: ["identityKey"], by_name: ["nameKey"], by_event: ["eventId"],
     by_creation_time: ["_creationTime", "_creationTime"],
     by_publicationState_date: ["publicationState", "date"], by_key: ["key"],
   };
@@ -526,6 +527,12 @@ function dailyQueueFixture() {
         } };
       },
       insert: async (table, data) => {
+        if (table === "performerRegistryAppearances") {
+          const id = "appearance-" + data.eventId + "-" + data.nameKey;
+          assert.ok(!appearances.has(id));
+          appearances.set(id, { ...data, _id: id });
+          return id;
+        }
         if (table === "eventDiscoveryIngestionQueue") {
           assert.ok(!ingestionQueue.has(data.eventId));
           ingestionQueue.set(data.eventId, { ...data, _id: "queue-" + data.eventId });
@@ -542,11 +549,13 @@ function dailyQueueFixture() {
         byEvent.set(data.eventId, { ...data, _id: `${table}-${data.eventId}` });
       },
       replace: async (id, data) => {
+        if (appearances.has(id)) { appearances.set(id, { ...data, _id: id }); return; }
         const byEvent = ingestionQueue.get(data.eventId)?._id === id ? ingestionQueue : labels.get(data.eventId)?._id === id ? labels : webRows;
         assert.equal(byEvent.get(data.eventId)?._id, id);
         byEvent.set(data.eventId, { ...data, _id: id });
       },
       delete: async (id) => {
+        if (appearances.delete(id)) return;
         for (const map of [ingestionQueue, webRows, labels]) for (const row of map.values()) {
           if (row._id === id) { map.delete(row.eventId); return; }
         }
@@ -838,6 +847,35 @@ try {
   assert.equal((await legacyClaim(owner)).events.find(row => row.key === "estimate")?.preferPerformerResearch, true,
     "A transient failure retries the web lookup only after its delay, even if the local programme estimate still exists.");
 
+  const handleRetry = dailyQueueFixture();
+  const handled = handleRetry.events.get("single");
+  const originalClock = Date.now;
+  Date.now = () => Date.parse("2026-11-27T07:00:00Z");
+  try {
+    handleRetry.events.clear(); handleRetry.labels.clear();
+    Object.assign(handled, { date: "2026-11-27", title: "Teodora Šćepanović", artists: ["Teodora Šćepanović"],
+      normalizedFieldsJson: JSON.stringify({ rowSourceText: "TEODORA ŠĆEPANOVIĆ; petak 27/11" }), description: "",
+      sourceCaption: "@teodora.scepanovic ponovo je sa nama 27. novembra u Lavashu!" });
+    handleRetry.events.set(handled._id, handled);
+    handleRetry.labels.set(handled._id, { _id: "handle-retry-label", eventId: handled._id, eventUpdatedAt: handled.updatedAt,
+      version: EVENT_DISCOVERY_VERSION, model: "old", taxonomy: party, auditJson: JSON.stringify({ performerReviewVersion: BILLED_PROGRAMME_REVIEW_VERSION,
+        ambiguousPerformerIdentity: true, upcomingGenreRetryAt: Date.now() + EMPTY_RESEARCH_RETRY_MS }) });
+    const claimHandled = () => claimUpcomingBatch._handler(handleRetry.dailyCtx, { owner, serviceSecret: "" });
+    const trial = await claimHandled();
+    assert.equal(trial.events[0]?.preferPerformerResearch, true, "A newly dated billing handle earns one shared-budget identity check.");
+    const [credit] = trial.events[0].performerHandles;
+    assert.equal(credit.handle, "teodora.scepanovic");
+    const checked = await resolveEventGenresBatch(trial.events, {
+      research: async rows => ({ model: "fixture", searchCalls: 1, results: new Map(rows.map(row =>
+        [row.key, { billedName: row.billedName, status: "ambiguous", genres: [] }])) }),
+      classify: async () => ({ model: "fixture", results: new Map() }),
+    });
+    await completeUpcomingBatch._handler(handleRetry.dailyCtx, { owner, serviceSecret: "", model: "fixture",
+      results: checked.results.map(({ eventId, expectedUpdatedAt, taxonomy, auditJson }) => ({ eventId, expectedUpdatedAt, taxonomy, auditJson })) });
+    assert.equal((await claimHandled()).events.length, 0, "An unchanged handle cannot repeatedly override the negative cooldown.");
+    assert.equal(handleRetry.enrichmentState().attempted, 1);
+  } finally { Date.now = originalClock; }
+
   const spring = categoryWindow(Date.parse("2026-03-28T12:00:00Z"));
   assert.equal(spring.includes({ date: "2026-03-30", time: "13:59", timeStatus: "confirmed" }), true);
   assert.equal(spring.includes({ date: "2026-03-30", time: "14:00", timeStatus: "confirmed" }), false);
@@ -1029,6 +1067,45 @@ try {
 
   // Run the same mutation the publication transaction schedules. A previous
   // null/cooldown and a full paid budget must not hide new local programme proof.
+  const scopedOnly = dailyQueueFixture();
+  const swing = scopedOnly.events.get("single");
+  for (const event of scopedOnly.events.values()) event.date = "2000-01-01";
+  Object.assign(swing, { date: "2026-11-26", title: "Vous Ete's Swing", venue: "Bluz i Pivo",
+    eventType: "live music", artists: ["Vous Ete's Swing"], timeStatus: "unknown",
+    description: "An evening of soul, jazz, blues, gospel and swing.",
+    normalizedFieldsJson: JSON.stringify({ rowSourceText: "ČETVRTAK 26.NOV. 20h; Vous Ete's Swing" }),
+    sourceCaption: "U četvrtak, 26. novembra, u Bluz i Pivu očekuje nas veče posvećeno tradiciji afroameričke muzike – uz soul, džez, bluz, gospel i zarazni swing!" });
+  scopedOnly.labels.set("single", { _id: "genre-only", eventId: "single", eventUpdatedAt: swing.updatedAt, version: EVENT_DISCOVERY_VERSION,
+    model: "prior", taxonomy: null, auditJson: JSON.stringify({ credits: [], earlierNote: "retained" }) });
+  const swingNow = Date.now;
+  Date.now = () => Date.parse("2026-11-26T15:00:00Z");
+  try {
+    const run = () => processPublishedEvent._handler(scopedOnly.dailyCtx, { eventId: "single" });
+    const read = () => loadPublicEventDiscoveryLabels(scopedOnly.dailyCtx, swing, true);
+    await run();
+    const saved = structuredClone(scopedOnly.labels.get("single"));
+    assert.equal(saved.taxonomy, null);
+    const proof = JSON.parse(saved.auditJson);
+    assert.equal(proof.earlierNote, "retained");
+    assert.deepEqual(proof.scopedProgrammeGenres.map(c => c.label), ["rnb-soul", "jazz-blues"]);
+    assert.ok(proof.scopedProgrammeGenres.every(c => c.source === "sourceCaption" && swing.sourceCaption.includes(c.quote)));
+    assert.deepEqual((await read()).eventTaxonomy.genres, ["rnb-soul", "jazz-blues"]);
+    await run();
+    assert.deepEqual(scopedOnly.labels.get("single"), saved);
+    assert.equal((await claimUpcomingBatch._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "" })).events.length, 0);
+    const category = await claimPriorityCategories._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "", allowModel: false });
+    assert.equal(category.counts.known, 0);
+    assert.equal(category.counts.unresolved, 1);
+    swing.normalizedFieldsJson = JSON.stringify({ sourceOccurrencePlanUnverified: true });
+    assert.equal(await read(), undefined, "A change in source scope invalidates the public claim before the scheduled cleanup.");
+    await run();
+    assert.equal(JSON.parse(scopedOnly.labels.get("single").auditJson).scopedProgrammeGenres, undefined);
+    swing.sourceCaption = "No jazz. No soul tonight.";
+    swing.normalizedFieldsJson = "{}";
+    await run();
+    assert.equal(await read(), undefined);
+  } finally { Date.now = swingNow; }
+
   const ingested = dailyQueueFixture();
   const ingestedEvent = ingested.events.get("single");
   const date = getBelgradeDayKey(Date.now() + 86_400_000);

@@ -89,6 +89,55 @@ for (const source of ["sourceCaption", "occurrenceText"]) {
   assert.equal(isExternalMusicRoleExcluded(twoDates, "live"), false);
   assert.equal(isExternalMusicRoleExcluded({ ...twoDates, date: "2026-11-28" }, "live"), true);
 }
+
+const metalShow = {
+  key: "billed-show", title: "SEVENGILL, URSTAAT, FRAKHTAL", date: "2026-11-28",
+  artists: ["SEVENGILL", "URSTAAT", "FRAKHTAL"],
+  currentTaxonomy: { primaryCategory: "live", categories: ["live"], formats: ["concert"], genres: [] },
+  sourceCaption: "Po prvi put u Fabrici Alternativne Kulturne Scene će se oriti zvuk dubokih mračnih gitara notama sludge, doom i prog metala.",
+  description: "Sludge, doom and prog metal show featuring Greek bands SEVENGILL and URSTAAT, with local support FRAKHTAL from Novi Sad.",
+};
+const showLabels = classifyExplicitEventDiscovery(metalShow);
+assert.deepEqual(showLabels.taxonomy.genres, ["metal-punk"]);
+assert.equal(showLabels.evidence[0].source, "sourceCaption");
+assert.ok(metalShow.sourceCaption.includes(showLabels.evidence[0].quote));
+const storedShow = { ...showLabels, key: metalShow.key, credits: [], discardedClaims: 0 };
+assert.deepEqual(revalidateEventDiscoveryClassification(metalShow, storedShow).taxonomy.genres, ["metal-punk"]);
+for (const description of [
+  "A tribute to the sludge, doom and prog metal show.", "Listening party about the sludge, doom and prog metal show.",
+  "Screening of the sludge, doom and prog metal show.", "Not a metal show.", "A gig at the metal club.",
+  "27.11 - Sludge, doom and prog metal show; 28.11 - Guest programme.",
+  "Sludge, doom and prog metal show cancelled.",
+]) {
+  const actual = classifyExplicitEventDiscovery({ ...metalShow, title: "Programme", artists: [], sourceCaption: "", description });
+  assert.deepEqual(actual.taxonomy.genres, [], description);
+}
+assert.deepEqual(revalidateEventDiscoveryClassification({ ...metalShow, title: "Meet the artist: listening party" }, storedShow).taxonomy.genres, []);
+assert.deepEqual(revalidateEventDiscoveryClassification({ ...metalShow, sourceCaption: "No metal show." }, storedShow).taxonomy.genres, []);
+const listed = { ...metalShow, title: "Saturday", sourceCaption: undefined,
+  currentTaxonomy: { primaryCategory: "party", categories: ["party"], formats: [], genres: [] } };
+assert.ok(classifyExplicitEventDiscovery({ ...listed, description: "Millennials rock party featuring pop rock hits, pop punk and alternative." }).taxonomy.genres.includes("rock"));
+assert.ok(classifyExplicitEventDiscovery({ ...listed, description: "Club night featuring Ex-Yu pop, funk, new wave, disco, electro, rock and šlager." }).taxonomy.genres.includes("disco-funk"));
+assert.deepEqual(classifyExplicitEventDiscovery({ ...listed, description: "RNB nostalgia night." }).taxonomy.genres, ["rnb-soul"]);
+const selectors = { title: "Aster × Orion", date: "2026-11-28", venue: "Venue", artists: ["Aster", "Orion"],
+  occurrenceText: "Aster × Orion | 28.11.2026. | 23:00",
+  sourceCaption: "TWO SELECTORS. ONE DANCEFLOOR.\nAster × Orion\nHouse u svim svojim nijansama, disco koreni, duboki groove.\n28.11.2026." };
+const chosen = classifyExplicitEventDiscovery(selectors);
+assert.equal(chosen.complete, true);
+assert.equal(chosen.taxonomy.primaryCategory, "party");
+assert.deepEqual(chosen.taxonomy.genres, ["house"]);
+for (const changes of [{ date: "2026-11-27" }, { artists: ["Aster", "Someone else"] },
+  { sourceCaption: "Aster × Orion\nHouse u svim svojim nijansama." }, { sourceCaption: selectors.sourceCaption + "\nNo party tonight." }]) {
+  assert.equal(classifyExplicitEventDiscovery({ ...selectors, ...changes }), null);
+}
+for (const [title, description] of [
+  ["White City Soul", "Night at Hard Rock Cafe."],
+  ["Lineup", "Last week's rock concert was a hit."],
+  ["KOTOE", "Known for eclectic sets which combine disco, acid and tropical rhythms."],
+  ["Hard Rock Cafe", "A background techno playlist before the show."],
+]) {
+  assert.deepEqual(classifyExplicitEventDiscovery({ ...listed, title, description }).taxonomy.genres, []);
+}
 for (const categoryOnly of [true, false]) {
   const run = await resolveEventGenresBatch([withdrawn, show], { ...localOnly, categoryOnly });
   assert.equal(run.localClassified, 1);

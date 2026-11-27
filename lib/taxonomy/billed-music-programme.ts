@@ -75,6 +75,13 @@ export function billedMusicProgramme(input: ExplicitDiscoveryInput, bySource: Cl
   }
   // A named selection with explicit dancing bills a party; the source may
   // leave the playback format (DJ set, vinyl, etc.) unstated.
+  const caption = input.sourceCaption ?? "";
+  const lineup = caption.split(/\r?\n/).find(line => acts.every(act => ` ${normalizeTaxonomyText(line)} `.includes(` ${act} `)));
+  const selectors = caption.split(/\r?\n/).find(line => /^(?:two selectors one dancefloor|dva selektora jedan podijum)$/.test(normalizeTaxonomyText(line)));
+  if (selectors && selectors.trim().length <= 120 && acts.length === 2 && lineup &&
+    acts.every(act => ` ${rowWords} `.includes(` ${act} `)) && rowDate.dated && rowDate.matches && calendarEvidence(caption, input.date).matches) {
+    return { category: "party", source: "sourceCaption", quote: selectors.trim() };
+  }
   const dance = bySource.sourceCaption.some(p => /\b(?:endless dance|djuskamo se|dance all night)\b/.test(p.words));
   if (dance && calendarEvidence(input.sourceCaption ?? "", input.date).matches && rowDate.dated && rowDate.matches && row.length <= 120 && /^muzicki izbor\b/.test(rowWords) &&
       acts.some(act => (` ${rowWords} `).includes(` ${act} `))) {
