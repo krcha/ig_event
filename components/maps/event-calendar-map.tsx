@@ -65,7 +65,7 @@ function MapEventRow({ event, openNowState }: { event: PublicEvent; openNowState
     <Link aria-label={`${event.title} at ${event.venue}, ${getEventSessionLabel(event) || time.label}`} className="group flex items-start gap-3 rounded-xl px-3 py-3 hover:bg-white/[0.045] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-event-map-event-id={event._id} href={`/events/${event._id}`} prefetch={false}>
       <Clock3 aria-hidden="true" className="mt-0.5 h-4 w-4 flex-none text-primary" />
       <div className="min-w-0 flex-1">
-        <p className={cn("text-xs text-muted-foreground", time.kind === "venue_hours" ? "font-normal" : "font-medium")}><PublicText text={time.label} /></p>
+        <p className={cn("text-xs text-muted-foreground", time.kind === "unknown" ? "font-normal" : "font-medium")}><PublicText text={time.label} /></p>
         <h3 className="mt-1 text-sm font-semibold leading-5 text-foreground group-hover:text-primary">{event.title}</h3>
         <EventSessionLabel event={event} />
         <EventMetaRow className="mt-1" event={event} />

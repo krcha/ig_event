@@ -112,15 +112,16 @@ test("Google full-day hours have an unambiguous calendar label", () => {
     time: "TBD",
     venueHours: { hoursJson: serializeVenueHoursJson(hours) },
   });
-  assert.equal(presentation.kind, "venue_hours");
-  assert.equal(presentation.label, "Open 24 hours");
+  assert.equal(presentation.kind, "unknown");
+  assert.equal(presentation.label, "Time not announced");
+  assert.equal(presentation.venueHoursLabel, "Open 24 hours");
   const ordinary = map([
     { open: { day: 4, hour: 20 }, close: { day: 5, hour: 3 } },
   ]);
   assert.equal(resolveEventTimePresentation({
     date: "2026-10-29",
     venueHours: { hoursJson: serializeVenueHoursJson(ordinary) },
-  }).label, "20:00\u201303:00");
+  }).venueHoursLabel, "20:00\u201303:00");
 });
 
 // 5. Week wrap (Saturday 22:00 -> Sunday 04:00) spans next day off Saturday.

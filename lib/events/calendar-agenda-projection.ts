@@ -16,7 +16,7 @@ export function projectCalendarAgendaEvents(
 ): CalendarAgendaEvent[] {
   return events.map(event => {
     const presentation = resolveEventTimePresentation(event);
-    const hours = resolveEventTimePresentation({ date: event.date, venueHours: event.venueHours });
+    const hours = presentation.kind === "unknown" ? presentation : resolveEventTimePresentation({ date: event.date, venueHours: event.venueHours });
     const time = normalizeEventTime(event.time);
     const row = { ...event };
     delete row.description;
@@ -30,7 +30,7 @@ export function projectCalendarAgendaEvents(
       tags: getEventTags(event),
       mobileOrder: mobileOrder.get(event._id) ?? 0,
       sessionLabel: getEventSessionLabel(event),
-      venueHoursLabel: hours.kind === "venue_hours" ? hours.label : null,
+      venueHoursLabel: hours.venueHoursLabel ?? null,
       band: getCalendarTimeBandKey(event),
       presentation,
       timeParts: {

@@ -40,3 +40,13 @@ export function getEventSessionLabel(event: EventSessionInput): string | null {
     : event.displayTimeLabel?.trim() || getDisplayEventTime(event.time);
   return time ? `${ageLabel} \u00b7 ${time}` : ageLabel;
 }
+
+/** Select the chosen performance time from a row that advertises several starts. */
+export function selectVerifiedSessionClockQuote(time: string, evidence: string | null | undefined, row: string | null | undefined, verified: boolean) {
+  const quote = evidence?.trim();
+  if (!verified || !quote || !row?.includes(quote)) return {};
+  const exact = /^(\d{1,2})(?:[:.](\d{2}))?\s*(?:[hч]|sati)?$/iu.exec(quote);
+  if (!exact || (exact[2] === undefined && !/[hч]|sati/iu.test(quote))) return {};
+  const normalized = exact[1].padStart(2, "0") + ":" + (exact[2] ?? "00");
+  return normalized === time ? { evidenceText: quote } : {};
+}

@@ -10,7 +10,7 @@ import { travelText } from "@/lib/travel/copy";
 import { LocalizedElement, PublicText } from "@/components/i18n/public-text";
 import type { Metadata } from "next";
 import { LocalizedLink as Link } from "@/components/i18n/public-text";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { cache, type ReactNode } from "react";
 import {
   ArrowLeft,
@@ -196,7 +196,7 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
 
   const convex = new ConvexHttpClient(convexUrl);
   const { event, venues } = await loadPublicEventDetailData<EventRecord, VenueRecord>({
-    loadEvent: () => convex.query(getPublicApprovedEventQuery, { id: eventId, includeEventTaxonomy: true }) as Promise<EventRecord | null>,
+    loadEvent: () => convex.query(getPublicApprovedEventQuery, { id: eventId, includeEventTaxonomy: true, followReviewedBookmark: true }) as Promise<EventRecord | null>,
     loadVenues: (loadedEvent) =>
       loadedEvent.venueId
         ? (convex.query(listPublicVenueFieldsByIdsQuery, {
@@ -209,6 +209,8 @@ const loadEvent = cache(async function loadEvent(eventId: string): Promise<Event
   if (!event) {
     return null;
   }
+
+  if (event._id !== eventId) permanentRedirect(localizeHref(`/events/${event._id}`, await getMetadataLocale()));
 
   const venue = event.venueId
     ? venues.find((candidate) => candidate._id === event.venueId)
@@ -422,7 +424,14 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                     icon={Clock3}
                     label={publicText(locale, eventTime.heading)}
                     value={publicText(locale, eventTime.label)}
-                    valueClassName={eventTime.kind === "venue_hours" ? "font-normal" : undefined}
+                    valueClassName={eventTime.kind === "unknown" ? "font-normal" : undefined}
+                    detail={eventTime.venueHoursLabel || eventTime.inferredEnd ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {eventTime.venueHoursLabel
+                          ? `${publicText(locale, "Venue opening hours")}: ${publicText(locale, eventTime.venueHoursLabel)}`
+                          : publicText(locale, "Ends at venue closing")}
+                      </p>
+                    ) : undefined}
                   />
                   <div className="relative overflow-hidden rounded-[1rem] border border-border/75 bg-white/[0.025] px-3 py-3 transition hover:border-primary/35 hover:bg-white/[0.045]">
                     {venueHref ? (

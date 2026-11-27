@@ -11,6 +11,49 @@ import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, isExternalMusicRoleExcluded } from "../lib/taxonomy/explicit-event-discovery.ts";
 import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 
+import { announcedConcertGenres, classifyAnnouncedProgramme, scopedScheduleCaption } from "../lib/taxonomy/announced-programme.ts";
+
+const scopedSlot = { date: "2026-11-28", title: "Signal", artists: ["Signal"], occurrenceText: "🪓 28.11 — Signal" };
+const listingSection = "🪓 28.11 — Signal\nVinyl, funk, disco, rap, house – selections from the shelves. One of the best DJ collectives in the city, with us on Saturday.\n20:00";
+const weekly = "27.11 — Other\nTechno from an earlier guest.\n\n" + listingSection + "\n\n29.11 — Brunch\nOur jazz brunch from 12h.";
+const listingCaption = scopedScheduleCaption(scopedSlot, weekly);
+assert.equal(listingCaption, listingSection);
+const scopedSelection = classifyAnnouncedProgramme({ ...scopedSlot, sourceCaption: listingCaption });
+assert.equal(scopedSelection?.taxonomy.primaryCategory, "party");
+assert.deepEqual(scopedSelection.taxonomy.genres, ["house", "disco-funk", "hip-hop"]);
+assert.ok(scopedSelection.evidence.every(c => listingCaption.includes(c.quote)));
+for (const [slot, caption] of [
+  [{ ...scopedSlot, date: "2026-11-29" }, weekly], [{ ...scopedSlot, title: "Neighbor" }, weekly],
+  [scopedSlot, weekly + "\n\n" + listingSection], [scopedSlot, weekly.replace("Saturday.", "Friday.")],
+  [scopedSlot, weekly.replace("Vinyl,", "29.11 — Dinner\nVinyl,")],
+]) assert.equal(scopedScheduleCaption(slot, caption), undefined);
+assert.equal(scopedScheduleCaption(scopedSlot, weekly, true), undefined);
+const sameDay = { date: "2026-11-28", title: "Inventory", occurrenceText: "28.11 — Inventory" };
+const activity = { ...sameDay, sourceCaption: "Kreiramo svoje razglednice tehnikom kineskog slikarstva. #slikarskaradionica" };
+assert.equal(classifyAnnouncedProgramme(activity)?.taxonomy.primaryCategory, "participate");
+for (const input of [
+  { ...activity, sourceCaption: "Ranije smo pravili razglednice tehnikom slikarstva. #radionica" },
+  { ...activity, occurrenceText: "27.11 — Inventory" }, { ...activity, sourceCaption: activity.sourceCaption + " Radionica je otkazana." },
+  { ...scopedSlot, sourceCaption: listingSection.replace("Vinyl, funk", "Last month we played funk").replace("with us on Saturday", "last Saturday") },
+  { ...sameDay, title: "Nightlife".toUpperCase(), occurrenceText: "DJ Nightlife discussed a film" },
+]) assert.equal(classifyAnnouncedProgramme(input), undefined);
+const b2bSlot = { date: "2026-11-28", title: "Nova b2b Mima", artists: ["Nova", "Mima"], occurrenceText: "Nova b2b Mima | 28 NOVEMBER - 20:00",
+  sourceCaption: "Poznat po house muzici, Nova ovog puta pult deli sa Mimom.", description: "House, disco and jazz." };
+assert.deepEqual(classifyAnnouncedProgramme(b2bSlot)?.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: [] });
+assert.equal(classifyAnnouncedProgramme({ ...b2bSlot, artists: ["Nova"] }), undefined);
+const filmInput = { title: "A Work", date: "2026-11-28", occurrenceText: "A Work\nSvake večeri od 26. novembra do 2. decembra u 19h" };
+const filmCaption = "🎬 Bioskop Akademije\n\n📽️ A Work\n\n📍Svake večeri od 26. novembra do 2. decembra u 19h\n\nSynopsis.";
+assert.deepEqual(classifyAnnouncedProgramme({ ...filmInput, sourceCaption: scopedScheduleCaption(filmInput, filmCaption) }).taxonomy.formats, ["screening"]);
+for (const other of [{ ...filmInput, date: "2026-12-03" }, { ...filmInput, title: "Another film" }]) assert.equal(scopedScheduleCaption(other, filmCaption), undefined);
+
+const concertAndFilm = { primaryCategory: "live", categories: ["live", "culture"], formats: ["concert", "screening"], genres: [] };
+const ensemble = { date: "2026-11-28", title: "Trio Echo", occurrenceText: "Pozivamo vas na koncert sastava Trio Echo",
+  sourceCaption: "Pozivamo vas na koncert sastava Trio Echo, koji kroz etno fuziju spaja više muzičkih tradicija.\nZatim sledi dokumentarni film." };
+assert.deepEqual(announcedConcertGenres(ensemble, concertAndFilm).map(e => e.label), ["etno-world"]);
+assert.deepEqual(announcedConcertGenres({ ...ensemble, title: "Drugi ansambl" }, concertAndFilm), []);
+assert.deepEqual(announcedConcertGenres({ ...ensemble, sourceCaption: "Na prethodnom koncertu etno fuziju spajao je Trio Echo." }, concertAndFilm), []);
+assert.deepEqual(announcedConcertGenres(ensemble, { ...concertAndFilm, primaryCategory: "culture" }), []);
+
 // A credited programme must support its own date and activity. A stage name,
 // legacy type, or biography cannot supply either on its own.
 const billed = { title: "Nova", artists: ["Nova"], date: "2026-11-27", venue: "Jazz Klub" };

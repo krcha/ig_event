@@ -1,6 +1,8 @@
 import { v, type Infer } from "convex/values";
-import { internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { performerSearchOccurrence } from "./publicEventProjection";
+import type { Doc, Id } from "./_generated/dataModel";
 import { directoryFields, directoryProof } from "./performerRegistryValues";
 import { directoryGenreKeys } from "../lib/taxonomy/performer-account-styles";
 import { canPublishPerformerGenreSource } from "../lib/taxonomy/performer-genre-research";
@@ -109,7 +111,16 @@ function shapeIsValid(entry: Entry) {
         p.quote.trim().length >= 4 && p.quote.length <= 600);
 }
 
-async function validatesAnchor(ctx: ReadCtx, p: Profile | null, proof: Proof) {
+type Event = Doc<"events">;
+type Appearance = Doc<"performerRegistryAppearances">;
+type Link = Doc<"performerDirectoryLinks">;
+type BookingContext = { event: Event | null; appearances: Appearance[] };
+
+async function bookingAppearances(ctx: ReadCtx, eventId: Id<"events">) {
+  return ctx.db.query("performerRegistryAppearances").withIndex("by_event", q => q.eq("eventId", eventId)).take(129);
+}
+
+async function validatesAnchor(ctx: ReadCtx, p: Profile | null, proof: Proof, context?: BookingContext) {
   if (proof.kind === "identity") {
     if (!p) return false;
     // The reviewer checked the named DJS card against a source bound to THIS registry identity.
@@ -118,10 +129,8 @@ async function validatesAnchor(ctx: ReadCtx, p: Profile | null, proof: Proof) {
     const url = pinnedUrl(p);
     return !!url && sameUrl(url, proof.localUrl);
   }
-  const [event, appearances] = await Promise.all([
-    ctx.db.get(proof.eventId),
-    ctx.db.query("performerRegistryAppearances").withIndex("by_event", q => q.eq("eventId", proof.eventId)).take(129),
-  ]);
+  const [event, appearances] = context ? [context.event, context.appearances] as const :
+    await Promise.all([ctx.db.get(proof.eventId), bookingAppearances(ctx, proof.eventId)]);
   if (!event || event.date !== proof.date || event.status !== "approved" || event.venue !== proof.venue ||
       event.publicationState !== "publishable" || appearances.length >= 129) return false;
   const named = appearances.filter(a => a.name === proof.localName && a.date === proof.date &&
@@ -145,6 +154,83 @@ async function validatesAnchor(ctx: ReadCtx, p: Profile | null, proof: Proof) {
   const names = await ctx.db.query("performerRegistryProfiles")
     .withIndex("by_name", q => q.eq("nameKey", p.nameKey)).take(2);
   return names.length === 1 && names[0]._id === p._id;
+}
+
+// Recompute from reviewed, event-bound booking proofs only. Profile-only
+// identity evidence cannot add a name to another event's search results.
+export async function syncDirectoryEventSearch(ctx: MutationCtx, event: Event, newSource?: Link["_id"]) {
+  const requested = new Set(event.directorySearchCredits?.sources ?? []);
+  if (newSource) requested.add(newSource);
+  if (!requested.size) return false;
+  const sources: Link["_id"][] = [];
+  const names = new Set<string>();
+  const context = { event, appearances: await bookingAppearances(ctx, event._id) };
+  for (const id of [...requested].sort()) {
+    const link = await ctx.db.get(id);
+    if (!link) continue;
+    const bookings = link.proofs.filter((proof): proof is Extract<Proof, { kind: "booking" }> =>
+      proof.kind === "booking" && proof.eventId === event._id);
+    if (!bookings.length) continue;
+    sources.push(id);
+    const profile = link.profileId ? await ctx.db.get(link.profileId) : null;
+    if (link.profileId && (!profile || profile.identityKey !== link.identityKey)) continue;
+    for (const proof of bookings) {
+      if (await validatesAnchor(ctx, profile, proof, context)) {
+        names.add(link.artistName);
+        names.add(proof.creditedAs);
+      }
+    }
+  }
+  const credits = sources.length ? { sources, revision: event.updatedAt,
+    occurrence: performerSearchOccurrence(event), names: [...names].sort() } : undefined;
+  if (exactJsonValue(event.directorySearchCredits, credits)) return false;
+  // Derived fields must not advance the source revision or invalidate its receipts.
+  await ctx.db.patch(event._id, { directorySearchCredits: credits });
+  return true;
+}
+
+const SEARCH_BATCH = 4;
+function bookingEvents(link: Link) {
+  return [...new Set(link.proofs.flatMap(proof => proof.kind === "booking" ? [proof.eventId] : []))].sort();
+}
+async function refreshLinkSearch(ctx: MutationCtx, link: Link, after?: string) {
+  const ids = bookingEvents(link).filter(id => !after || id > after);
+  const batch = ids.slice(0, SEARCH_BATCH);
+  let changed = 0;
+  for (const eventId of batch) {
+    const event = await ctx.db.get(eventId);
+    if (event && await syncDirectoryEventSearch(ctx, event, link._id)) changed++;
+  }
+  return { changed, after: ids.length > batch.length ? batch[batch.length - 1] : null };
+}
+
+// One CLI call handles one link and at most four distinct events. The returned
+// cursor/after pair can resume safely; concurrent new and changed links self-sync.
+export const backfillSearchCredits = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), after: v.optional(v.string()) },
+  returns: v.object({ cursor: v.union(v.string(), v.null()), after: v.union(v.string(), v.null()), done: v.boolean(), changed: v.number() }),
+  handler: async (ctx, args) => {
+    const cursor = args.cursor ?? null;
+    const page = await ctx.db.query("performerDirectoryLinks").paginate({ cursor, numItems: 1 });
+    const result = page.page[0] ? await refreshLinkSearch(ctx, page.page[0], args.after) : { after: null, changed: 0 };
+    return { ...result, done: !result.after && page.isDone, cursor: result.after ? cursor : page.isDone ? null : page.continueCursor };
+  },
+});
+
+export const continueSearchCredits = internalMutation({
+  args: { sourceId: v.id("performerDirectoryLinks"), after: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const link = await ctx.db.get(args.sourceId);
+    if (link) await refreshWrittenLink(ctx, link, args.after);
+    return null;
+  },
+});
+
+async function refreshWrittenLink(ctx: MutationCtx, link: Link, after?: string) {
+  const result = await refreshLinkSearch(ctx, link, after);
+  if (result.after) await ctx.scheduler.runAfter(0, internal.performerDirectory.continueSearchCredits,
+    { sourceId: link._id, after: result.after });
 }
 
 // This is the private write boundary for an operator-reviewed directory comparison.
@@ -206,6 +292,7 @@ export const record = internalMutation({
         nameKey: normalizeTaxonomyText(entry.artistName), identityKey: entry.identityKey, support: [], independentAppearances: 0 });
     }
     const row = { ...entry, ...(profileId ? {profileId} : {}), creditKey: key, labels: [...new Set(entry.labels)].sort(), proofs: [...proofs.values()] };
+    let attachedAppearance = false;
     if (apply && profileId) {
       for (const proof of entry.proofs) {
         if (proof.kind !== "booking") continue;
@@ -214,18 +301,31 @@ export const record = internalMutation({
           .withIndex("by_event", q => q.eq("eventId", proof.eventId)).take(129);
         for (const a of appearances) {
           if (!a.profileId && a.eventUpdatedAt === event?.updatedAt && a.name === proof.localName &&
-            a.date === proof.date && a.venue === proof.venue) await ctx.db.patch(a._id, {profileId});
+            a.date === proof.date && a.venue === proof.venue) {
+            await ctx.db.patch(a._id, {profileId});
+            attachedAppearance = true;
+          }
         }
       }
     }
-    if (old) {
-      if (!addHandle && old.artistName === row.artistName && exactJsonValue(old.labels, row.labels) && exactJsonValue(old.proofs, row.proofs))
-        return "unchanged" as const;
-      if (apply) await ctx.db.replace(old._id, row);
-      return "update" as const;
+    const unchanged = old && !addHandle && old.artistName === row.artistName &&
+      exactJsonValue(old.labels, row.labels) && exactJsonValue(old.proofs, row.proofs);
+    if (unchanged) {
+      if (attachedAppearance) await refreshWrittenLink(ctx, old);
+      return "unchanged" as const;
     }
-    if (apply) await ctx.db.insert("performerDirectoryLinks", row);
-    return "insert" as const;
+    if (apply) {
+      let sourceId: Link["_id"];
+      if (old) {
+        await ctx.db.replace(old._id, row);
+        sourceId = old._id;
+      } else {
+        sourceId = await ctx.db.insert("performerDirectoryLinks", row);
+      }
+      const link = await ctx.db.get(sourceId);
+      if (link) await refreshWrittenLink(ctx, link);
+    }
+    return old ? "update" as const : "insert" as const;
   },
 });
 

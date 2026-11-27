@@ -72,6 +72,7 @@ import type * as internal_eventRepairs_reviewedFabrikaDjNightEnrichment from "..
 import type * as internal_eventRepairs_reviewedFabrikaProgramEnrichment from "../internal/eventRepairs/reviewedFabrikaProgramEnrichment.js";
 import type * as internal_eventRepairs_reviewedNonPerformerEvidence from "../internal/eventRepairs/reviewedNonPerformerEvidence.js";
 import type * as internal_eventRepairs_reviewedNovember2026Repairs from "../internal/eventRepairs/reviewedNovember2026Repairs.js";
+import type * as internal_eventRepairs_reviewedNovemberProgrammes from "../internal/eventRepairs/reviewedNovemberProgrammes.js";
 import type * as internal_eventRepairs_reviewedPendingPerformerCorrection from "../internal/eventRepairs/reviewedPendingPerformerCorrection.js";
 import type * as internal_eventRepairs_reviewedPromoterScheduleFold from "../internal/eventRepairs/reviewedPromoterScheduleFold.js";
 import type * as internal_eventRepairs_reviewedPromotionFold from "../internal/eventRepairs/reviewedPromotionFold.js";
@@ -158,6 +159,7 @@ import type * as revertFalseCinemaAutomaticApproval from "../revertFalseCinemaAu
 import type * as reviewedDrugstoreNovember2026Repairs from "../reviewedDrugstoreNovember2026Repairs.js";
 import type * as reviewedLikaCachedReceiptRecovery from "../reviewedLikaCachedReceiptRecovery.js";
 import type * as reviewedNovember2026Repairs from "../reviewedNovember2026Repairs.js";
+import type * as reviewedNovemberProgrammes from "../reviewedNovemberProgrammes.js";
 import type * as reviewedProgrammeNovember27 from "../reviewedProgrammeNovember27.js";
 import type * as reviewedPromoterScheduleFold from "../reviewedPromoterScheduleFold.js";
 import type * as reviewedVenueLinksNovember2026Repairs from "../reviewedVenueLinksNovember2026Repairs.js";
@@ -243,6 +245,7 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/reviewedFabrikaProgramEnrichment": typeof internal_eventRepairs_reviewedFabrikaProgramEnrichment;
   "internal/eventRepairs/reviewedNonPerformerEvidence": typeof internal_eventRepairs_reviewedNonPerformerEvidence;
   "internal/eventRepairs/reviewedNovember2026Repairs": typeof internal_eventRepairs_reviewedNovember2026Repairs;
+  "internal/eventRepairs/reviewedNovemberProgrammes": typeof internal_eventRepairs_reviewedNovemberProgrammes;
   "internal/eventRepairs/reviewedPendingPerformerCorrection": typeof internal_eventRepairs_reviewedPendingPerformerCorrection;
   "internal/eventRepairs/reviewedPromoterScheduleFold": typeof internal_eventRepairs_reviewedPromoterScheduleFold;
   "internal/eventRepairs/reviewedPromotionFold": typeof internal_eventRepairs_reviewedPromotionFold;
@@ -329,6 +332,7 @@ declare const fullApi: ApiFromModules<{
   reviewedDrugstoreNovember2026Repairs: typeof reviewedDrugstoreNovember2026Repairs;
   reviewedLikaCachedReceiptRecovery: typeof reviewedLikaCachedReceiptRecovery;
   reviewedNovember2026Repairs: typeof reviewedNovember2026Repairs;
+  reviewedNovemberProgrammes: typeof reviewedNovemberProgrammes;
   reviewedProgrammeNovember27: typeof reviewedProgrammeNovember27;
   reviewedPromoterScheduleFold: typeof reviewedPromoterScheduleFold;
   reviewedVenueLinksNovember2026Repairs: typeof reviewedVenueLinksNovember2026Repairs;

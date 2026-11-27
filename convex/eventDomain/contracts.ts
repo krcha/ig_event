@@ -1,5 +1,12 @@
 import { v, type Infer } from "convex/values";
 
+export const directorySearchCredits = v.object({
+  sources: v.array(v.id("performerDirectoryLinks")),
+  revision: v.number(),
+  occurrence: v.string(),
+  names: v.array(v.string()),
+});
+
 export const eventStatus = v.union(
   v.literal("pending"),
   v.literal("approved"),
@@ -111,6 +118,7 @@ export const eventTimeEvidenceKind = v.union(
 );
 
 export const eventDocument = v.object({
+  directorySearchCredits: v.optional(directorySearchCredits),
   _creationTime: v.number(),
   _id: v.id("events"),
   artists: v.array(v.string()),
@@ -160,6 +168,7 @@ export const eventDocument = v.object({
     ),
   ),
   rawExtractionJson: v.optional(v.string()),
+  reviewedDuplicateOf: v.optional(v.id("events")),
   reviewedSourceUpdate: v.optional(v.object({
     text: v.string(),
     sourceUrl: v.string(),

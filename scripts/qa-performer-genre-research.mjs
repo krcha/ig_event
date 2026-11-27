@@ -1131,6 +1131,47 @@ try {
     assert.equal(await read(), undefined);
   } finally { Date.now = swingNow; }
 
+  // The same revision with a prior null and no paid capacity must reach the
+  // published date's block, without borrowing styles from the adjacent days.
+  const programmeFixture = dailyQueueFixture();
+  const programmeEvent = programmeFixture.events.get("single");
+  programmeFixture.events.clear();
+  programmeFixture.labels.clear();
+  const programmeClock = Date.now;
+  Date.now = () => Date.parse("2026-11-27T20:30:00Z");
+  try {
+    await claimPriorityCategories._handler(programmeFixture.dailyCtx, { owner, serviceSecret: "", allowModel: false });
+    const budget = programmeFixture.enrichmentState();
+    budget.attempted = 96;
+    const own = "🪓 28.11 — Selector\nVinyl, funk, disco, rap, house – a night on wax. One of the best DJ collectives in the region, with us on Saturday.\n20:00";
+    Object.assign(programmeEvent, { title: "Selector", date: "2026-11-28", artists: ["Selector"],
+      normalizedFieldsJson: JSON.stringify({ rowSourceText: "🪓 28.11 — Selector", multiEventSplitDetected: true }),
+      sourceCaption: "27.11 — Act A\nTrance with another guest.\n\n" + own + "\n\n29.11 — Chef\nJazz brunch at noon.",
+      description: "DJ collective playing records.", timeStatus: "confirmed", time: "20:00" });
+    programmeFixture.events.set("single", programmeEvent);
+    programmeFixture.labels.set("single", { _id: "null-slot", eventId: "single", eventUpdatedAt: programmeEvent.updatedAt,
+      version: EVENT_DISCOVERY_VERSION, model: "earlier", taxonomy: null, auditJson: JSON.stringify({ earlierNote: true, upcomingGenreRetryAt: Date.now()+EMPTY_RESEARCH_RETRY_MS }) });
+    const claim = () => claimPriorityCategories._handler(programmeFixture.dailyCtx, { owner, serviceSecret: "", allowModel: true });
+    const run = () => processPublishedEvent._handler(programmeFixture.dailyCtx, { eventId: "single" });
+    await run();
+    const saved = structuredClone(programmeFixture.labels.get("single"));
+    assert.deepEqual(saved.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: ["house", "disco-funk", "hip-hop"] });
+    const audit = JSON.parse(saved.auditJson);
+    assert.equal(audit.earlierNote, true);
+    assert.ok(audit.evidence.every(e => e.source === "sourceCaption" && own.includes(e.quote)));
+    const projected = await loadPublicEventDiscoveryLabels(programmeFixture.dailyCtx, programmeEvent, true);
+    assert.deepEqual(projected.eventTaxonomy.genres, saved.taxonomy.genres);
+    await run();
+    assert.deepEqual(programmeFixture.labels.get("single"), saved);
+    // Already classified before entering the window. The same-revision genre
+    // still reaches the public projection with a full budget and no new job.
+    programmeFixture.labels.get("single").taxonomy.genres = [];
+    budget.categoryScan = undefined;
+    assert.deepEqual((await claim()).events, []);
+    assert.deepEqual(programmeFixture.labels.get("single").taxonomy.genres, saved.taxonomy.genres);
+    assert.equal(budget.attempted, 96);
+  } finally { Date.now = programmeClock; }
+
   const ingested = dailyQueueFixture();
   const ingestedEvent = ingested.events.get("single");
   const date = getBelgradeDayKey(Date.now() + 86_400_000);

@@ -1,5 +1,7 @@
 import { getEventTimeSortMinutes } from "./event-time.ts";
 
+import { reviewedProgrammeOccurrenceMatches } from "./reviewed-programme-occurrence-titles.ts";
+
 export type ExpectedSourceOccurrence = {
   key: string;
   date: string;
@@ -181,7 +183,7 @@ export function sourceOccurrenceRepresentativeMatchesExpected(
     // improve the displayed time without changing which date child this is.
     return bindingMatchesExpected(snapshot, expected, {
       ignoreTime: normalizedFields?.dateRangeExpanded === true,
-    });
+    }) || (event.status === "approved" && reviewedProgrammeOccurrenceMatches(event.sourceOccurrenceKey, snapshot, expected));
   }
   return bindingMatchesExpected(event, expected);
 }

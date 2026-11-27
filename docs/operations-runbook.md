@@ -517,7 +517,20 @@ genre coverage to this migration.
 For a bounded date range, invoke `eventDiscovery:backfillPublishedDiscovery`
 with `fromDate`, `throughDate` and `cursor: null`, then pass each returned cursor
 until it is null. Run the nearest dates first. The same transaction and evidence
-checks serve live ingestion and backfill. Repeating the backfill is safe.
+checks serve live ingestion and backfill. Each page checks up to four public
+rows without a paid request. Sum `categoryWritten`, `directGenreWritten`
+and `registryGenreWritten` separately. Verify public results on the same
+event IDs and revisions before and after. Labels from a multi-event caption
+require a matching title and date in the same programme block. A second run
+over unchanged completed evidence should report zero new writes.
+
+Verified DJ stage-name search uses occurrence-bound directory credits. After
+deploying the additive schema, run the internal
+`performerDirectory:backfillSearchCredits` from the start, then pass back its
+`cursor` and optional `after` until `done`. Future verified directory writes
+refresh the same projection. Validate a known name against its dated event ID
+and calendar count. Keep the additive Convex schema and event return validators
+in place when rolling back the web image after the first write.
 
 Set `EVENT_DISCOVERY_EXECUTOR_ORIGIN` in Convex to the web origin when the
 existing `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` is unavailable. Convex uses the

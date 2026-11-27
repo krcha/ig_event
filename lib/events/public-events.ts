@@ -67,6 +67,7 @@ export type PublicEvent = {
   displayTimeStart?: string;
   venue: string;
   venueAliases?: string[];
+  performerSearchNames?: string[];
   venueCategory?: string;
   venueHours?: VenueHoursCacheFields;
   venueId?: string;

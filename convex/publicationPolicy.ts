@@ -62,6 +62,9 @@ export async function evaluateEventPublication(
   event: Doc<"events">,
   options: { venueOverride?: Doc<"venues"> } = {},
 ): Promise<PublicationDecision> {
+  if (event.reviewedDuplicateOf) {
+    return { policyVersion: PUBLICATION_POLICY_VERSION, reason: "reviewed_duplicate_represented", state: "hidden" };
+  }
   if (event.status !== "approved") {
     return evaluatePublicationEligibility({
       canonicalSourceGroundingVerified: false,
@@ -209,7 +212,7 @@ export async function isEventPubliclyVisible(
   event: Doc<"events">,
   options: { allowNeverMigratedApproved?: boolean; venueCache?: PublicationVenueCache } = {},
 ): Promise<boolean> {
-  if (event.status !== "approved") return false;
+  if (event.status !== "approved" || event.reviewedDuplicateOf) return false;
   const hasMaterializedDecision =
     event.publicationPolicyVersion !== undefined ||
     event.publicationState !== undefined;

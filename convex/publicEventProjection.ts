@@ -3,6 +3,20 @@ import { sanitizeVenueLinkedPublicEventFields } from "../lib/events/public-event
 import { normalizeVenueComparableText } from "../lib/domain/venues/normalization";
 import { venueRequiresPhysicalDetails } from "../lib/taxonomy/venue-types";
 
+// Bind a materialized credit to the same occurrence even for legacy repairs
+// which retain updatedAt. Reordering/rewriting the bill triggers revalidation.
+export function performerSearchOccurrence(event: Doc<"events">): string {
+  return JSON.stringify([event._id, event.date, event.venue, event.venueId ?? null,
+    event.instagramPostId ?? null, event.canonicalSourceUrl ?? event.instagramPostUrl ?? null, event.artists]);
+}
+
+export function publicPerformerSearchFields(event: Doc<"events">): { performerSearchNames?: string[] } {
+  const credits = event.directorySearchCredits;
+  return credits?.names.length && credits.revision === event.updatedAt &&
+    event.status === "approved" && event.publicationState === "publishable" &&
+    credits.occurrence === performerSearchOccurrence(event) ? { performerSearchNames: credits.names } : {};
+}
+
 export function projectPublicEvent(
   event: Doc<"events">,
   hasPublicLinkedVenue: boolean,

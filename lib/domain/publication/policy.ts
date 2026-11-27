@@ -39,6 +39,7 @@ export function firstPublicationPatch(
 export type PublicationDecision = {
   policyVersion: typeof PUBLICATION_POLICY_VERSION;
   reason:
+    | "reviewed_duplicate_represented"
     | "moderation_not_approved"
     | "canonical_source_grounding_verified"
     | "canonical_source_grounding_missing"

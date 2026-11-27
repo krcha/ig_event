@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { acquisitionIssue, apifyAcquisitionReceipt } from "./internal/durableAcquisitionValues";
 import { analyticsEventFields, travelCounts } from "./analyticsValidators";
 import { accountEvidence, accountRank, accountWork, directoryFields, performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
+import { directorySearchCredits } from "./eventDomain/contracts";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 
 const eventStatus = v.union(
@@ -278,6 +279,7 @@ export default defineSchema({
     .index("by_source_occurrence_id", ["sourceOccurrenceId"]),
 
   events: defineTable({
+    directorySearchCredits: v.optional(directorySearchCredits),
     title: v.string(),
     date: v.string(),
     time: v.optional(v.string()),
@@ -302,6 +304,7 @@ export default defineSchema({
     venueLongitude: v.optional(v.number()),
     artists: v.array(v.string()),
     description: v.optional(v.string()),
+    reviewedDuplicateOf: v.optional(v.id("events")),
     reviewedSourceUpdate: v.optional(v.object({
       text: v.string(),
       sourceUrl: v.string(),

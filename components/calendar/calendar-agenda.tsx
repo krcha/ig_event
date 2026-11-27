@@ -51,8 +51,8 @@ function renderEventRow({ event, taxonomy }: AgendaItem, openNowActive: boolean)
     .flatMap(label => label ? [label.toLowerCase()] : []));
   const secondaryTags = event.tags.filter(tag => !shownLabels.has(tag.trim().toLowerCase()));
   const known = Boolean(event.timeParts.startLabel) && event.timeStatus !== "unknown";
-  const venueHours = !known && event.presentation.kind === "venue_hours"
-    ? event.presentation.label === "Open 24 hours" ? "24 h" : event.presentation.label
+  const venueHours = !known && event.venueHoursLabel
+    ? event.venueHoursLabel === "Open 24 hours" ? "24 h" : event.venueHoursLabel
     : null;
   const timeDescription = !known
     ? calendarBandLabels["time-not-announced"]

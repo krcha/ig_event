@@ -21,7 +21,7 @@ export type CalendarAgendaEvent = Omit<CalendarEventSummary, "description" | "ve
   venueHoursLabel: string | null;
   band: CalendarTimeBandKey;
   presentation: {
-    kind: "event" | "venue_hours" | "unknown";
+    kind: "event" | "unknown";
     label: string;
     endLabel?: string;
     inferredEnd?: true;

@@ -17,7 +17,7 @@ import { hasCrossPostCampaignAggregateAttestationField } from "../../lib/events/
 import { isVenuePublic } from "../../lib/venues/venue-lifecycle";
 import { venueRequiresPhysicalDetails } from "../../lib/taxonomy/venue-types";
 import { requireAdminOrServiceSecret } from "../authz";
-import { projectPublicEvent } from "../publicEventProjection";
+import { projectPublicEvent, publicPerformerSearchFields } from "../publicEventProjection";
 import { isEventPubliclyVisible, loadPublicationVenue, type PublicationVenueCache } from "../publicationPolicy";
 import {
   resolvePublicationReadMode,
@@ -194,6 +194,7 @@ async function loadPublicVenueIdsForEvents(
 }
 
 type VisibleWindowRow = {
+  source: Doc<"events">;
   event: ReturnType<typeof projectPublicEvent>;
   physicalVenue?: Doc<"venues">;
 };
@@ -211,6 +212,7 @@ async function projectGroundedPublicEventRows(
     const linked = event.venueId ? venuesById.get(event.venueId) : undefined;
     const physical = event.venueId !== undefined && physicalVenueIds.has(event.venueId);
     rows.push({
+      source: event,
       event: projectPublicEvent(event, physical, linked),
       physicalVenue: physical ? linked : undefined,
     });
@@ -436,12 +438,19 @@ async function loadApprovedWindowRawPage(
 
 export async function getPublicApprovedEventHandler(
   ctx: QueryCtx,
-  args: { id: string; includeEventTaxonomy?: boolean },
+  args: { id: string; includeEventTaxonomy?: boolean; followReviewedBookmark?: boolean },
 ) {
   const eventId = ctx.db.normalizeId("events", args.id);
   if (!eventId) return null;
-  const event = await ctx.db.get(eventId);
+  let event = await ctx.db.get(eventId);
   if (!event || event.status !== "approved") return null;
+  if (event.reviewedDuplicateOf) {
+    if (!args.followReviewedBookmark) return null;
+    const canonical = await ctx.db.get(event.reviewedDuplicateOf);
+    if (!canonical || canonical.status !== "approved" || canonical.reviewedDuplicateOf ||
+      canonical.reviewedSourceUpdate?.sourceEventId !== event._id) return null;
+    event = canonical;
+  }
   // The calendar uses the reviewed materialized publication read when its
   // cutover is active. Keep links from that calendar visible on the detail page.
   const materialized =
@@ -497,9 +506,10 @@ export async function listPublicEventsWindowHandler(
   });
 }
 
-function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
+function toPublicCalendarEvent({ event, source }: VisibleWindowRow) {
   return {
     _id: event._id,
+    ...publicPerformerSearchFields(source),
     artists: event.artists,
     date: event.date,
     ...(event.description ? { description: event.description } : {}),
@@ -577,7 +587,7 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
   args: CalendarWindow & { includeEventTaxonomy?: boolean; includePerformerGenreResearch?: boolean },
 ) {
   return paginatePublicCalendarWindow(ctx, args, async (rows) => {
-    const projected = rows.map(({ event }) => toPublicCalendarEvent(event));
+    const projected = rows.map(toPublicCalendarEvent);
     if (!args.includeEventTaxonomy) return projected;
     return Promise.all(projected.map(async (event) => {
       const discovery = await loadPublicEventDiscoveryLabels(ctx, event, args.includePerformerGenreResearch === true);

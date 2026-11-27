@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { invalidateAccountRank } from "./performerAccountQueue";
-import { directoryCardByName, directoryCards, directoryConfirmsHandle, directoryGenres, reviewedDirectoryBooking } from "./performerDirectory";
+import { directoryCardByName, directoryCards, directoryConfirmsHandle, directoryGenres, reviewedDirectoryBooking, syncDirectoryEventSearch } from "./performerDirectory";
 import { loadScopedPerformerHandles } from "./occurrencePerformerCredits";
 import type { PerformerHandleCredit } from "../lib/taxonomy/performer-genre-research";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -779,6 +779,7 @@ export async function syncPerformerRegistryForEvent(
   }
   for (const id of previousProfileIds) await clearWithdrawnHandle(ctx, id, changes);
   for (const id of changedBillings) await invalidateAccountRank(ctx,id);
+  if (event?.directorySearchCredits) await syncDirectoryEventSearch(ctx, event);
   if (linkedDuringBackfill) await schedulePublishedDiscovery(ctx, eventId);
   for (const key of wakes.values()) {
     await ctx.scheduler.runAfter(

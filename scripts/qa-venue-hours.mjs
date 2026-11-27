@@ -351,7 +351,7 @@ assert.equal(
   for (const time of [undefined, "", "TBD", "TBA"]) {
     assert.deepEqual(
       resolveEventTimePresentation({ date: WEDNESDAY, time, venueHours }),
-      { heading: "Time", kind: "venue_hours", label: "10:00–18:00, 20:00–02:00" },
+      { heading: "Time", kind: "unknown", label: UNKNOWN_EVENT_TIME_LABEL, venueHoursLabel: "10:00–18:00, 20:00–02:00" },
       "Missing event time should display every venue window with an explicit venue label.",
     );
   }
@@ -416,7 +416,7 @@ assert.equal(
   for (const date of ["2026-11-06", "2026-11-07"]) {
     for (const time of [undefined, "", "TBD", "TBA"]) {
       assert.deepEqual(resolveEventTimePresentation({ date, time, venueHours: karmakoma }),
-        { heading: "Time", kind: "venue_hours", label: "23:00–06:00" },
+        { heading: "Time", kind: "unknown", label: UNKNOWN_EVENT_TIME_LABEL, venueHoursLabel: "23:00–06:00" },
         "A continuous Karmakoma night must display once across midnight on both Friday and Saturday.");
     }
     assert.deepEqual(resolveEventTimeDisplay({ date, time: "TBD", venueHours: karmakoma }),
@@ -426,28 +426,28 @@ assert.equal(
   }
   assert.equal(karmakoma.hoursJson, originalHours, "Display joining must never rewrite the stored civil-day hours.");
   assert.deepEqual(resolveEventTimePresentation({ date: "2026-11-08", time: "TBD", venueHours: karmakoma }),
-    { heading: "Time", kind: "venue_hours", label: "00:00–06:00" },
+    { heading: "Time", kind: "unknown", label: UNKNOWN_EVENT_TIME_LABEL, venueHoursLabel: "00:00–06:00" },
     "A standalone early-hours window must remain visible when there is no later opening.");
   for (const previous of [[], [day(5, [], true)], [day(5, [["23:00", "23:59"]])]]) {
     const unprovenCarryover = hours([...previous,
       day(6, [["00:00", "06:00"], ["23:00", "00:00", true]]), day(0, [["00:00", "06:00"]])]);
-    assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: unprovenCarryover }).label,
+    assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: unprovenCarryover }).venueHoursLabel,
       "00:00–06:00, 23:00–06:00",
       "Missing, closed or non-touching previous-day evidence must not erase an independent early opening.");
   }
   const midnightGap = hours([day(5, [["23:00", "00:00", true]]),
     day(6, [["00:30", "06:00"], ["23:00", "00:00", true]]), day(0, [["00:00", "06:00"]])]);
-  assert.equal(resolveEventTimePresentation({ date: "2026-11-06", venueHours: midnightGap }).label, "23:00–00:00",
+  assert.equal(resolveEventTimePresentation({ date: "2026-11-06", venueHours: midnightGap }).venueHoursLabel, "23:00–00:00",
     "A real closing gap at midnight must not be bridged.");
-  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: midnightGap }).label, "00:30–06:00, 23:00–06:00");
+  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: midnightGap }).venueHoursLabel, "00:30–06:00, 23:00–06:00");
   const daytimeCarryover = hours([day(5, [["23:00", "00:00", true]]),
     day(6, [["00:00", "12:00"], ["23:00", "00:00", true]]), day(0, [["00:00", "06:00"]])]);
-  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: daytimeCarryover }).label,
+  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: daytimeCarryover }).venueHoursLabel,
     "00:00–12:00, 23:00–06:00", "Unusual daytime carryovers must not be hidden by the nightlife display rule.");
   const alwaysOpen = hours(Array.from({ length: 7 }, (_, weekday) => day(weekday, [["00:00", "00:00", true]])));
-  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: alwaysOpen }).label, "Open 24 hours");
+  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: alwaysOpen }).venueHoursLabel, "Open 24 hours");
   const adjacentDaytime = hours([day(6, [["10:00", "12:00"], ["12:00", "18:00"]])]);
-  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: adjacentDaytime }).label,
+  assert.equal(resolveEventTimePresentation({ date: "2026-11-07", venueHours: adjacentDaytime }).venueHoursLabel,
     "10:00–12:00, 12:00–18:00", "Already complete daytime ranges retain their original boundaries even when touching.");
   for (const time of ["18:30", "20:30"]) {
     assert.deepEqual(resolveEventTimePresentation({ date: "2026-11-06", time, venueHours: karmakoma }),

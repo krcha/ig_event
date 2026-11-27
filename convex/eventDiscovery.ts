@@ -6,6 +6,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
+import { canonicalizeSourceUrl } from "../lib/domain/source-url";
+import { announcedConcertGenres, classifyAnnouncedProgramme, scopedScheduleCaption } from "../lib/taxonomy/announced-programme";
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { loadScopedPerformerHandles, occurrenceTextFromEvidence, readScopedInstagramCaption, scopedPerformerHandles } from "./occurrencePerformerCredits";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
@@ -413,9 +415,14 @@ function confirmedDiscoveryTime(event: Doc<"events">, evidence: Record<string, u
 async function discoveryCandidate(ctx: Pick<QueryCtx, "db">, event: Doc<"events">) {
   const evidence = readEventEvidenceRecord(event.normalizedFieldsJson);
   const occurrenceText = occurrenceTextFromEvidence(evidence);
-  const sourceCaption = await readScopedInstagramCaption(ctx, event, evidence);
+  const artistCaption = await readScopedInstagramCaption(ctx, event, evidence);
+  const ambiguous = evidence.sourceOccurrencePlanUnverified === true || evidence.sourceOccurrenceAmbiguousProvenance === true;
+  const sourceCaption = event.sourceCaption && occurrenceText && !ambiguous &&
+    canonicalizeSourceUrl("instagram", event.instagramPostUrl ?? event.canonicalSourceUrl).ok
+    ? scopedScheduleCaption({ title: event.title, date: event.date, occurrenceText }, event.sourceCaption) ?? artistCaption
+    : artistCaption;
   const time = confirmedDiscoveryTime(event, evidence);
-  const performerHandles = scopedPerformerHandles(event, evidence, occurrenceText, sourceCaption);
+  const performerHandles = scopedPerformerHandles(event, evidence, occurrenceText, artistCaption);
   return { key: event._id, expectedUpdatedAt: event.updatedAt, title: event.title, venue: event.venue,
     date: event.date, eventType: event.eventType, artists: event.artists.slice(0, 20),
     ...(performerHandles.length ? { performerHandles } : {}),
@@ -677,14 +684,21 @@ async function currentScopedProgrammeGenres(ctx: Pick<QueryCtx, "db">, event: Do
     .map(claim => claim.label as MusicGenre);
 }
 
+function announcedProgramme(event: Doc<"events">, candidate: Awaited<ReturnType<typeof discoveryCandidate>>) {
+  const fields = readEventEvidenceRecord(event.normalizedFieldsJson);
+  if (fields.sourceOccurrencePlanUnverified === true || fields.sourceOccurrenceAmbiguousProvenance === true ||
+    !canonicalizeSourceUrl("instagram", event.instagramPostUrl ?? event.canonicalSourceUrl).ok) return;
+  return classifyAnnouncedProgramme(candidate);
+}
+
 async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, existing: Doc<"eventDiscoveryLabels"> | null,
-  candidate: Awaited<ReturnType<typeof discoveryCandidate>>, taxonomy: EventDiscoveryTaxonomy, evidence: CategoryEvidence[], model: string) {
+  candidate: Awaited<ReturnType<typeof discoveryCandidate>>, taxonomy: EventDiscoveryTaxonomy, evidence: CategoryEvidence[], model: string, sourceOnly = false) {
   const current = existing && labelIsCurrent(existing, event.updatedAt) ? existing : null;
   const audit = readEventEvidenceRecord(current?.auditJson);
   const excluded = getExcludedDiscoveryGenres(candidate, DISCOVERY_TEXT_SOURCES);
   const musical = taxonomy.categories.some(category => category === "live" || category === "party");
-  const direct = musical ? classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
-  const summary = musical ? classifyExplicitEventDiscovery({ title: candidate.title, description: candidate.description,
+  const direct = musical && !sourceOnly ? classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
+  const summary = musical && !sourceOnly ? classifyExplicitEventDiscovery({ title: candidate.title, description: candidate.description,
     date: candidate.date, venue: candidate.venue, artists: candidate.artists, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
   const previousScoped = musical && Array.isArray(audit.scopedProgrammeGenres) ? scopedProof(event, candidate, taxonomy) : [];
   const genreProof = [...evidence, ...previousScoped, ...(direct?.evidence ?? []), ...(summary?.evidence ?? [])].filter(claim =>
@@ -769,19 +783,26 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
     await setIngestionWork(ctx, event, false, now);
     return flags;
   }
-  const explicit = classifyExplicitEventDiscovery(candidate);
+  const sourceProgramme = announcedProgramme(event, candidate);
+  const explicit = sourceProgramme ?? classifyExplicitEventDiscovery(candidate);
   const provesCategory = explicit && (explicit.complete || (explicit.titleCategory && explicit.taxonomy.categories.length === 1)) &&
     explicit.evidence.some(claim => claim.kind === "category" && claim.label === explicit.taxonomy.primaryCategory);
   if ((!known || registryCategory) && explicit && provesCategory) {
-    await savePriorityCategory(ctx, event, row, candidate, explicit.taxonomy, explicit.evidence, LOCAL_MODEL);
+    await savePriorityCategory(ctx, event, row, candidate, explicit.taxonomy, explicit.evidence, LOCAL_MODEL, !!sourceProgramme);
     flags.categoryWritten = !known;
     row = await loadLabel(ctx, event._id);
     taxonomy = row!.taxonomy;
     flags.directGenreWritten = !!taxonomy?.genres.length;
     known = true;
   } else if (taxonomy && !taxonomy.genres.length && !registryCategory) {
-    const direct = classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: taxonomy });
-    const evidence = direct?.evidence.filter(claim => claim.kind === "genre" && hasExplicitGenreEvidence(candidate, claim.source, claim.quote, claim.label as MusicGenre)) ?? [];
+    const standard = sourceProgramme ?? classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: taxonomy });
+    const direct = standard?.taxonomy.primaryCategory === taxonomy.primaryCategory ? standard.evidence : [];
+    const fields = readEventEvidenceRecord(event.normalizedFieldsJson);
+    const concert = !fields.sourceOccurrenceAmbiguousProvenance && !fields.sourceOccurrencePlanUnverified &&
+      canonicalizeSourceUrl("instagram", event.instagramPostUrl ?? event.canonicalSourceUrl).ok
+      ? announcedConcertGenres(candidate, taxonomy) : [];
+    const evidence = [...concert, ...direct].filter(claim => claim.kind === "genre" &&
+      hasExplicitGenreEvidence(candidate, claim.source, claim.quote, claim.label as MusicGenre));
     if (evidence.length) {
       const genres = [...new Set(evidence.map(claim => claim.label as MusicGenre))].slice(0, 5);
       taxonomy = { ...taxonomy, genres };
@@ -984,7 +1005,8 @@ export const claimPriorityCategories = mutation({
         // Older announcements enter the moving 48-hour window without an
         // event edit. Promote their outstanding genre work with its retry time.
         const pending = await ingestionWork(ctx, event._id);
-        if (pending?.reason === "category") await enrichFromAvailableEvidence(ctx, event, now);
+        if (pending?.reason === "category" || (phase === "confirmed" && label?.taxonomy &&
+          getPerformerGenreResearchFormat(label.taxonomy))) await enrichFromAvailableEvidence(ctx, event, now);
         else if (pending && pending.priority !== (tier === "confirmed" ? 0 : tier === "local-only" ? 2 : 1)) {
           await setIngestionWork(ctx, event, true, now, pending.readyAt, pending.reason);
         }
@@ -997,17 +1019,18 @@ export const claimPriorityCategories = mutation({
         counts.unresolved++;
         continue;
       }
-      const explicit = classifyExplicitEventDiscovery(candidate);
+      const sourceProgramme = announcedProgramme(event, candidate);
+      const explicit = sourceProgramme ?? classifyExplicitEventDiscovery(candidate);
       if (explicit && (explicit.complete || (explicit.titleCategory && explicit.taxonomy.categories.length === 1)) &&
         explicit.evidence.some(c => c.kind === "category" && c.label === explicit.taxonomy.primaryCategory)) {
         await savePriorityCategory(ctx, event, label, candidate, explicit.taxonomy,
-          explicit.evidence, "explicit-priority-category-v1");
+          explicit.evidence, "explicit-priority-category-v1", !!sourceProgramme);
         await enrichFromAvailableEvidence(ctx, event, now);
         counts.written++;
         continue;
       }
       const programme = await lookupPerformerRegistryProgramme(ctx, event, candidate.performerHandles ?? []);
-      if (programme.category) {
+      if (programme.category || programme.matches.length) {
         const applied = await enrichFromAvailableEvidence(ctx, event, now);
         if (applied.categoryWritten) { counts.written++; continue; }
       }

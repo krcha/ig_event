@@ -26,6 +26,7 @@ import { evaluateCoreEventSourceGrounding, getNonEventAutoApprovalBlockers } fro
 import type { StructuredFactExtractionResult } from "@/lib/pipeline/ingestion/structured-fact-contracts";
 import { isVerifiedDateEvidence, isVerifiedEventIdentityEvidence, isVerifiedEventVenueEvidence, isVerifiedTimeEvidence } from "@/lib/pipeline/ingestion/structured-fact-verification";
 import { normalizeString } from "@/lib/pipeline/ingestion/values";
+import { selectVerifiedSessionClockQuote } from "@/lib/events/event-session";
 import { standaloneSourceMonthHeading } from "@/lib/pipeline/ingestion/source-calendar-validation";
 import { normalizeHandle, normalizeVenueComparableText } from "@/lib/pipeline/venue-normalization";
 import type { InstagramScrapedPost } from "@/lib/scraper/instagram-scraper";
@@ -308,7 +309,10 @@ export function finalizeStructuredFactVariants({
           evidenceText: provisionalStart.evidenceText,
           confidence: 0,
         }
-      : { ...extractedTimeProvenance, ...verifiedStartEvidence };
+      : { ...extractedTimeProvenance, ...verifiedStartEvidence,
+          ...selectVerifiedSessionClockQuote(extractedSafeTime, variant.timeEvidence.exact_text, variant.splitSourceLine,
+            extractedTimeEvidenceVerified && eventVariants.length > 1 && timeEvidenceKind === "start_time_stated"),
+        };
     const timeEvidenceVerified = !provisionalStart && extractedTimeEvidenceVerified;
     const artists = usesStructuredEvidence
       ? combineEventArtistHandleAliases(variant.artists, sourceConflictPartition.benign, sourceConflictContext)

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { getEventAgeRange, getEventSessionLabel } from "../lib/events/event-session.ts";
+import { getEventAgeRange, getEventSessionLabel, selectVerifiedSessionClockQuote } from "../lib/events/event-session.ts";
 
 const sharedCaption = "Uzrast: 5-8 godina; Vreme 12.00-13.30. Uzrast: 9-14 godina; Vreme 14.00-15.30.";
 const sessions = [
@@ -23,5 +23,14 @@ assert.equal(getEventSessionLabel({ description: "For ages 5-8", time: "TBD" }),
 assert.equal(getEventSessionLabel({ description: "For ages 5-8", time: "12:00", timeStatus: "unknown" }), "Ages 5\u20138", "Explicit unknown time must not expose an old raw time.");
 assert.equal(getEventSessionLabel({ description: "For ages 5-8", time: "12:00", displayTimeLabel: "12:00\u201313:30" }), "Ages 5\u20138 \u00b7 12:00\u201313:30");
 assert.equal(getEventSessionLabel({ description: "Music event", time: "22:00" }), null, "Ordinary events should keep their existing compact display.");
+
+const programmeRow = "29. novembar, nedelja | 18.30 i 21.00";
+assert.deepEqual(selectVerifiedSessionClockQuote("18:30", "18.30", programmeRow, true), { evidenceText: "18.30" });
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "21.00", programmeRow, true), { evidenceText: "21.00" });
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "21ч", "29.11. ПРИВАТНА ПРОСЛАВА (18:30ч и 21ч)", true), { evidenceText: "21ч" });
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "18.30", programmeRow, true), {});
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "21.00", "28. novembar | 18.30", true), {});
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "21.00", programmeRow, false), {});
+assert.deepEqual(selectVerifiedSessionClockQuote("21:00", "21", programmeRow, true), {});
 
 console.log("Event session age and time QA passed.");

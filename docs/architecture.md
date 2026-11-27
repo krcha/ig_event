@@ -77,6 +77,12 @@ excess work returns 429 with Retry-After. Disk cache is capped at 96 entries,
 32 MB and 24 hours. Responses are `no-store`; no account, external publication
 or paid service is required. Unknown/inferred event starts remain unannounced.
 
+An announced end takes precedence. With only an announced start, the public
+calendar uses the closing of the opening period containing that start. The
+event detail labels that end as a venue-hours assumption. If the start is
+unknown, the detail shows "Time not announced" and identifies available venue
+hours separately. A venue with no known closing leaves a start-only label.
+
 Event-time display joins proven midnight-clipped venue hours into one overnight
 range, such as 23:00-06:00. It omits a preceding night's early carryover only
 when that connection and a later opening are confirmed. Stored civil-day hours,

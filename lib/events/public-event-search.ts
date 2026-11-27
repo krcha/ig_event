@@ -4,6 +4,7 @@ export type PublicEventSearchFields = {
   title: string;
   venue: string;
   venueAliases?: string[];
+  performerSearchNames?: string[];
   artists: string[];
 };
 
@@ -22,7 +23,6 @@ export function matchesPublicEventNameArtistOrVenue(
     return true;
   }
 
-  return toSearchableText(getPublicEventNameArtistVenueSearchText(event)).includes(
-    normalizedQuery,
-  );
+  return toSearchableText(getPublicEventNameArtistVenueSearchText(event)).includes(normalizedQuery) ||
+    (event.performerSearchNames ?? []).some(name => toSearchableText(name).includes(normalizedQuery));
 }

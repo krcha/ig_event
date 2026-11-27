@@ -578,7 +578,7 @@ assert.ok(agendaRowSource.includes('Boolean(event.timeParts.startLabel) && event
 assert.ok(agendaRowSource.includes('data-time-source={known ? "event" : "unknown"}'), "Unannounced starts are marked separately from venue hours in compact rows.");
 assert.ok(agendaRowSource.includes('data-inferred-end={event.presentation.inferredEnd ? "true" : undefined}'), "Compact rows retain provenance when displaying the venue closing as an inferred event end.");
 assert.ok(agendaRowSource.includes('Pretpostavljeni završetak prema zatvaranju mesta'), "The time description identifies borrowed closing hours as an assumption.");
-assert.ok(detailSource.includes('eventTime.kind === "venue_hours" ? "font-normal"'), "Detail opening-hour fallbacks use regular weight.");
+assert.ok(detailSource.includes('publicText(locale, "Venue opening hours")') && detailSource.includes('publicText(locale, "Ends at venue closing")'), "Detail identifies venue hours separately from an unknown event start and labels inferred ends.");
 assert.match(venueHoursSource, /<h3\b[^>]*>\s*<PublicText text=\{"Hours"\}\s*\/>\s*<\/h3>/u,
   "The weekly schedule has a concise localized Hours heading; all three rendered languages are covered by venue-hours QA.");
 assert.equal(

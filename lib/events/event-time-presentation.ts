@@ -11,7 +11,8 @@ type EventTimePresentation = {
   endLabel?: string;
   heading: "Time";
   inferredEnd?: true;
-  kind: "event" | "venue_hours" | "unknown";
+  kind: "event" | "unknown";
+  venueHoursLabel?: string;
   label: string;
 };
 
@@ -68,8 +69,9 @@ export function resolveEventTimePresentation(options: {
     });
     return {
       heading: "Time",
-      kind: "venue_hours",
-      label: labels.join(", "),
+      kind: "unknown",
+      label: UNKNOWN_EVENT_TIME_LABEL,
+      venueHoursLabel: labels.join(", "),
     };
   }
 

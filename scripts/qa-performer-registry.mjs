@@ -1,5 +1,8 @@
 import "./qa-performer-registry-solo-billing.mjs";
 import assert from "node:assert/strict";
+import { projectPublicEvent, publicPerformerSearchFields } from "../convex/publicEventProjection.ts";
+import { matchesPublicEventNameArtistOrVenue } from "../lib/events/public-event-search.ts";
+import { buildPublicCalendarOverviewPage } from "../lib/events/public-calendar-overview-types.ts";
 import * as accountResearch from "../convex/performerAccountResearch.ts";
 import * as directory from "../convex/performerDirectory.ts";
 import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
@@ -1145,6 +1148,68 @@ try {
       const oneNight = { ...second,artistName:"Lina",url:variant.url,identityKey:"booking:"+varied._id,proofs:[variant] };
       assert.equal(await record({...oneNight,proofs:[{...variant,coBill:["Guest A","Guest A"]}]}),"stale");
       assert.equal(await record(oneNight),"insert");
+      // A reviewed spelling belongs to this occurrence. The same compact fields
+      // feed both the visible cards and the filtered calendar counts.
+      const store = q.table("events");
+      const calendarRow = row => ({...projectPublicEvent(row, true), ...publicPerformerSearchFields(row)});
+      const search = (row, word) => matchesPublicEventNameArtistOrVenue(calendarRow(row), word);
+      const searched = store.get(varied._id);
+      const beforeReads = q.indexReads.length;
+      assert.deepEqual(searched.artists, ["Linna","Guest A","Guest B"]);
+      assert.ok(search(searched, "Lina"));
+      assert.equal(search(searched, "Linna"), true);
+      assert.equal(search(searched, "Linaa"), false);
+      assert.equal(search({ ...searched, _id: "homonym" }, "Lina"), false);
+      assert.equal(search({ ...searched, date: "2027-01-01" }, "Lina"), false);
+      assert.equal(search({ ...searched, venue: "Elsewhere" }, "Lina"), false);
+      assert.equal(search({ ...searched, artists: ["Guest A"] }, "Lina"), false);
+      assert.equal(search({ ...searched, publicationState: "blocked" }, "Lina"), false);
+      assert.equal(search({ ...searched, updatedAt: searched.updatedAt + 1 }, "Lina"), false);
+      const counts = buildPublicCalendarOverviewPage([
+        calendarRow(searched), calendarRow({...searched, _id:"homonym"}),
+      ], {q:"Lina"});
+      assert.equal(counts.page.reduce((sum,bucket)=>sum+bucket.count,0),1);
+      assert.equal(q.indexReads.length,beforeReads,"List and counts use only the qualified event projection");
+      assert.equal(Object.hasOwn(projectPublicEvent(searched, true), "directorySearchCredits"), false);
+
+      // Data imported before this change has no materialization. Repeated pages
+      // populate it idempotently, including a link with more events than one batch.
+      const tour = [];
+      for (let index=0; index<6; index++) {
+        const sibling = pub("separate-booking-"+index,["Tour Guest"]);
+        q.put("events",sibling);
+        tour.push({...booking,eventId:sibling._id,date:sibling.date,venue:sibling.venue,
+          creditedAs:"Tour Guest",localName:"Tour Guest",url:"https://djs.rs/e/tour-"+index});
+      }
+      const touringCard = {kind:"artist",identityKey:"directory:https://djs.rs/tour-guest",
+        url:"https://djs.rs/tour-guest",artistName:"Tour Guest",labels:[],proofs:tour};
+      assert.equal(await record(touringCard),"insert");
+      const continuation = q.jobs.find(job=>job.name==="performerDirectory:continueSearchCredits");
+      assert.ok(continuation);
+      assert.equal(tour.filter(p=>store.get(p.eventId).directorySearchCredits).length,4);
+      await directory.continueSearchCredits._handler(q.ctx,continuation.args);
+      assert.equal(tour.filter(p=>store.get(p.eventId).directorySearchCredits).length,6);
+      for (const proof of [variant,...tour]) await q.ctx.db.patch(proof.eventId,{directorySearchCredits:undefined});
+      async function backfill() {
+        let cursor=null, after, changed=0, steps=0;
+        do {
+          const page = await directory.backfillSearchCredits._handler(q.ctx,{cursor,after});
+          changed += page.changed; steps++;
+          if (page.done) return {changed,steps};
+          cursor=page.cursor;after=page.after ?? undefined;
+          assert.ok(steps<50);
+        } while (true);
+      }
+      assert.ok((await backfill()).changed>=7);
+      const again = await backfill();
+      assert.equal(again.changed,0);assert.ok(again.steps>q.table("performerDirectoryLinks").size);
+      assert.ok(search(store.get(variant.eventId),"Lina"));
+      for (const proof of tour) assert.deepEqual(store.get(proof.eventId).directorySearchCredits.names,["Tour Guest"]);
+      await q.ctx.db.patch(varied._id,{artists:["Guest A"],updatedAt:varied.updatedAt+1});
+      await directory.syncDirectoryEventSearch(q.ctx,store.get(varied._id));
+      assert.equal(search(store.get(varied._id),"Lina"),false);
+      assert.deepEqual(store.get(varied._id).directorySearchCredits.names,[]);
+
       const later = pub("later",["First Guest"],{title:"First Guest",date:"2026-12-31"});
       assert.deepEqual(await lookupPerformerRegistrySearchHints(q.ctx,later),[{performer:"First Guest",profileUrl:first.url}]);
       assert.deepEqual((await lookupPerformerRegistryProgramme(q.ctx,later)).matches,[]);

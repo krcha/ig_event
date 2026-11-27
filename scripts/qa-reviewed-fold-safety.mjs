@@ -1,3 +1,4 @@
+import "./qa-reviewed-programme-bookmarks.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 

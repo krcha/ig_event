@@ -79,9 +79,9 @@ assert.equal(getDiscoverCategory({primaryCategory:"culture",eventType:"nightlife
 assert.deepEqual(projected.tags,getEventTags(fullEvent).filter(tag=>tag.toLowerCase()!=="besplatan ulaz").slice(0,2));
 assert.deepEqual(projected.tags,["Rock","Jazz"],"Secondary tags retain their existing ordering/limit and omit the separate free-admission label.");
 for(const time of ["TBD","21:00","21:00-23:30"]){
-  assert.equal(projectMobileDiscoverEvent({...fullEvent,time}).timeLabel,resolveEventTimePresentation({...fullEvent,time}).label,"Venue-hours fallback, inferred closing and announced end retain the exact prior time presentation.");
+  assert.equal(projectMobileDiscoverEvent({...fullEvent,time}).timeLabel,resolveEventTimePresentation({...fullEvent,time}).label,"Mobile cards use the same unknown start, inferred closing and announced end as event details.");
 }
-assert.equal(projected.timeLabel,"10:00–18:00, 20:00–02:00");
+assert.equal(projected.timeLabel,"Time not announced","Opening windows are not an event start on mobile.");
 assert.deepEqual(Object.keys(projected).sort(),["_id","date","primaryCategory","tags","ticketPrice","timeLabel","title","venue"].sort(),"Mobile hydration carries only display values and identity, never descriptions, artists, captions or hours JSON.");
 assert.equal(projectMobileDiscoverEvent({...fullEvent,imageStorageId:"poster-v2",updatedAt:100}).imageVersion,"poster-v2","A replaced original refreshes mobile browser image URLs without hydrating source URLs or captions.");
 assert.equal(projectMobileDiscoverEvent({...fullEvent,updatedAt:100}).imageVersion,100);

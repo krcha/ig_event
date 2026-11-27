@@ -618,7 +618,7 @@ assert.equal((nextConfig.match(/permanent: true/g) ?? []).length >= 4, true);
 assert.ok(nextConfig.includes("htmlLimitedBots: /.*/"));
 assert.match(
   convexEvents,
-  /getPublicApprovedEvent = query[\s\S]*args: \{ id: v\.string\(\), includeEventTaxonomy: v\.optional\(v\.boolean\(\)\) \}[\s\S]*handler: getPublicApprovedEventHandler/,
+  /getPublicApprovedEvent = query[\s\S]*args: \{ id: v\.string\(\), includeEventTaxonomy: v\.optional\(v\.boolean\(\)\), followReviewedBookmark: v\.optional\(v\.boolean\(\)\) \}[\s\S]*handler: getPublicApprovedEventHandler/,
 );
 assert.match(
   convexPublicReads,
