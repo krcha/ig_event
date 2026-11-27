@@ -250,13 +250,20 @@ export function validateAccountEvidence(
       !ownStyle
     )
       continue;
+    const catalogPrimary =
+      structured &&
+      !!appleArtistId(raw.url) &&
+      /^"primaryGenreName"\s*:/u.test(quote) &&
+      labels.length === 1 &&
+      directoryGenreKeys(labels).length === 1;
     const dominant =
-      !!clause &&
-      raw.dominant === true &&
-      /\b(?:primarily|predominantly|mainly|specializes in|specialises in|pretezno|prvenstveno|dominantno)\b/u.test(
-        clause,
-      ) &&
-      Object.values(genreProof).filter((re) => re.test(clause)).length === 1;
+      catalogPrimary ||
+      (!!clause &&
+        raw.dominant === true &&
+        /\b(?:primarily|predominantly|mainly|specializes in|specialises in|pretezno|prvenstveno|dominantno)\b/u.test(
+          clause,
+        ) &&
+        Object.values(genreProof).filter((re) => re.test(clause)).length === 1);
     if (
       !genres.some(
         (g) =>

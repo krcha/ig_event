@@ -324,13 +324,29 @@ async function resolveCredit(
   const account = p.accountEvidence;
   const specialProgramme = /\b(?:tribute|homm?age|listening (?:party|session)|cover (?:night|set)|album playback|filmsk[aoi] projekcij\w*|vece posveceno)\b/u.test(
     normalizeTaxonomyText([event.title,event.description].filter(Boolean).join(" ")));
-  if (!specialProgramme && targetBilling && credit.handle && account?.handle === credit.handle && account.genres.length) {
-    supported.push({kind:"web",verifiedHandle:credit.handle,profileUrl:"https://www.instagram.com/"+credit.handle+"/",
-      identity:account.displayName ? {url:account.displayName.url,quote:account.displayName.quote} : {url:"https://www.instagram.com/"+credit.handle+"/",quote:"@"+credit.handle},
-      genres:account.genres.map(g=>({genre:g.genre,url:g.url,quote:g.quote,dominant:g.dominant===true}))});
+  const billedAccount = !specialProgramme && targetBilling && credit.handle && account?.handle === credit.handle && account.genres.length ? account : undefined;
+  if (billedAccount) {
+    const profileUrl = "https://www.instagram.com/" + billedAccount.handle + "/";
+    const display = billedAccount.displayName;
+    supported.push({ kind: "web", verifiedHandle: billedAccount.handle, profileUrl,
+      identity: display ? { url: display.url, quote: display.quote } : { url: profileUrl, quote: "@" + billedAccount.handle },
+      genres: billedAccount.genres.map(g => ({ genre: g.genre, url: g.url, quote: g.quote, dominant: g.dominant === true })) });
   }
   if (supported.length)
-    return { profileId: p._id, supported, primaryGenre: p.primaryGenre };
+    return { profileId: p._id, supported, primaryGenre: p.primaryGenre, billedAccount };
+}
+
+function namesSameSoloAct(title: string, billed: string, account: NonNullable<Profile["accountEvidence"]>) {
+  const nameKey = (value: string) => normalizeTaxonomyText(value.normalize("NFKC")).replace(/\bbend$/u, "band");
+  const name = nameKey(billed);
+  const display = nameKey(account.displayName?.value ?? "");
+  if (!display || name.length < 4 || name !== nameKey(title) || /^(?:band|bend|singer|artist|dj|live|music|muzika|grupa|izvodjac)$/u.test(name)) return false;
+  if (display === name) return true;
+  // An OCR title can lose the stroke in Đ. Require an independently bound
+  // source spelling the entire same name with Đ before accepting that variant.
+  return display.includes(" ") && display.replaceAll("dj", "d") === name && account.genres.some(({ quote, binding }) =>
+    !!binding && /đ/iu.test(quote) && (" " + nameKey(quote) + " ").includes(" " + display + " ") &&
+    (" " + nameKey(quote.replace(/đ/giu, "d")) + " ").includes(" " + name + " "));
 }
 
 /** Match earlier independent sources only. Returning [] lets ordinary research continue. */
@@ -351,10 +367,7 @@ export async function lookupPerformerRegistryProgramme(
     return empty;
   const billedArtists = registryBilledArtists(event);
   const verifiedBilling = scopedHandles ?? (await loadScopedPerformerHandles(ctx, event));
-  const credits = registryCredits(
-    billedArtists,
-    verifiedBilling,
-  );
+  let credits = registryCredits(billedArtists, verifiedBilling);
   if (credits.length !== billedArtists.length || !credits.length) return empty;
   const context = getEventDiscoveryTaxonomy(event);
   if (
@@ -364,9 +377,19 @@ export async function lookupPerformerRegistryProgramme(
   )
     return empty;
   const cache: SourceCache = new Map();
-  const resolved = await Promise.all(
+  let resolved = await Promise.all(
     credits.map((credit) => resolveCredit(ctx, event, credit, cache, confirmsBillingHandle(event, credit, verifiedBilling))),
   );
+  if (credits.length === 2) {
+    const named = credits.findIndex(credit => !credit.handle);
+    const accountIndex = 1 - named;
+    const account = resolved[accountIndex]?.billedAccount;
+    if (named >= 0 && !resolved[named] && account && credits[accountIndex].name.toLowerCase() === "@" + account.handle &&
+      namesSameSoloAct(event.title, credits[named].name, account)) {
+      resolved = [resolved[accountIndex]];
+      credits = [credits[named]];
+    }
+  }
   if (resolved.some((p) => !p)) return empty;
   const roles: ("party" | "live")[] = [];
   const matches: PerformerGenreMatch[] = [];

@@ -1,3 +1,4 @@
+import "./qa-performer-registry-solo-billing.mjs";
 import assert from "node:assert/strict";
 import * as accountResearch from "../convex/performerAccountResearch.ts";
 import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
@@ -30,7 +31,8 @@ function memory() {
   const tables = new Map(),
     jobs = [],
     writes = [],
-    pages = [];
+    pages = [],
+    indexReads = [];
   const table = (name) => {
     if (!tables.has(name)) tables.set(name, new Map());
     return tables.get(name);
@@ -84,6 +86,7 @@ function memory() {
         return {
           withIndex(index, cb) {
             selectedIndex = index;
+            indexReads.push(index);
             const b = {};
             for (const [k, fn] of Object.entries({
               eq: (a, b) => a === b,
@@ -128,7 +131,7 @@ function memory() {
   };
   const put = (name, value) =>
     table(name).set(value._id, structuredClone(value));
-  return { ctx, table, jobs, writes, put, pages };
+  return { ctx, table, jobs, writes, put, pages, indexReads };
 }
 const h = memory(),
   { ctx } = h;
@@ -965,7 +968,8 @@ try {
   const structured={genre:"house",url:apple,quote:"Genre: House"};
   assert.equal(project(structured,{url:mb,quote:JSON.stringify([self,apple])}).length,1);
   const catalog = {genre:"folk",url:"https://itunes.apple.com/lookup?id=1234",quote:'"primaryGenreName":"Folk"'};
-  assert.equal(project(catalog,{url:mb,quote:JSON.stringify([self,"https://music.apple.com/ca/artist/1234"])}).length,1);
+  assert.equal(project(catalog,{url:mb,quote:JSON.stringify([self,"https://music.apple.com/ca/artist/1234"])})[0].dominant,true);
+  assert.equal(project(structured,{url:mb,quote:JSON.stringify([self,apple])})[0].dominant,undefined);
   assert.equal(project(catalog,{url:mb,quote:JSON.stringify([self,"https://itunes.apple.com/artist/id12345"])}).length,0);
   assert.equal(project(structured,{url:mb,quote:JSON.stringify([self,apple+"5"])}).length,0);
   for (const quote of ["I am not a techno DJ","Tonight: a guest techno DJ","Favourite techno playlist","My sister is a techno DJ"]) {
@@ -1021,7 +1025,10 @@ try {
     const historical=[...q.table("performerRegistryProfiles").values()].find(p=>p.instagramHandle==="pastaccount");
     const priorRank=historical.accountRank;
     historical.accountRank={...priorRank,ready:false};
+    q.indexReads.length=0;
     const due=await claim("instagram");
+    assert(!q.indexReads.includes("by_account_pending") && !q.indexReads.includes("by_account_refresh"),
+      "A ready imminent claim must not conflict with unrelated bootstrap, pending or refresh index writes");
     historical.accountRank=priorRank;
     assert.equal(due.handle,"nearaccount");
     const args={...rpc,handle:due.handle,profileId:due.profileId};
@@ -1046,7 +1053,9 @@ try {
     const next=await claim("instagram");
     assert.equal(next.handle,"busyaccount","Future appearance count precedes later single bookings and historical-only handles");
     const busyArgs={...rpc,handle:next.handle,profileId:next.profileId};
+    q.put("instagramSources",{_id:"following-observation",handle:next.handle,observedDisplayName:"Busy Artist",observedDisplayNameUpdatedAt:time});
     await accountResearch.complete._handler(q.ctx,{...busyArgs,outcome:"success"});
+    assert.equal((await q.ctx.db.get(next.profileId)).accountEvidence.displayName.quote,"Busy Artist");
     budget.attempted=96;
     assert.equal(await claim("web"),null);
     assert.equal((await claim("instagram")).handle,"boundaryaccount","Exhausted paid budget permits free account reads");

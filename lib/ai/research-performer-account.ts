@@ -8,6 +8,7 @@ import { genreProof } from "@/lib/taxonomy/explicit-event-discovery";
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { canPublishPerformerGenreSource } from "@/lib/taxonomy/performer-genre-research";
 import { getOpenAiModelEnv, getRequiredEnv } from "@/lib/utils/env";
+import { catalogueAccountGenre } from "./performer-music-catalogue";
 import { EventDiscoveryProviderError } from "./classify-event-discovery";
 import {
   readPerformerSearchSources,
@@ -74,6 +75,7 @@ const DIRECTORY_HOSTS = [
   "fiesta-event.rs",
   "en.lovefest.rs",
   "mascom.rs",
+  "montegigs.me",
 ];
 const normalize = (s: string) => normalizeTaxonomyText(s.normalize("NFKC"));
 function plain(value: string) {
@@ -233,6 +235,7 @@ async function publicPage(
   input: ResearchInput,
   maxBytes: number,
   timeoutMs = 6000,
+  json = false,
 ) {
   const deadline = AbortSignal.timeout(timeoutMs);
   const signal = input.signal
@@ -243,11 +246,20 @@ async function publicPage(
       redirect: "error",
       cache: "no-store",
       signal,
-      headers: { Accept: "text/html", "Accept-Language": "en" },
+      headers: json
+        ? {
+            Accept: "application/json",
+            "User-Agent": "EventZekaGenreResearch/1.0 (https://eventzeka.com)",
+          }
+        : { Accept: "text/html", "Accept-Language": "en" },
     });
     if (
       !response.ok ||
-      !/text\/html/i.test(response.headers.get("content-type") ?? "") ||
+      !(
+        json
+          ? /^(?:application\/(?:json|javascript)|text\/javascript)\b/i
+          : /text\/html/i
+      ).test(response.headers.get("content-type") ?? "") ||
       !response.body
     ) {
       await response.body?.cancel();
@@ -301,7 +313,12 @@ export async function researchPerformerAccount(
   )
     throw Error("Invalid Instagram handle");
   const url = "https://www.instagram.com/" + handle + "/";
-  const instagram = await publicPage(url, input, 1_600_000);
+  const instagram = await publicPage(
+    url,
+    input,
+    1_600_000,
+    input.internetSearch ? 6000 : 1650,
+  );
   const result = instagramAccountFacts(handle, instagram);
   // Send only a short professional affiliation from the verified account to the search tool.
   const affiliation =
@@ -346,7 +363,16 @@ export async function researchPerformerAccount(
         identityLink: facts.identityLink,
       };
   }
-  if (!input.internetSearch) return result;
+  if (!input.internetSearch) {
+    const genre = await catalogueAccountGenre(
+      handle,
+      (url, signal) =>
+        publicPage(url, { ...input, signal }, 256_000, 3000, true),
+      input.signal,
+    );
+    if (genre) result.genres.push(genre);
+    return result;
+  }
   const key = getRequiredEnv("OPENAI_API_KEY");
   const model = getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
   const name = result.displayName?.value ?? input.knownName ?? "";
@@ -514,15 +540,15 @@ export async function researchPerformerAccount(
         claim.genre,
       )
     );
+    const artistDirectory = source.hostname.replace(/^www\./u, "") === "montegigs.me" &&
+      /^\/events\/artist\/\d+-[a-z0-9-]+\/?$/u.test(source.pathname);
     if (
       (!matchingAffiliation &&
         !names.some(
           (n) =>
             n.length >= 3 && (" " + titleWords + " ").includes(" " + n + " "),
         )) ||
-      /\/(?:events?|tracks?|albums?|releases?|sets|playlists?|charts)\//i.test(
-        source.pathname,
-      ) ||
+      (!artistDirectory && /\/(?:events?|tracks?|albums?|releases?|sets|playlists?|charts)\//i.test(source.pathname)) ||
       /\b(?:tonight|lineup|plays alongside|playlist|back to back|concert|remix of|fan of|formerly|without|not a)\b/i.test(
         claim.quote,
       )

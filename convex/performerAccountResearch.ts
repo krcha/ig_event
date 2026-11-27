@@ -287,46 +287,59 @@ export const claim = mutation({
     const now = Date.now();
     if (args.phase === "web" && !available(now, await stateRow(ctx)))
       return null;
-    // Pending pages may still contain a higher-priority confirmed booking.
-    const [missing, pending, expired] = await Promise.all([
-      ctx.db
-        .query("performerRegistryProfiles")
+    // Restrict the hot path to the completed 48h rows. During bootstrap,
+    // hundreds of unrelated profile/rank changes used to invalidate this claim.
+    const ranked = () => ctx.db.query("performerRegistryProfiles");
+    const imminent = await ranked()
+      .withIndex("by_account_priority", (q) =>
+        q
+          .eq("accountRank.ready", true)
+          .eq("accountWork.stage", args.phase)
+          .eq("accountRank.tier", 0),
+      )
+      .take(4);
+    let candidates = imminent;
+    if (!imminent.length) {
+      // Lower tiers can consume the last slot only once all pages and crossed
+      // boundaries have been ranked. Preserve the global order for that lane.
+      const missing = await ranked()
         .withIndex("by_account_pending", (q) =>
           q.eq("accountRank.ready", undefined),
         )
-        .take(1),
-      ctx.db
-        .query("performerRegistryProfiles")
+        .take(1);
+      if (missing.length) return null;
+      const pending = await ranked()
         .withIndex("by_account_pending", (q) =>
           q.eq("accountRank.ready", false),
         )
-        .take(1),
-      ctx.db
-        .query("performerRegistryProfiles")
+        .take(1);
+      if (pending.length) return null;
+      const expired = await ranked()
         .withIndex("by_account_refresh", (q) =>
           q.gt("accountRank.refreshAt", 0).lte("accountRank.refreshAt", now),
         )
-        .take(1),
-    ]);
-    // A re-rank of an old profile must not stall an already confirmed 48h booking.
-    // Delay only lower tiers until unseen profiles and crossed boundaries are ranked.
-    const rankingInProgress =
-      missing.length || pending.length || expired.length;
-    const candidates = await ctx.db
-      .query("performerRegistryProfiles")
-      .withIndex("by_account_priority", (q) =>
-        q.eq("accountRank.ready", true).eq("accountWork.stage", args.phase),
-      )
-      .take(4);
-    if (args.phase === "web" && candidates[0]?.accountRank) {
-      const [free] = await ctx.db
-        .query("performerRegistryProfiles")
-        .withIndex("by_account_priority", (q) =>
-          q.eq("accountRank.ready", true).eq("accountWork.stage", "instagram"),
-        )
         .take(1);
-      const first = candidates[0].accountRank,
-        waiting = free?.accountRank;
+      if (expired.length) return null;
+      candidates = await ranked()
+        .withIndex("by_account_priority", (q) =>
+          q
+            .eq("accountRank.ready", true)
+            .eq("accountWork.stage", args.phase)
+            .gt("accountRank.tier", 0),
+        )
+        .take(4);
+    }
+    if (args.phase === "web" && candidates[0]?.accountRank) {
+      const first = candidates[0].accountRank;
+      const [free] = await ranked()
+        .withIndex("by_account_priority", (q) => {
+          const lane = q
+            .eq("accountRank.ready", true)
+            .eq("accountWork.stage", "instagram");
+          return first.tier === 0 ? lane.eq("accountRank.tier", 0) : lane;
+        })
+        .take(1);
+      const waiting = free?.accountRank;
       if (
         waiting &&
         (waiting.tier < first.tier ||
@@ -338,8 +351,7 @@ export const claim = mutation({
       if (
         !p.accountRank ||
         (p.accountRank.refreshAt !== undefined &&
-          p.accountRank.refreshAt <= now) ||
-        (rankingInProgress && p.accountRank.tier !== 0)
+          p.accountRank.refreshAt <= now)
       )
         continue;
       if (
@@ -547,10 +559,30 @@ export const complete = mutation({
     ) {
       return { status: "stale" as const, name: false, genres: 0 };
     }
-    const result =
-      args.evidence && args.outcome === "success"
-        ? await record(ctx, p, args.evidence, true)
-        : { status: "no_evidence" as const, name: false, genres: 0 };
+    let evidence = args.outcome === "success" ? args.evidence : undefined;
+    if (!evidence?.displayName && !p.accountEvidence?.displayName) {
+      // The following snapshot already contains Instagram's exact full_name
+      // field. Reuse the indexed observation even when the public page needs login.
+      const source = await ctx.db
+        .query("instagramSources")
+        .withIndex("by_handle", (q) => q.eq("handle", args.handle))
+        .unique();
+      const observed = source?.observedDisplayName;
+      const at = source?.observedDisplayNameUpdatedAt;
+      if (observed && at && at <= now && at >= now - 30 * 24 * HOUR) {
+        evidence = {
+          ...(evidence ?? { handle: args.handle, genres: [] }),
+          displayName: {
+            value: observed,
+            quote: observed,
+            url: "https://www.instagram.com/" + args.handle + "/",
+          },
+        };
+      }
+    }
+    const result = evidence
+      ? await record(ctx, p, evidence, true)
+      : { status: "no_evidence" as const, name: false, genres: 0 };
     const hasGenre = !!(
       result.genres ||
       p.accountEvidence?.genres.length ||

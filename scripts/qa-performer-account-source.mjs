@@ -4,6 +4,12 @@ import {
   directoryAccountFacts,
   researchPerformerAccount,
 } from "../lib/ai/research-performer-account.ts";
+import {
+  catalogueArtistId,
+  catalogueArtistLinks,
+  cataloguePrimaryGenre,
+} from "../lib/ai/performer-music-catalogue.ts";
+import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
 const handle = "test.band";
 const ig = "https://www.instagram.com/test.band/";
 const directory = "https://ra.co/dj/test-band/biography";
@@ -63,6 +69,120 @@ assert.deepEqual(
   [calls, reserved, fromIg.displayName.value, ...keys(fromIg)],
   [1, 0, "Test Band", "drum-and-bass"],
 );
+// The public IG host redirects to login on the worker. The exact, bidirectional
+// MusicBrainz relation still establishes identity without a login or a paid search.
+const mbId = "a671c5f6-de94-4d17-8e03-001e32c68431";
+const otherId = "29b03124-87df-4ee1-8d81-d46381522ec4";
+const apple = "https://itunes.apple.com/us/artist/id1327551943";
+const appleId = "1327551943";
+const relation = (url) => ({ ended: false, url: { resource: url } });
+const hit = {
+  resource: ig,
+  relations: [{ ended: false, artist: { id: mbId } }],
+};
+const artist = { id: mbId, relations: [relation(ig), relation(apple)] };
+const appleArtist = {
+  wrapperType: "artist",
+  artistId: 1327551943,
+  primaryGenreName: "Pop",
+};
+const appleJson = (row) =>
+  JSON.stringify({ resultCount: 1, results: [row] }, null, 2);
+const transports = [];
+const catalogued = await researchPerformerAccount({
+  handle,
+  beforeInternetSearch: async () =>
+    assert.fail("Free catalogue evidence reserved a paid call"),
+  fetch: async (url, init) => {
+    transports.push(url);
+    const u = new URL(url);
+    assert.equal(init.redirect, "error");
+    if (url === ig)
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://www.instagram.com/accounts/login/" },
+      });
+    if (u.host === "djs.rs") return text("");
+    if (u.host === "musicbrainz.org") {
+      assert.match(init.headers["User-Agent"], /EventZeka/);
+      if (u.pathname === "/ws/2/url") {
+        assert.deepEqual(u.searchParams.getAll("resource"), [
+          ig,
+          ig.slice(0, -1),
+        ]);
+        return Response.json({ urls: [hit] });
+      }
+      assert.equal(u.pathname, "/ws/2/artist/" + mbId);
+      return Response.json(artist);
+    }
+    assert.equal(url, "https://itunes.apple.com/lookup?id=" + appleId);
+    return new Response(appleJson(appleArtist), {
+      headers: { "content-type": "text/javascript; charset=utf-8" },
+    });
+  },
+});
+assert.deepEqual(keys(catalogued), ["pop"]);
+assert.equal(catalogued.displayName, undefined);
+assert.equal(catalogued.genres[0].quote, '"primaryGenreName": "Pop"');
+assert.deepEqual(catalogued.genres[0].binding, {
+  url: "https://musicbrainz.org/artist/" + mbId + "/url",
+  quote: JSON.stringify([ig, apple]),
+});
+assert.deepEqual(
+  validateAccountEvidence(catalogued, handle, "Test Band").genres,
+  catalogued.genres,
+);
+assert.equal(
+  transports.filter((u) => u.startsWith("https://musicbrainz.org/")).length,
+  2,
+);
+assert.equal(
+  catalogueArtistId(
+    {
+      urls: [
+        hit,
+        { ...hit, relations: [{ ended: false, artist: { id: otherId } }] },
+      ],
+    },
+    handle,
+  ),
+  undefined,
+);
+assert.equal(
+  catalogueArtistId({ urls: [{ ...hit, resource: ig + "concert" }] }, handle),
+  undefined,
+);
+assert.equal(
+  catalogueArtistId(
+    { urls: [{ ...hit, relations: [{ ended: true, artist: { id: mbId } }] }] },
+    handle,
+  ),
+  undefined,
+);
+for (const row of [
+  { ...artist, id: otherId },
+  { id: mbId, relations: [relation(ig.slice(0, -1) + "2/"), relation(apple)] },
+  { id: mbId, relations: [relation(ig), { ...relation(apple), ended: true }] },
+  {
+    id: mbId,
+    relations: [
+      relation(ig),
+      relation(apple),
+      relation(apple.replace(appleId, "123456")),
+    ],
+  },
+  {
+    id: mbId,
+    relations: [relation(ig), relation(apple.replace("artist", "album"))],
+  },
+])
+  assert.equal(catalogueArtistLinks(row, mbId, handle), undefined);
+for (const row of [
+  { ...appleArtist, wrapperType: "track" },
+  { ...appleArtist, artistId: 123 },
+  { ...appleArtist, primaryGenreName: "Music" },
+])
+  assert.equal(cataloguePrimaryGenre(appleJson(row), appleId), undefined);
 const evidence = "Test Band is a house music duo.";
 const prevKey = process.env.OPENAI_API_KEY,
   prevModel = process.env.OPENAI_REVIEW_MODEL;
@@ -87,6 +207,8 @@ try {
       },
       fetch: async (value, init) => {
         if (value === ig) return text(html(bio));
+        if (value.startsWith("https://musicbrainz.org/ws/2/url?"))
+          return Response.json({ urls: [] });
         if (value.startsWith("https://djs.rs/")) return text("");
         if (value === "https://api.openai.com/v1/responses") {
           transmitted++;
@@ -124,6 +246,8 @@ try {
   assert.deepEqual(keys(await find(page(ig, "They perform live."))), []);
   assert.deepEqual(keys(await find(page(), directory, false)), []);
   assert.deepEqual(keys(await find(page(), "https://ra.co/events/12345")), []);
+  assert.deepEqual(keys(await find(page(), "https://montegigs.me/events/artist/845-test-band")), ["house"]);
+  assert.deepEqual(keys(await find(page(), "https://montegigs.me/events/845-test-band")), []);
   assert.deepEqual(keys(await find(page(), directory, true, false)), []);
   const attributed =
     'Test Band, a house singer from London, with her band "Orion Band", explains her process.';
