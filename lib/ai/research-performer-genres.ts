@@ -108,6 +108,7 @@ const THOROUGH_PROMPT = "Use two independent search passes per artist. First sea
 const STANDARD_PROMPT = "For named acts, search the exact billed act name or handle first, with artist, DJ or band and genre terms; use dates and venues to disambiguate as needed.";
 const ADAPTIVE_PROMPT = [
   "For every discoveryOnly row with an artistQuery, start with that individual query. Search each named act separately using the exact name or billed handle and local city. Do not require a date, the venue, the combined title or the other billed name in these queries. Evaluate and return the evidence for each individual even if its co-billed act remains ambiguous or unverified. Use the remaining shared allowance to inspect a source or corroborate a name. For rows without artistQuery start with the exact occurrence title, venue and full date, including the billed name when relevant. Never combine different occurrences in a query. Distinguish confirmed start from doors and other shows.",
+  "For artistQuery results prefer to open a first-party artist biography, record label profile or the artist's specialist profile and quote an explicit self-description of the act's role and typical genre. Use past shared lineups only to corroborate identity; never take their genre or format as this act's style or this occurrence's programme.",
   "When listingTitle is supplied, return listing if it proves the event genre. Its identity quote must contain the exact event title, venue, and full date; the genre quotes must describe the advertised music on the same page. In that case do not duplicate the claims in main identity and genres. Otherwise return listing null and give independently verified named-act claims. A translated venue name must refer to the exact venue.",
   "For discoveryOnly rows ignore trustedFormat. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) explicitly describing an advertised activity, including non-musical programmes. For a titleOnly row, use only its exact occurrence: leave main identity null, genres empty and status unverified. For named rows, verify the individual identity, performance role and typical genres. Quote a clause directly identifying the named person as a DJ, selector, or the named band as a music group; look for local evidence and a billed handle for homonyms. Never assign one act's role or genres to another. Leave discoveryEvidence empty for ordinary genre lookups.",
   "Within the search limit, give each supplied artistQuery a turn before spending the remainder on corroboration. Stop when every row has been checked or the budget is exhausted. For an exact occurrence, stop when its listing establishes the genre. Do not use venue profiles, adjoining events, venue-wide calendars or a different edition as proof of an event genre.",
@@ -381,10 +382,13 @@ function decodeRow(raw: JsonObject, row: PreparedRow, sources: Map<string, Sourc
   const identity = resolveIdentity(raw.identity, row, sources);
   if (!identity) return empty;
   const namedDiscovery = row.discoveryOnly && !row.titleOnly;
-  if (namedDiscovery && !matchesEvent(identity.primary, { ...row, titleOnly: true }) &&
-    !(row.billedHandle && matchesHandle(identity.primary, cleanHandle(row.billedHandle))) &&
-    !(isDistinctiveBilledName(row.billedName) && identity.corroboration &&
-      [identity.primary, identity.corroboration].some(source => matchesLocalAnchor(source, row)))) return empty;
+  if (namedDiscovery && !matchesEvent(identity.primary, { ...row, titleOnly: true })) {
+    const sources = [identity.primary, ...(identity.corroboration ? [identity.corroboration] : [])];
+    const handle = cleanHandle(row.billedHandle);
+    const linked = handle ? sources.some(source => matchesHandle(source, handle)) :
+      isDistinctiveBilledName(row.billedName) && Boolean(identity.corroboration) && sources.some(source => matchesLocalAnchor(source, row));
+    if (!linked) return empty;
+  }
   const verified = new Map<MusicGenre, PerformerGenreWebEvidence>();
   const specialist = [identity.primary, identity.corroboration].find((item) =>
     item && hasMatchingSpecialistProfile(item, row.billedName));

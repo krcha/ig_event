@@ -738,6 +738,7 @@ async function checkBilledProgramme(event, { name = "Mina Valez", quote = primar
       const system = body.input.find(message => message.role === "system").content;
       assert.ok(system.includes("Search each named act separately"));
       assert.ok(system.includes("give each supplied artistQuery a turn"));
+      assert.ok(system.includes("quote an explicit self-description") && system.includes("past shared lineups only to corroborate identity"));
       for (const row of rows) {
         assert.equal(row.artistQuery, `"${row.billedHandle || row.billedName}" Belgrade DJ band musician`);
         assert.ok(!row.artistQuery.includes(row.date) && !row.artistQuery.includes(row.venue));
@@ -761,6 +762,9 @@ const soleBilled = await checkBilledProgramme(neutralBilling("Mina Valez", ["Min
 assert.deepEqual(soleBilled.taxonomy, { primaryCategory: "party", categories: ["party"], formats: [], genres: [] });
 assert.deepEqual(soleBilled.webResearch.matches, [{ performer: "Mina Valez", genre: "electronic", url: profile, identityUrl: profile }]);
 assert.equal(JSON.parse(soleBilled.auditJson).billedProgramme[0].evidence.quote, primaryQuote);
+assert.equal((await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez (@minapromo)"]))).taxonomy, null);
+assert.equal((await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez (@minapromo)"]),
+  { corroboration: "DJ Mina Valez (@minapromo) plays in Serbia." })).taxonomy.primaryCategory, "party");
 const unknownStyle = await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez"]), { genre: false });
 assert.equal(unknownStyle.taxonomy.primaryCategory, "party");
 assert.equal(unknownStyle.webResearch, undefined);
@@ -776,6 +780,11 @@ const styleWithoutRole = await checkBilledProgramme(neutralBilling("Mina Valez, 
 assert.equal(styleWithoutRole.taxonomy, null);
 assert.equal(styleWithoutRole.webResearch, undefined);
 assert.deepEqual(JSON.parse(styleWithoutRole.auditJson).partialProgramme.acts.map(act => [act.billedName, act.genres]), [["Mina Valez", ["electronic"]]]);
+const identityOnly = await checkBilledProgramme(neutralBilling("Mina Valez, Second Name", ["Mina Valez", "Second Name"]), {
+  genre: false, quote: "Mina Valez broadcasts from Belgrade.", corroboration: "Mina Valez works alongside local DJ collectives in Serbia.",
+});
+assert.equal(identityOnly.taxonomy, null);
+assert.deepEqual(JSON.parse(identityOnly.auditJson).partialProgramme.acts.map(act => [act.billedName, act.identityEvidence.url]), [["Mina Valez", profile]]);
 assert.equal((await checkBilledProgramme(neutralBilling("Echo", ["Echo"]), { name: "Echo",
   quote: "Echo is a Serbian rock band.", corroboration: "Echo is a DJ from Serbia." })).taxonomy, null,
   "Short homonyms cannot establish an unknown programme using profiles without event or billed-handle linkage.");
