@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { invalidateAccountRank } from "./performerAccountQueue";
+import { directoryCardByName, directoryCards, directoryConfirmsHandle, directoryGenres, reviewedDirectoryBooking } from "./performerDirectory";
 import { loadScopedPerformerHandles } from "./occurrencePerformerCredits";
 import type { PerformerHandleCredit } from "../lib/taxonomy/performer-genre-research";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -134,6 +135,7 @@ async function matchesAccountName(ctx:ReadCtx, profile:Profile, credit:Credit, h
   const display=profile.accountEvidence?.handle===handle ? profile.accountEvidence.displayName?.value : undefined;
   const compact=(v:string)=>normalizeTaxonomyText(v.normalize("NFKC")).replaceAll(" ","");
   if (display && (credit.key===normalizeTaxonomyText(display) || (compact(credit.name).length>=4 && compact(credit.name)===compact(display)))) return true;
+  if ((await directoryCards(ctx, profile)).some(card => compact(card.artistName) === compact(credit.name))) return true;
   const aliases=await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing_name",q=>
     q.eq("profileId",profile._id).eq("handle",handle).eq("nameKey",credit.key).eq("confirmedBilling",true)).order("desc").take(MAX_SOURCES);
   for (const a of aliases) if (await currentBilling(ctx,a,handle)) return true;
@@ -173,6 +175,7 @@ export async function visibleInstagramHandle(ctx: ReadCtx, profile: Profile, sou
   const bills = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing", q =>
     q.eq("profileId", profile._id).eq("handle", handle).eq("confirmedBilling", true)).order("desc").take(MAX_SOURCES);
   for (const a of bills) if (await currentBilling(ctx, a, handle)) return handle;
+  if (await directoryConfirmsHandle(ctx, profile, handle)) return handle;
   return null;
 }
 type SourceCache = Map<
@@ -261,7 +264,7 @@ function urlsInSummary(event: Event) {
     ),
   );
 }
-async function resolveCredit(
+async function resolveRegistryCredit(
   ctx: ReadCtx,
   event: Event,
   credit: Credit,
@@ -322,8 +325,7 @@ async function resolveCredit(
     if (handle || linked || recurring) supported.push(proof);
   }
   const account = p.accountEvidence;
-  const specialProgramme = /\b(?:tribute|homm?age|listening (?:party|session)|cover (?:night|set)|album playback|filmsk[aoi] projekcij\w*|vece posveceno)\b/u.test(
-    normalizeTaxonomyText([event.title,event.description].filter(Boolean).join(" ")));
+  const specialProgramme = specialPerformerProgramme(event);
   const billedAccount = !specialProgramme && targetBilling && credit.handle && account?.handle === credit.handle && account.genres.length ? account : undefined;
   if (billedAccount) {
     const profileUrl = "https://www.instagram.com/" + billedAccount.handle + "/";
@@ -332,8 +334,36 @@ async function resolveCredit(
       identity: display ? { url: display.url, quote: display.quote } : { url: profileUrl, quote: "@" + billedAccount.handle },
       genres: billedAccount.genres.map(g => ({ genre: g.genre, url: g.url, quote: g.quote, dominant: g.dominant === true })) });
   }
+  if (!specialProgramme && ((targetBilling && credit.handle && credit.handle === p.instagramHandle) || urls.size)) {
+    for (const card of await directoryCards(ctx, p)) {
+      if (!(targetBilling && credit.handle && credit.handle === p.instagramHandle) && !urls.has(canonicalProfile(card.url))) continue;
+      const genres = directoryGenres(card);
+      if (!genres.length) continue;
+      supported.push({
+        kind: "editorial", profileUrl: card.url, identity: { url: card.url, quote: card.artistName },
+        genres: genres.map(genre => ({ genre, url: card.url, quote: card.labels.join(", "), dominant: false })),
+      });
+    }
+  }
   if (supported.length)
     return { profileId: p._id, supported, primaryGenre: p.primaryGenre, billedAccount };
+}
+
+function specialPerformerProgramme(event: Event) {
+  return /\b(?:tribute|homm?age|listening (?:party|session)|cover (?:night|set)|album playback|filmsk[aoi] projekcij\w*|vece posveceno)\b/u.test(
+    normalizeTaxonomyText([event.title,event.description].filter(Boolean).join(" ")));
+}
+
+async function resolveCredit(ctx: ReadCtx, event: Event, credit: Credit, cache: SourceCache, targetBilling = false) {
+  const existing = await resolveRegistryCredit(ctx, event, credit, cache, targetBilling);
+  if (existing || credit.handle || specialPerformerProgramme(event)) return existing;
+  const booking = await reviewedDirectoryBooking(ctx, event, credit.name);
+  if (!booking) return;
+  const { card, profile } = booking;
+  const genres = directoryGenres(card);
+  const supported: RegistryEvidence[] = [{ kind: "editorial", identity: { url: card.url, quote: card.artistName },
+    genres: genres.map(genre => ({ genre, url: card.url, quote: card.labels.join(", "), dominant: false })) }];
+  return { profileId: profile._id, supported, primaryGenre: profile.primaryGenre, billedAccount: undefined };
 }
 
 function namesSameSoloAct(title: string, billed: string, account: NonNullable<Profile["accountEvidence"]>) {
@@ -463,6 +493,14 @@ export async function lookupPerformerRegistrySearchHints(
   const hints: { performer: string; profileUrl: string }[] = [];
   for (const credit of credits) {
     const social = credit.handle ? await profilesByInstagram(ctx, credit.handle) : [];
+    // A stage name can find the source for a future researcher even when the
+    // announcement has no social handle. The researcher must still confirm identity.
+    const directory = await directoryCardByName(ctx, credit.name);
+    if (directory && (!credit.handle || (social.length === 1 && social[0]._id === directory.profile._id)) &&
+      (await directoryCards(ctx, directory.profile)).some(card => card.url === directory.card.url)) {
+      hints.push({ performer: credit.name, profileUrl: directory.card.url });
+      continue;
+    }
     const candidates = social.length ? social : await ctx.db
       .query("performerRegistryProfiles")
       .withIndex("by_name", (q) =>
@@ -601,7 +639,7 @@ async function clearWithdrawnHandle(ctx: MutationCtx, profileId: Profile["_id"],
   if (billed.length) return;
   const verified = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_verified_handle", q =>
     q.eq("profileId", profileId).eq("evidence.verifiedHandle", handle)).take(1);
-  if (!verified.length) {
+  if (!verified.length && !await directoryConfirmsHandle(ctx, p, handle)) {
     await ctx.db.patch(profileId, { instagramHandle: undefined });
     changes.handlesCleared++;
   }
@@ -1033,9 +1071,9 @@ export const readProfile = internalQuery({
     }
     const instagramHandle = await visibleInstagramHandle(ctx, p, sources.map(s=>s.evidence));
     const account = instagramHandle && p.accountEvidence?.handle === instagramHandle ? p.accountEvidence : undefined;
-    const genres = [
-      ...new Set([...sources.flatMap((s) => s.evidence.genres.map((g) => g.genre)),...(account?.genres.map(g=>g.genre) ?? [])]),
-    ];
+    const cards = await directoryCards(ctx, p);
+    const genres = [...new Set([...sources.flatMap(s => s.evidence.genres.map(g => g.genre)),
+      ...(account?.genres.map(g => g.genre) ?? []), ...cards.flatMap(directoryGenres)])];
     const dominant = new Set(
       sources.flatMap((s) =>
         s.evidence.genres.filter((g) => g.dominant).map((g) => g.genre),

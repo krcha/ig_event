@@ -1,6 +1,7 @@
 import "./qa-performer-registry-solo-billing.mjs";
 import assert from "node:assert/strict";
 import * as accountResearch from "../convex/performerAccountResearch.ts";
+import * as directory from "../convex/performerDirectory.ts";
 import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
 import { getFunctionName } from "convex/server";
 import { listDailyInputs } from "../convex/eventDiscovery.ts";
@@ -1089,6 +1090,76 @@ try {
     await syncPerformerRegistryForEvent(q.ctx,same._id);
     assert.equal([...q.table("performerRegistryAppearances").values()].find(a=>a.eventId===same._id)?.profileId,nearProfile._id);
     assert.equal((await lookupPerformerRegistryProgramme(q.ctx,billedAlias("styled","N e a r A c c o u n t","nearaccount"))).matches[0]?.genre,"house");
+    {
+      const booking = {kind:"booking",eventId:origin._id,date:origin.date,venue:origin.venue,sourceVenue:"Venue A",
+        creditedAs:"DJ DOO",localName:"DOO",url:"https://djs.rs/e/venue-a-lineup",coBill:["Guest"]};
+      const card = {profileId:nearProfile._id,identityKey:nearProfile.identityKey,kind:"artist",url:"https://djs.rs/dj-doo",
+        artistName:"DJ DOO",labels:["Drum'n'bass","Jungle","Dubstep"],proofs:[booking]};
+      const record = (entry,apply=true) => directory.record._handler(q.ctx,{entry,apply});
+      assert.equal(await record(card,false),"insert");
+      assert.equal((await directory.forProfile._handler(q.ctx,{profileId:nearProfile._id})).length,0);
+      assert.equal(await record({...card,proofs:[{...booking,date:"2026-11-01"}]}),"stale");
+      assert.equal(await record(card),"insert");
+      assert.equal(await record(card),"unchanged");
+      const aliasTarget = billedAlias("new-directory-alias","DJ DOO","nearaccount");
+      assert.ok((await lookupPerformerRegistryProgramme(q.ctx,aliasTarget)).matches.length);
+      assert.ok((await readProfile._handler(q.ctx,{profileId:nearProfile._id})).genres.includes("drum-and-bass"));
+      const show = {...card,kind:"billing",url:booking.url,labels:[]};
+      assert.equal(await record({...show,labels:["Techno"]}),"invalid");
+      assert.equal(await record(show),"insert");
+      q.put("performerRegistryProfiles",{...nearProfile,_id:"unrelated",identityKey:"handle:unrelated",instagramHandle:"unrelated"});
+      const other = {...card,profileId:"unrelated",identityKey:"handle:unrelated"};
+      assert.equal(await record(other),"stale");
+      assert.equal(await record({...other,proofs:[{kind:"identity",url:"https://ra.co/dj/unrelated",
+        localUrl:"https://www.instagram.com/unrelated/",quote:"Unrelated Artist"}]}),"conflict");
+      origin.status="pending";
+      q.put("events",origin);
+      assert.ok(!(await readProfile._handler(q.ctx,{profileId:nearProfile._id})).genres.includes("drum-and-bass"));
+      const bare = pub("recorded-show",["First Guest","Second Guest"],{title:"DJ set"});
+      q.put("events",bare);
+      await syncPerformerRegistryForEvent(q.ctx,bare._id);
+      const invoice = name => ({ ...booking, eventId:bare._id,date:bare.date,localName:name,creditedAs:name });
+      const first = {kind:"artist",identityKey:"directory:https://djs.rs/first-guest",url:"https://djs.rs/first-guest",
+        artistName:"First Guest",labels:["House"],proofs:[invoice("First Guest")]};
+      const second = {kind:"billing",identityKey:"booking:"+bare._id,url:booking.url,
+        artistName:"Second Guest",labels:[],proofs:[invoice("Second Guest")]};
+      const beforeCount=q.table("performerRegistryProfiles").size;
+      assert.equal(await record(first,false),"insert");
+      assert.equal(await record(first),"insert");
+      assert.equal(await record(first),"unchanged");
+      assert.equal(await record({...first,kind:"billing",url:booking.url,labels:[]}),"insert");
+      assert.equal(await record(second),"insert");
+      assert.equal(await record(second),"unchanged");
+      assert.equal(q.table("performerRegistryProfiles").size,beforeCount+1);
+      await syncPerformerRegistryForEvent(q.ctx,bare._id);
+      const row=[...q.table("performerRegistryAppearances").values()].find(a=>a.eventId===bare._id && a.name==="First Guest");
+      assert.ok(row?.profileId);
+      assert.deepEqual((await readProfile._handler(q.ctx,{profileId:row.profileId})).genres,["house"]);
+      const varied = pub("alternate-spelling",["Linna","Guest A","Guest B"]);
+      q.put("events",varied);
+      const variant = { ...invoice("Linna"),eventId:varied._id,creditedAs:"Lina",url:"https://djs.rs/e/alternate-spelling",
+        coBill:["Guest A","Guest B"],variantSource:{url:"https://ra.co/events/1000",quote:"Lina, Guest A, Guest B"} };
+      const oneNight = { ...second,artistName:"Lina",url:variant.url,identityKey:"booking:"+varied._id,proofs:[variant] };
+      assert.equal(await record({...oneNight,proofs:[{...variant,coBill:["Guest A","Guest A"]}]}),"stale");
+      assert.equal(await record(oneNight),"insert");
+      const later = pub("later",["First Guest"],{title:"First Guest",date:"2026-12-31"});
+      assert.deepEqual(await lookupPerformerRegistrySearchHints(q.ctx,later),[{performer:"First Guest",profileUrl:first.url}]);
+      assert.deepEqual((await lookupPerformerRegistryProgramme(q.ctx,later)).matches,[]);
+      const sourceUrl = "https://es.ra.co/dj/local-selector";
+      const owner = {_id:"ra-owner",identityKey:'profile:["local selector","'+sourceUrl+'"]',name:"Local Selector",
+        nameKey:"local selector",support:[],independentAppearances:0};
+      q.put("performerRegistryProfiles",owner);
+      const publicLink = { ...first,profileId:owner._id,identityKey:owner.identityKey,url:"https://djs.rs/local-selector",
+        artistName:owner.name,labels:[],proofs:[{kind:"identity",localUrl:sourceUrl,url:sourceUrl,
+          quote:"https://www.instagram.com/nearaccount/"}]};
+      assert.equal(await record(publicLink),"conflict");
+      publicLink.proofs[0].quote="https://www.instagram.com/local_selector/";
+      assert.equal(await record(publicLink,false),"insert");
+      assert.equal((await q.ctx.db.get(owner._id)).instagramHandle,undefined);
+      assert.equal(await record(publicLink),"insert");
+      assert.equal(await record(publicLink),"unchanged");
+      assert.equal((await readProfile._handler(q.ctx,{profileId:owner._id})).instagramHandle,"local_selector");
+    }
   } finally {
     if (envSecret===undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET=envSecret;
   }

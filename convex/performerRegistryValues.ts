@@ -3,6 +3,22 @@ import { musicGenre } from "./eventDiscoveryValues";
 
 export const performerRole = v.union(v.literal("live"), v.literal("party"));
 export const performerSource = v.object({ url: v.string(), quote: v.string() });
+export const directoryProof = v.union(
+  v.object({
+    kind: v.literal("booking"), eventId: v.id("events"), date: v.string(),
+    venue: v.string(), sourceVenue: v.string(), localName: v.string(),
+    creditedAs: v.string(), url: v.string(), coBill: v.array(v.string()),
+    variantSource: v.optional(performerSource),
+  }),
+  v.object({
+    kind: v.literal("identity"), localUrl: v.string(), url: v.string(), quote: v.string(),
+  }),
+);
+export const directoryFields = {
+  profileId: v.optional(v.id("performerRegistryProfiles")), identityKey: v.string(),
+  kind: v.union(v.literal("artist"), v.literal("billing")), url: v.string(),
+  artistName: v.string(), labels: v.array(v.string()), proofs: v.array(directoryProof),
+};
 export const performerEvidence = v.object({
   kind: v.union(v.literal("web"), v.literal("editorial")),
   identity: performerSource,

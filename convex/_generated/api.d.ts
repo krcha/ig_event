@@ -138,6 +138,7 @@ import type * as pendingSourceConflictReclassification from "../pendingSourceCon
 import type * as performerAccountEvidence from "../performerAccountEvidence.js";
 import type * as performerAccountQueue from "../performerAccountQueue.js";
 import type * as performerAccountResearch from "../performerAccountResearch.js";
+import type * as performerDirectory from "../performerDirectory.js";
 import type * as performerRegistry from "../performerRegistry.js";
 import type * as performerRegistryEvidence from "../performerRegistryEvidence.js";
 import type * as performerRegistryValues from "../performerRegistryValues.js";
@@ -308,6 +309,7 @@ declare const fullApi: ApiFromModules<{
   performerAccountEvidence: typeof performerAccountEvidence;
   performerAccountQueue: typeof performerAccountQueue;
   performerAccountResearch: typeof performerAccountResearch;
+  performerDirectory: typeof performerDirectory;
   performerRegistry: typeof performerRegistry;
   performerRegistryEvidence: typeof performerRegistryEvidence;
   performerRegistryValues: typeof performerRegistryValues;

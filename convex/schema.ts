@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { acquisitionIssue, apifyAcquisitionReceipt } from "./internal/durableAcquisitionValues";
 import { analyticsEventFields, travelCounts } from "./analyticsValidators";
-import { accountEvidence, accountRank, accountWork, performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
+import { accountEvidence, accountRank, accountWork, directoryFields, performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 
 const eventStatus = v.union(
@@ -421,6 +421,10 @@ export default defineSchema({
     .index("by_account_refresh", ["accountRank.refreshAt"])
     .index("by_account_retry", ["accountWork.retryAt"])
     .index("by_account_priority", ["accountRank.ready", "accountWork.stage", "accountRank.tier", "accountRank.order"]),
+  performerDirectoryLinks: defineTable({ ...directoryFields, creditKey: v.string() })
+    .index("by_source_credit", ["url", "creditKey"])
+    .index("by_kind_credit", ["kind", "creditKey"])
+    .index("by_profile_kind", ["profileId", "kind"]),
   performerRegistryAppearances: defineTable({
     eventId: v.id("events"), eventUpdatedAt: v.number(), name: v.string(), nameKey: v.string(),
     handle: v.optional(v.string()), confirmedBilling: v.optional(v.literal(true)), profileId: v.optional(v.id("performerRegistryProfiles")),
