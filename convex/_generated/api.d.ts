@@ -146,6 +146,7 @@ import type * as revertFalseCinemaAutomaticApproval from "../revertFalseCinemaAu
 import type * as reviewedDrugstoreNovember2026Repairs from "../reviewedDrugstoreNovember2026Repairs.js";
 import type * as reviewedLikaCachedReceiptRecovery from "../reviewedLikaCachedReceiptRecovery.js";
 import type * as reviewedNovember2026Repairs from "../reviewedNovember2026Repairs.js";
+import type * as reviewedProgrammeNovember27 from "../reviewedProgrammeNovember27.js";
 import type * as reviewedPromoterScheduleFold from "../reviewedPromoterScheduleFold.js";
 import type * as reviewedVenueLinksNovember2026Repairs from "../reviewedVenueLinksNovember2026Repairs.js";
 import type * as reviewedVinylTavanNovember2026Split from "../reviewedVinylTavanNovember2026Split.js";
@@ -304,6 +305,7 @@ declare const fullApi: ApiFromModules<{
   reviewedDrugstoreNovember2026Repairs: typeof reviewedDrugstoreNovember2026Repairs;
   reviewedLikaCachedReceiptRecovery: typeof reviewedLikaCachedReceiptRecovery;
   reviewedNovember2026Repairs: typeof reviewedNovember2026Repairs;
+  reviewedProgrammeNovember27: typeof reviewedProgrammeNovember27;
   reviewedPromoterScheduleFold: typeof reviewedPromoterScheduleFold;
   reviewedVenueLinksNovember2026Repairs: typeof reviewedVenueLinksNovember2026Repairs;
   reviewedVinylTavanNovember2026Split: typeof reviewedVinylTavanNovember2026Split;
