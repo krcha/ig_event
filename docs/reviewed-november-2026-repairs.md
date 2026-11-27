@@ -66,3 +66,29 @@ Convex backup remain outside Git on the production host.
 Required gates include `qa:reviewed-november-repairs`,
 `qa:reviewed-november-operator`, the existing extraction/provenance/merge gates,
 and the full `npm run qa:release` including the production build.
+
+## November 27 physical venue directory
+
+The December programme from Bife Ipče names the venue on the poster and across its 18 rows. Its merchant listing gives Uzun Mirkova 7, Beograd. [Venue address](https://wolt.com/sr/srb/belgrade/restaurant/bife-ipce)
+
+The Cultural Centre of Belgrade lists separate addresses for its auditorium and art gallery. The directory stores each physical room under its own venue ID. The institution owns the Instagram account. A programme heading that assigns a row to both rooms keeps that row in review. [Official premises](https://www.kcb.org.rs/o-centru/prostor/) · [Official December programme](https://www.kcb.org.rs/2026/12/o-patriotizmu-i-odgovornosti-wajda100-u-beogradu/)
+
+After deploying the matching Convex and ingestion code, use the deployment's existing Convex CLI credentials to install the directory records:
+
+```sh
+npx convex run internal/migrations/eventDomain:addReviewedNovemberProgrammeVenues '{"dryRun":true}'
+npx convex run internal/migrations/eventDomain:addReviewedNovemberProgrammeVenues '{"dryRun":false}'
+npx convex run internal/migrations/eventDomain:addReviewedNovemberProgrammeVenues '{"dryRun":true}'
+```
+
+The initial preview expects three entries, twelve proposed writes and zero mismatches. The final preview expects three unchanged entries and zero proposed writes. The shared directory starts resolving these names for new ingestion.
+
+Use the service environment for the same deployment (`NEXT_PUBLIC_CONVEX_URL` and `CRON_SECRET`) to check and repair the 30 reviewed event versions:
+
+```sh
+node scripts/replay-reviewed-programme-venues.mjs
+node scripts/replay-reviewed-programme-venues.mjs --apply
+node scripts/replay-reviewed-programme-venues.mjs
+```
+
+The operator obtains a fresh plan for each write and rereads the public event. A rerun skips matching public results. Two December 4 rows name both the auditorium and the film gallery and remain outside the reviewed manifest.

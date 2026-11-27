@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { acquisitionIssue, apifyPhaseReceipt } from "./internal/durableAcquisitionValues";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
 import {
   DEFINITIVE_OUTPUT_RECOVERY_PROTOCOL,
@@ -81,6 +82,7 @@ const processingReceiptCompletionValidator = v.object({
   selectedHandleCount: v.number(),
   status: v.union(v.literal("processing_pending"), v.literal("fetched"), v.literal("failed")),
   processingOutcome: v.string(),
+  failureDetail: v.optional(v.string()),
 });
 const savedPostLinkValidator = v.object({
   scrapedPostId: v.id("scrapedPosts"),
@@ -213,6 +215,9 @@ async function advanceSavedPostQueue(
     scrapedPostSourceRevision: next.sourceRevision,
     processingPostIndex: receipt.processingPostIndex! + 1,
     processingFailedPostCount: (receipt.processingFailedPostCount ?? 0) + (failed ? 1 : 0),
+    ...(failed && receipt.scrapedPostId ? { failedSavedPosts: [
+      ...(receipt.failedSavedPosts ?? []), { scrapedPostId: receipt.scrapedPostId, reason: detail.slice(0, 256) },
+    ] } : {}),
     processingAttemptCount: 0,
     leaseOwner: undefined,
     leaseExpiresAt: undefined,
@@ -347,7 +352,7 @@ async function terminalCountsForRun(ctx: { db: any }, runId: string, selectedHan
 
 async function finishRunIfTerminal(ctx: { db: any }, run: any, now: number) {
   const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
-  if (counts.terminalReceiptCount !== run.selectedHandleCount) return false;
+  if (counts.terminalReceiptCount !== run.selectedHandleCount) return { complete: false, ...counts };
   // This is the only executor-path write to the master run. It happens once,
   // after all receipt rows are terminal, instead of on every one of 632 jobs.
   await ctx.db.patch(run._id, {
@@ -358,7 +363,7 @@ async function finishRunIfTerminal(ctx: { db: any }, run: any, now: number) {
     finishedAt: now,
     updatedAt: now,
   });
-  return true;
+  return { complete: true, ...counts };
 }
 
 async function settleReceiptAfterProviderBoundary(
@@ -393,6 +398,7 @@ async function settleReceiptAfterProviderBoundary(
     await finishRunIfTerminal(ctx, run, now);
     return true;
   }
+  if (receipt.apifyAcquisition) return false; // Only the immutable accepted run may be read again.
   if ((receipt.providerAttemptCount ?? 0) > 0) {
     await ctx.db.patch(receipt._id, {
       status: "deferred",
@@ -1000,6 +1006,8 @@ export const getCanaryAccounting = query({
         providerResultStatus: receipt.providerResultStatus ?? null,
         chargedMicros: receipt.chargedMicros ?? 0,
         outcomeDetail: receipt.outcomeDetail ?? null,
+        acquisitionIssues: receipt.acquisitionIssues ?? [],
+        failedSavedPosts: receipt.failedSavedPosts ?? [],
         scrapedPostId: receipt.scrapedPostId ?? null,
         scrapedPostSourceRevision: receipt.scrapedPostSourceRevision ?? null,
         processingOutcome: post?.processingOutcome ?? null,
@@ -1215,7 +1223,7 @@ export const executeNext = mutation({
     ).find(
       (candidate) =>
         candidate.providerResultStatus !== undefined ||
-        (candidate.providerAttemptCount ?? 0) > 0,
+        ((candidate.providerAttemptCount ?? 0) > 0 && !candidate.apifyAcquisition),
     );
     if (
       legacyProviderBoundary &&
@@ -1282,6 +1290,9 @@ export const executeNext = mutation({
       // Once the provider boundary has been crossed, retries must resume from
       // the persisted post. Re-fetching would double-charge the same profile.
       providerAttemptCount: receipt.providerAttemptCount ?? 0,
+      supportsApifyRecovery: true,
+      apifyAcquisition: receipt.apifyAcquisition,
+      finalApifyReadAttempt: receipt.attemptCount + 1 >= MAX_ATTEMPTS,
       providerResultStatus: receipt.providerResultStatus,
     };
   },
@@ -1322,8 +1333,47 @@ export const markReceiptProviderAttemptStarted = mutation({
   },
 });
 
+/** Attach a provider-issued ID before reading its dataset. No actor can be started by this mutation. */
+export const recordApifyAcquisitionPhase = mutation({
+  args: { runId: v.id("ingestionRuns"), receiptId: v.id("ingestionRunHandleReceipts"), workerId: v.string(),
+    phase: v.union(v.literal("basic"), v.literal("details")), accepted: apifyPhaseReceipt,
+    onlyPostsNewerThan: v.string(), serviceSecret: v.optional(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireAdminOrServiceSecret(ctx, args.serviceSecret);
+    const receipt = await ctx.db.get(args.receiptId);
+    const now = Date.now();
+    if (!receipt || receipt.runId !== args.runId || receipt.status !== "running" || receipt.leaseOwner !== args.workerId ||
+        (receipt.leaseExpiresAt ?? 0) <= now || receipt.providerAttemptCount !== 1 || receipt.providerResultStatus) {
+      throw new Error("Acquisition checkpoint lease mismatch.");
+    }
+    const validId = /^[A-Za-z0-9_-]{1,128}$/;
+    if (!validId.test(args.accepted.runId) || (args.accepted.datasetId !== undefined && !validId.test(args.accepted.datasetId)) ||
+        !Number.isFinite(Date.parse(args.onlyPostsNewerThan))) throw new Error("Invalid Apify checkpoint.");
+    const current = receipt.apifyAcquisition;
+    const existing = current?.[args.phase];
+    if (current && current.onlyPostsNewerThan !== args.onlyPostsNewerThan) throw new Error("Apify window changed.");
+    if (existing) {
+      if (existing.runId !== args.accepted.runId || existing.datasetId !== args.accepted.datasetId) throw new Error("Apify run identity changed.");
+      return null;
+    }
+    if (args.phase === "details" && (!current || current.basic.runId === args.accepted.runId)) throw new Error("Missing distinct Apify basic run.");
+    const apifyAcquisition = args.phase === "basic"
+      ? { onlyPostsNewerThan: args.onlyPostsNewerThan, basic: args.accepted }
+      : { ...current!, details: args.accepted };
+    await ctx.db.patch(receipt._id, { apifyAcquisition, updatedAt: now });
+    return null;
+  },
+});
+
+function validateAcquisitionIssues(issues: Array<{ postId?: string }>, resultsLimit: number) {
+  if (issues.length > resultsLimit + 1 || issues.some((issue) => (issue.postId?.length ?? 0) > 128)) {
+    throw new Error("Invalid acquisition issues.");
+  }
+}
+
 export const completeReceipt = mutation({
-  args: { runId: v.id("ingestionRuns"), receiptId: v.id("ingestionRunHandleReceipts"), workerId: v.string(), outcome: outcomeValidator, detail: v.optional(v.string()), serviceSecret: v.optional(v.string()) },
+  args: { acquisitionIssues: v.optional(v.array(acquisitionIssue)), runId: v.id("ingestionRuns"), receiptId: v.id("ingestionRunHandleReceipts"), workerId: v.string(), outcome: outcomeValidator, detail: v.optional(v.string()), serviceSecret: v.optional(v.string()) },
   returns: receiptCompletionValidator,
   handler: async (ctx, args) => {
     await requireAdminOrServiceSecret(ctx, args.serviceSecret);
@@ -1331,10 +1381,13 @@ export const completeReceipt = mutation({
     if (!run || !receipt || receipt.runId !== args.runId) throw new Error("Receipt does not belong to this run.");
     if (receipt.status !== "running" || receipt.leaseOwner !== args.workerId) throw new Error("Receipt lease mismatch.");
     const now = Date.now();
-    await ctx.db.patch(receipt._id, { status: args.outcome, outcomeDetail: args.detail?.slice(0, 256), terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, updatedAt: now });
-    const complete = await finishRunIfTerminal(ctx, run, now);
-    const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
-    return { complete, terminalReceiptCount: counts.terminalReceiptCount, selectedHandleCount: run.selectedHandleCount };
+    if (args.acquisitionIssues?.length) {
+      if (args.outcome !== "failed") throw new Error("Acquisition issues without persisted posts require a failed receipt.");
+      validateAcquisitionIssues(args.acquisitionIssues, run.controls.resultsLimit);
+    }
+    await ctx.db.patch(receipt._id, { ...(args.acquisitionIssues?.length ? { acquisitionIssues: args.acquisitionIssues } : {}), status: args.outcome, outcomeDetail: args.detail?.slice(0, 256), terminalAt: now, leaseOwner: undefined, leaseExpiresAt: undefined, updatedAt: now });
+    const counts = await finishRunIfTerminal(ctx, run, now);
+    return { complete: counts.complete, terminalReceiptCount: counts.terminalReceiptCount, selectedHandleCount: run.selectedHandleCount };
   },
 });
 
@@ -1355,6 +1408,7 @@ export const markReceiptPostsPersisted = mutation({
     postId: v.optional(v.string()),
     instagramPostUrl: v.optional(v.string()),
     savedPostLinks: v.optional(v.array(savedPostLinkValidator)),
+    acquisitionIssues: v.optional(v.array(acquisitionIssue)),
     processingProtocolVersion: v.optional(v.union(v.literal(1), v.literal(2))),
     serviceSecret: v.optional(v.string()),
   },
@@ -1379,6 +1433,10 @@ export const markReceiptPostsPersisted = mutation({
       throw new Error("Durable ingestion run is missing.");
     }
     const postCount = Math.max(0, Math.trunc(args.postCount));
+    if (args.acquisitionIssues?.length) {
+      if (!postCount) throw new Error("Partial acquisition needs a saved post.");
+      validateAcquisitionIssues(args.acquisitionIssues, run.controls.resultsLimit);
+    }
     if (postCount > run.controls.resultsLimit) {
       throw new Error("A durable receipt exceeded its bounded provider post window.");
     }
@@ -1470,6 +1528,7 @@ export const markReceiptPostsPersisted = mutation({
     await ctx.db.patch(receipt._id, {
       providerResultStatus: postCount > 0 ? "persisted" : "no_post",
       persistedPostCount: postCount,
+      ...(args.acquisitionIssues?.length ? { acquisitionIssues: args.acquisitionIssues } : {}),
       ...(args.processingProtocolVersion === 2
         ? {
             savedPostLinks: args.savedPostLinks,
@@ -2353,13 +2412,14 @@ export const completeProcessingReceipt = mutation({
     // a permanent extraction/media failure must remain visible in run failure
     // accounting instead of being flattened into the same receipt status.
     const status =
-      currentPostFailed || (receipt.processingFailedPostCount ?? 0) > 0
+      currentPostFailed || (receipt.processingFailedPostCount ?? 0) > 0 || (receipt.acquisitionIssues?.length ?? 0) > 0
         ? ("failed" as const)
         : ("fetched" as const);
+    const failureDetail = receipt.failedSavedPosts?.[0]?.reason ?? receipt.acquisitionIssues?.[0]?.reason;
     await ctx.db.patch(receipt._id, {
       status,
       processingFailedPostCount: (receipt.processingFailedPostCount ?? 0) + (currentPostFailed ? 1 : 0),
-      outcomeDetail: detail,
+      outcomeDetail: failureDetail ?? detail,
       terminalAt: now,
       leaseOwner: undefined,
       leaseExpiresAt: undefined,
@@ -2367,14 +2427,14 @@ export const completeProcessingReceipt = mutation({
       updatedAt: now,
     });
     await markReceiptChunkTerminal(ctx, receipt, now);
-    const complete = await finishRunIfTerminal(ctx, run, now);
-    const counts = await terminalCountsForRun(ctx, run._id, run.selectedHandleCount);
+    const counts = await finishRunIfTerminal(ctx, run, now);
     return {
-      complete,
+      complete: counts.complete,
       terminalReceiptCount: counts.terminalReceiptCount,
       selectedHandleCount: run.selectedHandleCount,
       status,
       processingOutcome: scrapedPost.processingOutcome,
+      ...(failureDetail ? { failureDetail } : {}),
     };
   },
 });

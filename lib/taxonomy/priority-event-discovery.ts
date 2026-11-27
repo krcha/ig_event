@@ -45,7 +45,7 @@ export function discoveryBudgets(now: number, state: { dayKey: string; attempted
   const priority = state?.categoryBudget?.dayKey === dayKey ? state.categoryBudget : { dayKey, attempted: 0, consecutive: 0 };
   // Both lanes share the reserve. A full early-morning sweep used to consume
   // the combined 96 slots before newly published daytime announcements arrived.
-  const withheld = minuteOfDay < 12 * 60 ? 12 : minuteOfDay < 18 * 60 ? 6 : 0;
+  const withheld = minuteOfDay < 9 * 60 ? 60 : minuteOfDay < 12 * 60 ? 12 : minuteOfDay < 18 * 60 ? 6 : 0;
   const remaining = Math.max(0, UPCOMING_DAILY_BUDGET - withheld - total);
   // Keep 24 slots for late-arriving urgent events through the afternoon; also
   // keep at least 24 for the continuing full-calendar and genre sweep.

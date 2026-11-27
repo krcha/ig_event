@@ -27,7 +27,7 @@ import {
   EVENT_EXTRACTION_ANALYSIS_PROTOCOL,
   OPENAI_DEFINITIVE_OUTPUT_FAILURE_KINDS,
 } from "../lib/ai/openai-analysis-protocol";
-import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
+import { firstPublicationPatch, PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { isCrossPostCampaignLineageEvent } from "../lib/events/cross-post-campaign-aggregate-attestation";
 import {
   assertExistingSourceOccurrenceReceiptWithinBounds,
@@ -1027,6 +1027,7 @@ export const upsertManyByHandle = mutation({
       );
     for (const event of eventsToInvalidate) {
       await ctx.db.patch(event._id, {
+        ...firstPublicationPatch(event, "pending_verification", now),
         publicationEvaluatedAt: now,
         publicationPolicyVersion: PUBLICATION_POLICY_VERSION,
         publicationReason: SOURCE_REVISION_PUBLICATION_INVALIDATION_REASON,

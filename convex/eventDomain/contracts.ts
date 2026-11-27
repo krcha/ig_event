@@ -149,6 +149,7 @@ export const eventDocument = v.object({
   promotionStart: v.optional(v.string()),
   promotionTier: v.optional(promotionTier),
   publicationEvaluatedAt: v.optional(v.number()),
+  firstPublishableAt: v.optional(v.union(v.number(), v.null())),
   publicationPolicyVersion: v.optional(v.number()),
   publicationReason: v.optional(v.string()),
   publicationState: v.optional(

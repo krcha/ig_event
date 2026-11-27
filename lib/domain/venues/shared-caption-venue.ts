@@ -1,7 +1,35 @@
-import { findPositiveLocativeVenueHandleEvidence, normalizeHandle } from "./normalization";
+import { findPositiveLocativeVenueHandleEvidence, normalizeHandle, toSearchableText } from "./normalization";
 
 type SharedVenue = { applies_to_all?: unknown; source?: unknown; value?: unknown; evidence?: unknown };
 type ProgrammeRow = { source_text?: unknown; venue?: unknown };
+
+const physicalRoom = /\b(?:dvoran[aeiu]|galerij[aeiu]|sal[aeiu]|bioskop|pozoriste|hall|gallery|cinema|theatre|theater|stage|room)\b/u;
+const dayHeading = /^(?:ponedeljak|utorak|sreda|cetvrtak|petak|subota|nedelja|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+\d/u;
+
+/** A programme explicitly assigns this row to multiple rooms under one location pin. */
+export function rowHasMultipleProgrammeRooms(caption: string, rowText: string): boolean {
+  if (!caption.includes("📍") || !rowText.trim()) return false;
+  const rowLine = rowText.split(/\r?\n/u)
+    .filter(line => !line.includes("📍"))
+    .map(toSearchableText)
+    .find(line => line.length >= 6 && !dayHeading.test(line));
+  if (!rowLine) return false;
+  let multipleRooms = false;
+  for (const rawLine of caption.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const comparable = toSearchableText(line);
+    if (line.startsWith("📍")) {
+      const rooms = toSearchableText(line.replace(/[&+/]/gu, " i "))
+        .split(/\s+(?:i|and)\s+/u).filter(part => physicalRoom.test(part));
+      multipleRooms = rooms.length > 1;
+    } else if (dayHeading.test(comparable)) {
+      multipleRooms = false;
+    } else if (multipleRooms && comparable === rowLine) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function programmeWithdrawnOrMoved(text: string) {
   return /(?:cancel(?:led|ed|lation)|postponed|rescheduled|relocated|moved to|otkaz[au]|odlo[žz]|pomeren|preme[šs]ten|nov[ao] lokacij|promena lokacij|gostujemo|отказ[ау]|одлож|померен|премештен|гостујемо)/iu.test(text);

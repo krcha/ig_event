@@ -1,6 +1,7 @@
 import { syncPerformerRegistryForEvent, lookupPerformerRegistryProgramme, lookupPerformerRegistrySearchHints } from "./performerRegistry";
 import { schedulePublishedDiscovery } from "./internal/schedulePublishedDiscovery";
 import { v, type Infer } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
@@ -724,11 +725,12 @@ async function setIngestionWork(ctx: MutationCtx, event: Doc<"events">, needed: 
     return;
   }
   const priority = tier === "confirmed" ? 0 : tier && tier !== "local-only" ? 1 : 2;
-  const activeAttempt = old?.eventUpdatedAt === event.updatedAt && old.lastAttemptAt ? old.lastAttemptAt + ENRICHMENT_RETRY_MS : 0;
-  const readyAt = retryAt > now || old?.eventUpdatedAt !== event.updatedAt ? Math.max(activeAttempt, retryAt) :
+  const sameTask = old?.eventUpdatedAt === event.updatedAt && old.reason === reason;
+  const activeAttempt = sameTask && old.lastAttemptAt ? old.lastAttemptAt + ENRICHMENT_RETRY_MS : 0;
+  const readyAt = retryAt > now || !sameTask ? Math.max(activeAttempt, retryAt) :
     Math.max(activeAttempt, Math.min(old.readyAt, now));
   const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, date: event.date, priority, readyAt, reason,
-    ...(old?.eventUpdatedAt === event.updatedAt && old.lastAttemptAt ? { lastAttemptAt: old.lastAttemptAt } : {}) };
+    ...(sameTask && old.lastAttemptAt ? { lastAttemptAt: old.lastAttemptAt } : {}) };
   if (!old) await ctx.db.insert("eventDiscoveryIngestionQueue", value);
   else if (old.eventUpdatedAt !== event.updatedAt || old.priority !== priority || old.readyAt !== readyAt || old.reason !== reason) await ctx.db.replace(old._id, value);
 }
@@ -829,7 +831,9 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
         }
         flags.directGenreWritten = true;
       }
-      await setIngestionWork(ctx, event, false, now);
+      // A dated repertoire settles the genre independently of the programme's
+      // format. Keep the category task eligible for the source-only classifier.
+      await setIngestionWork(ctx, event, true, now, now, "category");
       return flags;
     }
     if (current && !current.taxonomy && Array.isArray(audit.scopedProgrammeGenres)) {
@@ -854,7 +858,7 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
   } else if (research?.model === REGISTRY_MODEL && !cacheHit) {
     await ctx.db.delete(research._id);
   }
-  await setIngestionWork(ctx, event, !known || (!!canUseGenres && !genuine && !cacheHit), now,
+  await setIngestionWork(ctx, event, !known || (!!canUseGenres && !taxonomy?.genres.length && !genuine && !cacheHit), now,
     flags.categoryWritten || dueForFirstBilledReview(event, taxonomy, audit, now, candidate.performerHandles) || typeof audit.upcomingGenreRetryAt !== "number" ? now : audit.upcomingGenreRetryAt,
     !known ? "category" : event.artists.length ? "performer_genre" : "listing_genre");
   return flags;
@@ -866,7 +870,21 @@ export const processPublishedEvent = internalMutation({
     await syncPerformerRegistryForEvent(ctx, eventId);
     const event = await ctx.db.get(eventId);
     if (event && await isUpcomingDiscoveryPublic(ctx, event, event.date)) {
-      await enrichFromAvailableEvidence(ctx, event, Date.now());
+      const now = Date.now();
+      const prior = await ingestionWork(ctx, eventId);
+      await enrichFromAvailableEvidence(ctx, event, now);
+      const work = await ingestionWork(ctx, eventId);
+      if (ctx.scheduler && work && work.priority < 2 && work.readyAt <= now &&
+        (prior?.eventUpdatedAt !== work.eventUpdatedAt || prior.reason !== work.reason || prior.priority !== work.priority)) {
+        const state = await loadEnrichmentState(ctx);
+        const budget = discoveryBudgets(now, state);
+        if (budget.remaining && now - (state?.lastUrgentWakeAt ?? 0) >= 60_000) {
+          if (state) await ctx.db.patch(state._id, { lastUrgentWakeAt: now });
+          else await ctx.db.insert("eventDiscoveryEnrichmentState", { key: "upcoming", fromDate: getNightlifeDefaultDateKey(new Date(now)),
+            cursor: null, dayKey: budget.dayKey, attempted: 0, lastUrgentWakeAt: now });
+          await ctx.scheduler.runAfter(10_000, internal.internal.eventDiscoveryExecutor.advance, {});
+        }
+      }
     } else {
       const work = await ingestionWork(ctx, eventId);
       if (work) await ctx.db.delete(work._id);
@@ -914,31 +932,77 @@ export const claimPriorityCategories = mutation({
     // as well as scans whose civil-day bounds have changed since the last call.
     const saved = state?.categoryScan;
     const scan = saved?.phase && saved.fromDate === window.fromDate && saved.throughDate === window.throughDate ? saved : undefined;
-    if (scan?.completedAt && now - scan.completedAt < CATEGORY_RESCAN_MS) return { counts, events, more: false };
+    const scanCooling = !!scan?.completedAt && now - scan.completedAt < CATEGORY_RESCAN_MS;
+    const newJobs: Doc<"eventDiscoveryIngestionQueue">[] = [];
+    if (allowModel && budgets.urgent > 0) {
+      const priorities = scanCooling || (scan?.phase && scan.phase !== "confirmed") ? [0, 1] : [0];
+      for (const priority of priorities) {
+        newJobs.push(...await ctx.db.query("eventDiscoveryIngestionQueue").withIndex("by_reason_priority_attempt_readyAt", q =>
+          q.eq("reason", "category").eq("priority", priority).eq("lastAttemptAt", undefined).lte("readyAt", now)).take(4 - newJobs.length));
+        if (newJobs.length === 4) break;
+      }
+    }
+    if (scanCooling && !newJobs.length) return { counts, events, more: false };
     const phase = scan?.completedAt ? "confirmed" : scan?.phase ?? "confirmed";
     const { fromDate, throughDate } = window;
     const lower = phase === "confirmed" ? fromDate : phase === "undated" ? addDaysToDateKey(fromDate, 1) : throughDate;
     const upper = phase === "undated" ? addDaysToDateKey(throughDate, -1) : throughDate;
-    const page = await ctx.db.query("events").withIndex("by_publicationState_date", q =>
+    const page = scanCooling ? { page: [], isDone: true, continueCursor: null } : await ctx.db.query("events").withIndex("by_publicationState_date", q =>
       q.eq("publicationState", "publishable").gte("date", lower).lte("date", upper)).paginate({
       cursor: scan?.cursor ?? null, numItems: 12,
     });
     const attempts = new Map((state?.categoryAttempts ?? []).filter(item => item.at > now - 4 * 86_400_000)
       .map(item => [item.eventId, item]));
-    for (const event of page.page) {
+    const ordered = new Map<Id<"events">, Doc<"events">>();
+    const arrived = new Map<Id<"events">, Doc<"eventDiscoveryIngestionQueue">>();
+    for (const job of newJobs) {
+      const event = await ctx.db.get(job.eventId);
+      const tier = event && window.tier(event);
+      if (event && event.updatedAt === job.eventUpdatedAt && tier && tier !== "local-only") {
+        ordered.set(event._id, event);
+        arrived.set(event._id, job);
+      }
+      else if (event && await isUpcomingDiscoveryPublic(ctx, event, getNightlifeDefaultDateKey(new Date(now)))) {
+        await enrichFromAvailableEvidence(ctx, event, now);
+      }
+      else await ctx.db.delete(job._id);
+    }
+    for (const event of page.page) ordered.set(event._id, event);
+    for (const event of ordered.values()) {
       counts.scanned++;
       const tier = window.tier(event);
-      if (!tier || (phase !== "confirmed" && tier !== phase) || !await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
+      if (!tier || (phase !== "confirmed" && tier !== phase && !arrived.has(event._id))) continue;
+      if (!await isUpcomingDiscoveryPublic(ctx, event, fromDate)) {
+        const job = arrived.get(event._id);
+        if (job) await ctx.db.delete(job._id);
+        continue;
+      }
       counts.eligible++;
       const label = await loadLabel(ctx, event._id);
-      if (hasKnownCategory(label, event)) { counts.known++; continue; }
+      if (hasKnownCategory(label, event)) {
+        counts.known++;
+        // Older announcements enter the moving 48-hour window without an
+        // event edit. Promote their outstanding genre work with its retry time.
+        const pending = await ingestionWork(ctx, event._id);
+        if (pending?.reason === "category") await enrichFromAvailableEvidence(ctx, event, now);
+        else if (pending && pending.priority !== (tier === "confirmed" ? 0 : tier === "local-only" ? 2 : 1)) {
+          await setIngestionWork(ctx, event, true, now, pending.readyAt, pending.reason);
+        }
+        continue;
+      }
       const candidate = await discoveryCandidate(ctx, event);
-      if (hasConflictingProgrammeEvidence(candidate)) { counts.unresolved++; continue; }
+      if (hasConflictingProgrammeEvidence(candidate)) {
+        const job = arrived.get(event._id);
+        if (job) await ctx.db.delete(job._id);
+        counts.unresolved++;
+        continue;
+      }
       const explicit = classifyExplicitEventDiscovery(candidate);
       if (explicit && (explicit.complete || (explicit.titleCategory && explicit.taxonomy.categories.length === 1)) &&
         explicit.evidence.some(c => c.kind === "category" && c.label === explicit.taxonomy.primaryCategory)) {
         await savePriorityCategory(ctx, event, label, candidate, explicit.taxonomy,
           explicit.evidence, "explicit-priority-category-v1");
+        await enrichFromAvailableEvidence(ctx, event, now);
         counts.written++;
         continue;
       }
@@ -950,10 +1014,16 @@ export const claimPriorityCategories = mutation({
       counts.unresolved++;
       const old = attempts.get(event._id);
       const same = old && old.version === PRIORITY_CATEGORY_VERSION && old.updatedAt === event.updatedAt ? old : undefined;
-      if (tier !== phase || !allowModel || events.length >= budgets.urgent || (same && (same.tries >= 2 || now - same.at < ENRICHMENT_RETRY_MS))) continue;
+      const arrival = arrived.get(event._id);
+      if ((tier !== phase && !arrival) || !allowModel || events.length >= Math.min(12, budgets.urgent)) continue;
+      if (same && (same.tries >= 2 || now - same.at < ENRICHMENT_RETRY_MS)) {
+        if (arrival) await ctx.db.patch(arrival._id, { lastAttemptAt: same.at });
+        continue;
+      }
       attempts.set(event._id, { eventId: event._id, updatedAt: event.updatedAt, version: PRIORITY_CATEGORY_VERSION,
         at: now, tries: (same?.tries ?? 0) + 1 });
       events.push(candidate);
+      if (arrival) await ctx.db.patch(arrival._id, { lastAttemptAt: now, readyAt: now + ENRICHMENT_RETRY_MS });
     }
     counts.attempted = events.length;
     const remaining = budgets.remaining - events.length;
@@ -973,7 +1043,7 @@ export const claimPriorityCategories = mutation({
       ...(reserve ? { reserveUntil: now + 20 * 60_000 } : {}), ...(!more ? { completedAt: now } : {}) };
     const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, categoryOnly: true as const, nextCursor: null,
       events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
-    const next = { dayKey: budgets.dayKey, attempted: budgets.total + events.length, categoryScan,
+    const next = { dayKey: budgets.dayKey, attempted: budgets.total + events.length, categoryScan: scanCooling ? scan : categoryScan,
       categoryAttempts: [...attempts.values()], categoryBudget: { dayKey: budgets.dayKey,
         attempted: budgets.priority.attempted + events.length, consecutive: budgets.priority.consecutive + (lease ? 1 : 0) } };
     if (state) await ctx.db.patch(state._id, { ...next, lease });
@@ -995,17 +1065,20 @@ export const claimUpcomingBatch = mutation({
     if (state?.lease && state.lease.until > now) return { state: "busy" as const, events: [] };
     const { dayKey, total: attempted, general: budget, remaining, urgent, priority } = discoveryBudgets(now, state);
     const reserved = urgent > 0 && remaining <= 12 && (state?.categoryScan?.reserveUntil ?? 0) > now;
-    if (budget <= 0 || reserved) return { state: "idle" as const, events: [] };
+    if (remaining <= 0 || reserved) return { state: "idle" as const, events: [] };
     const cursor = state?.cursor ?? null;
     const fromDate = cursor && state ? state.fromDate : getNightlifeDefaultDateKey(new Date(now));
-    const limit = Math.min(4, budget);
+    const limit = Math.min(4, remaining);
     const queue: Doc<"eventDiscoveryIngestionQueue">[] = [];
     for (const tier of [0, 1, 2]) {
+      const slots = Math.min(tier === 2 ? budget : remaining, limit - queue.length);
+      if (slots <= 0) break;
       queue.push(...await ctx.db.query("eventDiscoveryIngestionQueue").withIndex("by_priority_readyAt", q =>
-        q.eq("priority", tier).lte("readyAt", now)).take(limit - queue.length));
+        q.eq("priority", tier).lte("readyAt", now)).take(slots));
       if (queue.length === limit) break;
     }
     const ready: Doc<"events">[] = [];
+    const readyStates = new Map<Id<"events">, NonNullable<Awaited<ReturnType<typeof upcomingEnrichmentState>>>>();
     for (const item of queue) {
       const event = await ctx.db.get(item.eventId);
       if (!event || !await isUpcomingDiscoveryPublic(ctx, event, getNightlifeDefaultDateKey(new Date(now)))) {
@@ -1015,9 +1088,14 @@ export const claimUpcomingBatch = mutation({
       await enrichFromAvailableEvidence(ctx, event, now);
       const pending = await ingestionWork(ctx, event._id);
       if (!pending || pending.readyAt > now) continue;
+      if (budget <= 0 && pending.priority > 1) continue;
+      const discovery = await upcomingEnrichmentState(ctx, event, now);
+      if (!discovery) continue;
+      readyStates.set(event._id, discovery);
       await ctx.db.patch(pending._id, { lastAttemptAt: now, readyAt: now + ENRICHMENT_RETRY_MS });
       ready.push(event);
     }
+    if (!ready.length && budget <= 0) return { state: "idle" as const, events: [] };
     const page = ready.length ? null : await ctx.db.query("events").withIndex("by_publicationState_date", (q) =>
       q.eq("publicationState", "publishable").gte("date", fromDate)).paginate({ cursor, numItems: Math.min(12, budget) });
     const events = (await Promise.all((page ? page.page : ready).map(async (event) => {
@@ -1026,7 +1104,7 @@ export const claimUpcomingBatch = mutation({
         if (queued?.eventUpdatedAt === event.updatedAt && queued.lastAttemptAt &&
           queued.lastAttemptAt + ENRICHMENT_RETRY_MS > now) return null;
       }
-      let discovery = await upcomingEnrichmentState(ctx, event, now);
+      let discovery = readyStates.get(event._id) ?? await upcomingEnrichmentState(ctx, event, now);
       if (!discovery) return null;
       const candidate = await discoveryCandidate(ctx, event);
       if (page) {
@@ -1086,6 +1164,7 @@ export const completeUpcomingBatch = mutation({
           counts.stale++; continue;
         }
         await savePriorityCategory(ctx, event, row, candidate, checked.taxonomy, checked.evidence, model);
+        await enrichFromAvailableEvidence(ctx, event, now);
         counts.written++;
       }
       await ctx.db.patch(state._id, { lease: undefined, categoryAttempts: state.categoryAttempts?.map(attempt =>

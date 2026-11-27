@@ -298,7 +298,7 @@ export function resolveVenueFromSnapshot(
       }),
       venueCategory: venue.category,
       venueId: venue._id,
-      venueInstagramHandle: venue.instagramHandle,
+      venueInstagramHandle: venue.instagramHandle || undefined,
       ...(venue.latitude !== undefined ? { venueLatitude: venue.latitude } : {}),
       ...(venue.location ? { venueLocation: venue.location } : {}),
       ...(venue.longitude !== undefined ? { venueLongitude: venue.longitude } : {}),

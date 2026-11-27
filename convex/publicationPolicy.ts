@@ -6,6 +6,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./_generated/server";
 import {
   evaluatePublicationEligibility,
+  firstPublicationPatch,
   PUBLICATION_POLICY_VERSION,
   type PublicationDecision,
 } from "../lib/domain/publication/policy";
@@ -39,9 +40,11 @@ const refreshEventPublicationBatchMutation =
 
 export function toPublicationPatch(
   decision: PublicationDecision,
+  previous: Doc<"events">,
   evaluatedAt = Date.now(),
 ) {
   return {
+    ...firstPublicationPatch(previous, decision.state, evaluatedAt),
     publicationEvaluatedAt: evaluatedAt,
     publicationPolicyVersion: decision.policyVersion,
     publicationReason: decision.reason,
@@ -296,7 +299,7 @@ async function refreshEventPublicationStatesInline(
   for (const event of events) {
     if (!event) continue;
     const decision = await evaluateEventPublication(ctx, event, options);
-    const patch = toPublicationPatch(decision);
+    const patch = toPublicationPatch(decision, event);
     if (
       event.publicationPolicyVersion !== patch.publicationPolicyVersion ||
       event.publicationReason !== patch.publicationReason ||
@@ -329,6 +332,7 @@ export async function refreshEventPublicationStates(
   for (const event of events) {
     if (!event) continue;
     await ctx.db.patch(event._id, {
+      ...firstPublicationPatch(event, "pending_verification", evaluatedAt),
       publicationEvaluatedAt: evaluatedAt,
       publicationPolicyVersion: PUBLICATION_POLICY_VERSION,
       publicationReason: "derived_state_refresh_deferred",

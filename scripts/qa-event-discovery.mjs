@@ -412,6 +412,40 @@ const jazzEvening = {
   description: "Jazz uz razgovor i hranu.", sourceCaption: "Još jedan lep ponedeljak za jazaa, razgovor i klopu. 👌🍸🎷",
 };
 const jazzTaxonomy = { primaryCategory: "live", categories: ["live"], formats: ["live-performance"], genres: ["jazz-blues"] };
+{
+  const date = "2026-11-27";
+  const party = { title: "REGGAETON PARTY", date, occurrenceText: "REGGAETON PARTY | PETAK, 27. NOVEMBER | FROM 10:00 PM" };
+  const local = (row) => hasConflictingProgrammeEvidence(row) ? null : classifyExplicitEventDiscovery(row);
+  assert.deepEqual(local(party)?.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["party"], genres: ["latin"] });
+  for (const extra of [{ occurrenceText: "REGGAETON PARTY | SUBOTA, 28. NOVEMBER" }, { artists: ["Reggaeton Party"] },
+    { description: "No party tonight." }, { description: "A documentary about the festival." }]) {
+    assert.ok(!local({ ...party, ...extra })?.taxonomy.categories.includes("party"));
+  }
+  const dating = { date, title: "Lovers Speed Dating", occurrenceText: "LOVERS SPEED DATING JE TU!",
+    sourceCaption: "Rezervišite za upoznavanje nekoliko novih ljudi." };
+  assert.equal(local(dating)?.taxonomy.primaryCategory, "participate");
+  assert.equal(local({ ...dating, sourceCaption: "A film about speed dating." }), null);
+  assert.equal(local({ ...dating, description: "Speed dating cancelled." }), null);
+  const linkedPlay = { date, title: "Dnevnik", sourceCaption: "Pročitajte o temi predstave i obezbedite svoje ulaznice." };
+  assert.deepEqual(local(linkedPlay)?.taxonomy.formats, ["theatre"]);
+  assert.equal(local({ date, title: "KLABER", occurrenceText: "KLABER\nSvake večeri od 26. novembra do 2. decembra u 19h",
+    description: "Film about a nightclub promoter. Tickets at the theatre box office." }), null);
+  assert.equal(local({ date, title: "Memoari", occurrenceText: "ПРЕДСТАВЉАЊЕ КЊИГЕ СРЕЋКА ЏАМОЊЕ" })?.taxonomy.primaryCategory, "talk");
+  const billed = { date, title: "Late Night", artists: ["DJ Alpha", "DJ Beta"], occurrenceText: "27 NOV FRIDAY | Late Night | DJ Alpha | DJ Beta" };
+  assert.deepEqual(local(billed)?.taxonomy.formats, ["dj-set"]);
+  assert.equal(local({ ...billed, occurrenceText: "28 NOV SATURDAY | Late Night | DJ Alpha | DJ Beta" }), null);
+  assert.equal(local({ ...billed, occurrenceText: "27 NOV FRIDAY | Late Night | DJ Alpha | DJ Beta | film" }), null);
+  const decks = { date, title: "Nostalgia", artists: ["DJ Alpha"], sourceCaption: "DJ Alpha za pultom" };
+  assert.deepEqual(local(decks)?.taxonomy.formats, ["dj-set"]);
+  assert.equal(local({ ...decks, sourceCaption: "Intervju: DJ Alpha za pultom" }), null);
+  const floors = { date, title: "Bass programme", sourceCaption: "Join us on November 27 across two dancefloors at @club for a night of deep, immersive, and multi-layered Drum & Bass." };
+  const decision = local(floors);
+  assert.deepEqual(decision?.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["party"], genres: ["drum-and-bass"] });
+  for (const evidence of decision.evidence) assert.ok(floors[evidence.source].includes(evidence.quote) && evidence.quote.length <= 120);
+  assert.equal(local({ ...floors, date: "2026-11-28" }), null);
+  assert.equal(local({ ...floors, title: "A documentary about Drum & Bass" }), null);
+  assert.equal(local({ ...floors, sourceCaption: floors.sourceCaption.replace("Drum & Bass", "background music") }), null);
+}
 const explicitJazzEvening = classifyExplicitEventDiscovery(jazzEvening);
 assert.deepEqual(explicitJazzEvening?.taxonomy, jazzTaxonomy);
 assert.equal(explicitJazzEvening?.complete, true);

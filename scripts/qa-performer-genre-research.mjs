@@ -479,7 +479,8 @@ function dailyQueueFixture() {
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
-    by_priority_readyAt: ["priority", "readyAt"], by_identity: ["identityKey"], by_name: ["nameKey"], by_event: ["eventId"],
+    by_priority_readyAt: ["priority", "readyAt"], by_reason_priority_attempt_readyAt: ["reason", "priority", "lastAttemptAt", "readyAt"],
+    by_identity: ["identityKey"], by_name: ["nameKey"], by_event: ["eventId"],
     by_creation_time: ["_creationTime", "_creationTime"],
     by_publicationState_date: ["publicationState", "date"], by_key: ["key"],
   };
@@ -890,7 +891,9 @@ try {
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), counter).general, 0);
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T17:00:00Z"), counter).general, 24);
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), { ...counter,
-    categoryBudget: { dayKey: counter.dayKey, attempted: 72, consecutive: 3 } }).general, 12);
+    categoryBudget: { dayKey: counter.dayKey, attempted: 72, consecutive: 3 } }).general, 0);
+  assert.equal(discoveryBudgets(Date.parse("2026-11-27T07:59:59Z"), { ...counter, attempted: 36 }).remaining, 0);
+  assert.equal(discoveryBudgets(Date.parse("2026-11-27T08:00:00Z"), { ...counter, attempted: 36 }).remaining, 48);
   for (const [hour, remaining] of [[6, 0], [14, 6], [20, 12]]) {
     assert.equal(discoveryBudgets(Date.parse(`2026-11-27T${String(hour).padStart(2, "0")}:00:00+01:00`),
       { ...counter, attempted: 84 }).remaining, remaining);
@@ -990,8 +993,8 @@ try {
     await urgent();
     const state = ordered.enrichmentState();
     const lastSlot = () => {
-      state.attempted = 83; state.dayKey = "2026-11-27";
-      state.categoryBudget = { dayKey: state.dayKey, attempted: 35, consecutive: 3 };
+      state.attempted = 35; state.dayKey = "2026-11-27";
+      state.categoryBudget = { dayKey: state.dayKey, attempted: 15, consecutive: 3 };
       // Existing rollout state can be halfway through the old unranked scan.
       state.categoryScan = { fromDate: "2026-11-26", throughDate: "2026-11-29", cursor: "12" };
     };
@@ -1012,7 +1015,7 @@ try {
       assert.fail("The multi-page scan never reached the event it should reserve.");
     };
     assert.deepEqual(await nextReservation(), ["tomorrow-confirmed"]);
-    assert.equal(state.attempted, 84); assert.equal(ordered.labels.get("yesterday-free").taxonomy.primaryCategory, "participate");
+    assert.equal(state.attempted, 36); assert.equal(ordered.labels.get("yesterday-free").taxonomy.primaryCategory, "participate");
     assert.equal(state.categoryAttempts.some(a => a.eventId.startsWith("yesterday")), false);
     await finishUnknown("tomorrow-confirmed");
     lastSlot();
@@ -1080,7 +1083,11 @@ try {
   const swingNow = Date.now;
   Date.now = () => Date.parse("2026-11-26T15:00:00Z");
   try {
-    const run = () => processPublishedEvent._handler(scopedOnly.dailyCtx, { eventId: "single" });
+    const wakes = [];
+    const publicationCtx = { ...scopedOnly.dailyCtx, scheduler: { async runAfter(delay, _fn, args) {
+      if (Object.keys(args).length === 0) wakes.push(delay);
+    } } };
+    const run = () => processPublishedEvent._handler(publicationCtx, { eventId: "single" });
     const read = () => loadPublicEventDiscoveryLabels(scopedOnly.dailyCtx, swing, true);
     await run();
     const saved = structuredClone(scopedOnly.labels.get("single"));
@@ -1090,12 +1097,28 @@ try {
     assert.deepEqual(proof.scopedProgrammeGenres.map(c => c.label), ["rnb-soul", "jazz-blues"]);
     assert.ok(proof.scopedProgrammeGenres.every(c => c.source === "sourceCaption" && swing.sourceCaption.includes(c.quote)));
     assert.deepEqual((await read()).eventTaxonomy.genres, ["rnb-soul", "jazz-blues"]);
+    assert.equal(scopedOnly.ingestionQueue.get("single")?.reason, "category");
     await run();
     assert.deepEqual(scopedOnly.labels.get("single"), saved);
+    assert.deepEqual(wakes, [10_000], "Repeated publication coalesces the urgent executor wake.");
+    assert.equal(scopedOnly.enrichmentState().attempted, 0, "Only the authenticated worker reserves paid attempts.");
     assert.equal((await claimUpcomingBatch._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "" })).events.length, 0);
     const category = await claimPriorityCategories._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "", allowModel: false });
     assert.equal(category.counts.known, 0);
     assert.equal(category.counts.unresolved, 1);
+    // A newly announced start must get a category-only check even if an earlier
+    // sweep just completed. Its already sourced genres remain on the public read.
+    Object.assign(swing, { time: "20:00", timeStatus: "confirmed" });
+    await run();
+    assert.equal(scopedOnly.ingestionQueue.get("single").priority, 0);
+    const beforeFastClaim = scopedOnly.enrichmentState().attempted;
+    const fast = await claimPriorityCategories._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "", allowModel: true });
+    assert.deepEqual(fast.events.map(e => e.key), ["single"]);
+    assert.equal(scopedOnly.enrichmentState().attempted, beforeFastClaim + 1);
+    await completeUpcomingBatch._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "", model: "fixture",
+      results: [{ eventId: "single", expectedUpdatedAt: swing.updatedAt, taxonomy: null, auditJson: "{}" }] });
+    assert.deepEqual((await read()).eventTaxonomy.genres, ["rnb-soul", "jazz-blues"]);
+    assert.deepEqual((await claimPriorityCategories._handler(scopedOnly.dailyCtx, { owner, serviceSecret: "", allowModel: true })).events, []);
     swing.normalizedFieldsJson = JSON.stringify({ sourceOccurrencePlanUnverified: true });
     assert.equal(await read(), undefined, "A change in source scope invalidates the public claim before the scheduled cleanup.");
     await run();

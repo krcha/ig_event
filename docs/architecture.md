@@ -102,13 +102,18 @@ Venue-ID calendar filters resolve their label with one public venue lookup.
 6. Insert approved or pending events in Convex.
 7. Merge safe approved duplicates through `lib/events/approved-event-automerge.ts`.
 
+`events.firstPublishableAt` records the first observed transition to public eligibility in Unix milliseconds. It survives later holds, repairs and republication. Older public events can have an absent or null value when their first publication time is unknown.
+
 Paid Apify acquisition uses a strict 24-hour profile window and skips pinned
 posts. Basic data is sufficient for complete single-image sources and explicit
 carousel manifests. Missing fields or carousel children are enriched only for
 fresh, owner-verified post URLs, with exact identity/date checks and complete
 ordered slide coverage. Discovery and enrichment share one cost ceiling and
 lease deadline; enrichment is authorized by the settled discovery-run charge.
-An incomplete source fails before persistence and checkpoint advancement.
+The durable daily worker persists completed sources when a sibling carousel
+cannot be completed, and records the skipped source and provider outcome.
+When an actor result has a stored run ID, recovery reads that existing result.
+Legacy callers retain their complete-source requirement.
 Saved dataset imports and the optional Instaloader collector keep their existing
 history/catch-up semantics.
 

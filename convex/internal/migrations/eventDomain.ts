@@ -6,18 +6,13 @@ import {
   backfillSourceDocumentCanonicalUrlsBatchHandler,
 } from "./canonicalFields";
 import { backfillEventVenueBindingsBatchHandler } from "./eventVenueBindings";
+import { consolidateReviewedKolaracVenueHandler } from "./reviewedKolaracVenueConsolidation";
 import {
-  consolidateReviewedKolaracVenueHandler,
-} from "./reviewedKolaracVenueConsolidation";
-import {
+  addReviewedNovemberProgrammeVenuesHandler,
   addReviewedOfficialVenueDirectoryEntriesHandler,
 } from "./reviewedOfficialVenueDirectoryAdditions";
-import {
-  correctReviewedMrakSourceOccurrenceHandler,
-} from "./reviewedMrakOccurrenceCorrection";
-import {
-  rewireReviewedMadlenianumDuplicateHandler,
-} from "./reviewedMadlenianumDuplicateRewire";
+import { correctReviewedMrakSourceOccurrenceHandler } from "./reviewedMrakOccurrenceCorrection";
+import { rewireReviewedMadlenianumDuplicateHandler } from "./reviewedMadlenianumDuplicateRewire";
 import {
   eventDomainMigrationBatchArgs,
   eventDomainMigrationBatchResult,
@@ -56,6 +51,11 @@ export const addReviewedOfficialVenueDirectoryEntries = internalMutation({
   args: eventDomainMigrationBatchArgs,
   returns: eventDomainMigrationBatchResult,
   handler: addReviewedOfficialVenueDirectoryEntriesHandler,
+});
+export const addReviewedNovemberProgrammeVenues = internalMutation({
+  args: eventDomainMigrationBatchArgs,
+  returns: eventDomainMigrationBatchResult,
+  handler: addReviewedNovemberProgrammeVenuesHandler,
 });
 export const correctReviewedMrakSourceOccurrence = internalMutation({
   args: eventDomainMigrationBatchArgs,

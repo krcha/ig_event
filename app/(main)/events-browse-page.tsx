@@ -24,7 +24,8 @@ import { LOCALE_LANGUAGE_TAGS } from "@/i18n/config";
 import { eventNoun, formatPublicDate, publicDayHeading, publicDayLabel } from "@/lib/i18n/display";
 import { getHomeFaqItems } from "@/lib/i18n/seo";
 import mobileStyles from "@/components/calendar/mobile-events-home.module.css";
-import { getEventCategoryKind, type EventCategoryKind } from "@/components/events/event-meta";
+import type { EventCategoryKind } from "@/components/events/event-meta";
+import { DISCOVERY_CATEGORY_TONES, getEventDiscoveryTaxonomy } from "@/lib/taxonomy/event-discovery";
 import { EVENT_PRIMARY_CATEGORIES, normalizeHiddenEventCategories } from "@/lib/taxonomy/event-categories";
 import { cn } from "@/lib/utils";
 import { addDaysToDateKey, dateKeyToLocalNoonDate, getNightlifeDefaultDateKey } from "@/lib/events/nightlife-date";
@@ -215,7 +216,7 @@ function toCalendarEventSummary(event: PublicEvent): CalendarEventSummary {
 }
 
 function getDayCategory(event: CalendarEventSummary): ConcreteDayCategory {
-  return getEventCategoryKind(event);
+  return DISCOVERY_CATEGORY_TONES[getEventDiscoveryTaxonomy(event).primaryCategory];
 }
 
 function createEmptyDayCategoryCounts(): DayCategoryCounts {

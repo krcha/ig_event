@@ -29,7 +29,7 @@ type PublicVenue = {
 
 const calendarQuery = makeFunctionReference<
   "query",
-  { fromDate: string; beforeDate: string; cursor: string | null },
+  { fromDate: string; beforeDate: string; cursor: string | null; includeEventTaxonomy: boolean },
   CalendarPage
 >("events:listPublicCalendarEventsWindowPaginated");
 const venuesQuery = makeFunctionReference<"query", { ids: string[] }, PublicVenue[]>(
@@ -79,6 +79,7 @@ export const listWindow = action({
       fromDate: args.fromDate,
       beforeDate: args.beforeDate,
       cursor: args.cursor ?? null,
+      includeEventTaxonomy: true,
     });
     if (result.page.length > 50) throw new Error("Public calendar overview page exceeds its 50-row bound.");
     const ids = [...new Set(result.page.flatMap((event) => event.venueId ? [event.venueId] : []))];

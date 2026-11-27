@@ -59,10 +59,40 @@ export async function persistAutomaticUniqueApproval(
     patch: {
       policy: AUTOMATIC_UNIQUE_APPROVAL_RULE,
       sourceOccurrenceKey: event.sourceOccurrenceKey,
+      ...(preflight.corroborating ? { corroboratingPendingSources: preflight.corroborating } : {}),
     },
   });
   return persisted;
 }
+
+/** Apply only the exact group returned by automaticApprovalDiagnostics:diagnosePending. */
+export const approvePendingRepresentative = internalMutation({
+  args: {
+    id: v.id("events"), expectedUpdatedAt: v.number(),
+    corroborating: v.array(v.object({ id: v.id("events"), expectedUpdatedAt: v.number() })),
+  },
+  returns: v.object({ outcome: v.union(v.literal("approved"), v.literal("already_approved"), v.literal("stale"), v.literal("held")), reason: v.string() }),
+  handler: async (ctx, args) => {
+    const ids = new Set(args.corroborating.map((row) => row.id));
+    if (!Number.isSafeInteger(args.expectedUpdatedAt) || args.corroborating.length < 1 || args.corroborating.length > 3 ||
+        ids.size !== args.corroborating.length || ids.has(args.id) || args.corroborating.some((row) => !Number.isSafeInteger(row.expectedUpdatedAt))) {
+      throw new Error("One exact pending representative and 1-3 distinct corroborating versions are required.");
+    }
+    const event = await ctx.db.get(args.id);
+    if (event?.status === "approved") return { outcome: "already_approved" as const, reason: "existing_approval_preserved" };
+    if (!event || event.status !== "pending" || event.updatedAt !== args.expectedUpdatedAt) return { outcome: "stale" as const, reason: "representative_version_changed" };
+    for (const row of args.corroborating) {
+      const peer = await ctx.db.get(row.id);
+      if (!peer || peer.status !== "pending" || peer.updatedAt !== row.expectedUpdatedAt) return { outcome: "stale" as const, reason: "corroborating_version_changed" };
+    }
+    const evaluation = await evaluateAutomaticUniqueApproval(ctx, event);
+    if (!evaluation.approval) return { outcome: "held" as const, reason: evaluation.diagnostic.holdReason };
+    const peers = evaluation.diagnostic.conflictIds;
+    if (peers.length !== ids.size || !peers.every((id) => ids.has(id))) return { outcome: "held" as const, reason: "corroborating_group_changed" };
+    await persistAutomaticUniqueApproval(ctx, event, evaluation.approval);
+    return { outcome: "approved" as const, reason: "verified_pending_representative" };
+  },
+});
 
 /** One transaction owns a single queue position and one possible approval. */
 export const sweepPage = internalMutation({

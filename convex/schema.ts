@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { acquisitionIssue, apifyAcquisitionReceipt } from "./internal/durableAcquisitionValues";
 import { analyticsEventFields } from "./analyticsValidators";
 import { performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
@@ -334,6 +335,7 @@ export default defineSchema({
     publicationReason: v.optional(v.string()),
     publicationPolicyVersion: v.optional(v.number()),
     publicationEvaluatedAt: v.optional(v.number()),
+    firstPublishableAt: v.optional(v.union(v.number(), v.null())),
     promotionTier: v.optional(
       v.union(v.literal("featured"), v.literal("promoted")),
     ),
@@ -431,13 +433,15 @@ export default defineSchema({
     eventId: v.id("events"), eventUpdatedAt: v.number(), date: v.string(),
     priority: v.number(), readyAt: v.number(), lastAttemptAt: v.optional(v.number()),
     reason: v.union(v.literal("category"), v.literal("performer_genre"), v.literal("listing_genre")),
-  }).index("by_eventId", ["eventId"]).index("by_priority_readyAt", ["priority", "readyAt"]),
+  }).index("by_eventId", ["eventId"]).index("by_priority_readyAt", ["priority", "readyAt"])
+    .index("by_reason_priority_attempt_readyAt", ["reason", "priority", "lastAttemptAt", "readyAt"]),
   eventDiscoveryEnrichmentState: defineTable({
     key: v.literal("upcoming"),
     fromDate: v.string(),
     cursor: v.union(v.string(), v.null()),
     dayKey: v.string(),
     attempted: v.number(),
+    lastUrgentWakeAt: v.optional(v.number()),
     categoryScan: v.optional(v.object({
       phase: v.optional(v.union(v.literal("confirmed"), v.literal("undated"), v.literal("boundary"))),
       reserveUntil: v.optional(v.number()),
@@ -951,6 +955,9 @@ export default defineSchema({
     // receipt may be claimed again and every outbound paid request must remain
     // auditable and chargeable.
     providerAttemptCount: v.optional(v.number()),
+    apifyAcquisition: v.optional(apifyAcquisitionReceipt),
+    acquisitionIssues: v.optional(v.array(acquisitionIssue)),
+    failedSavedPosts: v.optional(v.array(v.object({ scrapedPostId: v.id("scrapedPosts"), reason: v.string() }))),
     // This is written only after the fetched provider result has crossed the
     // durable scraped-post boundary. A charge alone is never evidence that a
     // post can safely be processed or reported as fetched after a crash.

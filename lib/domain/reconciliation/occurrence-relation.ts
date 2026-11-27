@@ -374,7 +374,7 @@ function lineupsSuggestCrossSourceCollision(
   );
 }
 
-function readConfirmedTitleSlot(candidate: OccurrenceRelationshipCandidate) {
+function readConfirmedTitleSlot(candidate: OccurrenceRelationshipCandidate, allowArtistDispute = false) {
   const fields = parseNormalizedFields(candidate);
   const date = fields?.normalizedDate;
   const minutes = getEventTimeSortMinutes(candidate.time);
@@ -383,7 +383,8 @@ function readConfirmedTitleSlot(candidate: OccurrenceRelationshipCandidate) {
     typeof fields.title !== "string" || toSearchableText(fields.title) !== toSearchableText(candidate.title) ||
     fields.titleUsedFallback === true || fields.titleDerivedFromContext === true ||
     fields.sourceOccurrencePlanUnverified === true ||
-    (Array.isArray(fields.sourceConflictFields) && fields.sourceConflictFields.length > 0) ||
+    (Array.isArray(fields.sourceConflictFields) &&
+      fields.sourceConflictFields.some((field) => !allowArtistDispute || field !== "artists")) ||
     fields.timeStatus !== "confirmed" || fields.timeEvidenceKind !== "start_time_stated" ||
     fields.timeEvidenceVerified !== true || typeof fields.time !== "string" ||
     minutes === null || getEventTimeSortMinutes(fields.time) !== minutes
@@ -400,6 +401,37 @@ function readConfirmedTitleSlot(candidate: OccurrenceRelationshipCandidate) {
       !` ${sourceRow} `.includes(` ${toSearchableText(candidate.title)} `)) return null;
   }
   return { date, exactDate, minutes, end: normalizeEventTime(fields.time).endLabel };
+}
+
+/** An exact named slot can corroborate another post even when its artist credit still needs review. */
+export function sameNamedPendingRepresentativeSlot(
+  left: OccurrenceRelationshipCandidate, right: OccurrenceRelationshipCandidate,
+): boolean {
+  const title = toSearchableText(left.title);
+  if (!left.venueId || left.venueId !== right.venueId || left.date !== right.date ||
+      title !== toSearchableText(right.title) || isGenericTeaserTitle(title) ||
+      !title.split(" ").some((token) => token.length >= 4 && /\p{L}/u.test(token) && !GENERIC_SLOT_TOKENS.has(token))) return false;
+  const names = (row: OccurrenceRelationshipCandidate) => new Set((row.artists ?? [])
+    .filter((artist) => !artist.trim().startsWith("@")).map(toSearchableText).filter(Boolean));
+  const firstNames = names(left);
+  const secondNames = names(right);
+  if (!firstNames.size || firstNames.size !== secondNames.size || [...firstNames].some((name) => !secondNames.has(name))) return false;
+  const handles = (row: OccurrenceRelationshipCandidate) => (row.artists ?? [])
+    .filter((artist) => artist.trim().startsWith("@")).map((artist) => artist.trim().toLowerCase()).sort().join("|");
+  const firstHandles = handles(left);
+  const secondHandles = handles(right);
+  if (firstHandles !== secondHandles && ((firstHandles && secondHandles) || firstNames.size !== 1 || !firstNames.has(title))) return false;
+  const a = readConfirmedTitleSlot(left, true);
+  const b = readConfirmedTitleSlot(right, true);
+  return Boolean(a && b && a.exactDate && b.exactDate && a.minutes === b.minutes &&
+    (!a.end || !b.end || a.end === b.end));
+}
+
+function programmeIncludesWork(programme: ComparableIdentity, work: ComparableIdentity): boolean {
+  const programmeTitle = /\b(?:salon|festival|smotra|biennale|bijenale|showcase)\b/u;
+  return programmeTitle.test(programme.title) && !programmeTitle.test(work.title) &&
+    programme.artists.size >= 2 && work.artists.size > 0 && programme.artists.size > work.artists.size &&
+    [...work.artists].every((artist) => programme.artists.has(artist));
 }
 
 function confirmedTitleSlotMatches(
@@ -509,6 +541,11 @@ export function classifyOccurrenceRelationshipInvariant(options: {
     if (!unknownVenue || (!sameTitle && !sharedArtist)) return "unrelated";
     return sameReliableTime ? "proven_duplicate" : "ambiguous";
   }
+  // A billed work and its umbrella programme can share the room, hour and
+  // performers. Their independent titles require a programme-level review.
+  if (sameVenue && !sameTitle &&
+      (programmeIncludesWork(candidateIdentity, existingIdentity) ||
+        programmeIncludesWork(existingIdentity, candidateIdentity))) return "ambiguous";
   if (
     sameVenue && !sameSource && lineupsSuggestCrossSourceCollision(candidate, existing)
   ) {

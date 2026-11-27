@@ -34,6 +34,7 @@ function stableJson(value: unknown): string {
 function eventEvidenceProjection(event: Doc<"events">) {
   const {
     _creationTime: _ignoredCreationTime,
+    firstPublishableAt: _ignoredFirstPublishableAt,
     publicationEvaluatedAt: _ignoredPublicationEvaluatedAt,
     publicationPolicyVersion: _ignoredPublicationPolicyVersion,
     publicationReason: _ignoredPublicationReason,

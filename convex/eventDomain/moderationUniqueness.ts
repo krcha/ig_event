@@ -2,6 +2,8 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isHumanApprovalIneligibleError } from "../../lib/domain/moderation/index";
 import { isSensibleEventTitleForApproval } from "../../lib/events/event-title-approval";
+import { getEventTimeSortMinutes } from "../../lib/events/event-time";
+import { sameNamedPendingRepresentativeSlot } from "../../lib/domain/reconciliation/occurrence-relation";
 import {
   getEffectiveEventEvidenceV2Conflicts,
   hasUnverifiedRepeatedTitleCaptionContradiction,
@@ -25,6 +27,8 @@ const MAX_PENDING_MODERATION_UNIQUENESS_APPROVED_DATE_COHORT_SIZE = 200;
 // A review can name ten different dates. Reserve the full per-date query bound
 // before reading so even that request cannot exhaust a Convex transaction.
 const MAX_PENDING_MODERATION_UNIQUENESS_COHORT_READS_PER_REVIEW = 500;
+const MAX_PENDING_REPRESENTATIVES = 4;
+const MAX_REJECTED_PER_DATE = 50;
 
 export type PendingModerationUniquenessReviewItem = {
   id: Id<"events">;
@@ -64,6 +68,7 @@ type PendingModerationDateCohort = {
 };
 
 export type PendingModerationUniquenessBuild = {
+  representativeGroups?: Map<Id<"events">, Doc<"events">[]>;
   result: {
     complete: boolean;
     items: PendingModerationUniquenessClassification[];
@@ -79,6 +84,57 @@ export type PendingModerationUniquenessBuild = {
     }
   >;
 };
+
+function hasPreservedReview(event: Doc<"events">): boolean {
+  if (event.reviewedAt !== undefined || event.reviewedBy !== undefined || event.moderationNote ||
+      event.humanReviewedLegacySourcePolicyVersion !== undefined ||
+      event.humanReviewedStructuredSourcePolicyVersion !== undefined) return true;
+  try {
+    const fields = JSON.parse(event.normalizedFieldsJson ?? "null");
+    return !fields || fields.humanReviewedLegacySourcePolicyVersion !== undefined ||
+      fields.humanReviewedStructuredSourcePolicyVersion !== undefined;
+  } catch { return true; }
+}
+
+function couldOccupySameSlot(member: Doc<"events">, other: Doc<"events">): boolean {
+  const relation = classifyApprovalCandidates(member, other);
+  if (relation === "ambiguous" || relation === "proven_duplicate") return true;
+  if (!member.venueId || member.venueId !== other.venueId) return false;
+  const minutes = getEventTimeSortMinutes(other.time);
+  return other.timeStatus !== "confirmed" || minutes === null || minutes === getEventTimeSortMinutes(member.time);
+}
+
+/** A complete clique of independently posted, identically credited and timed occurrences. */
+async function findPendingRepresentativeGroup(
+  ctx: QueryCtx | MutationCtx,
+  event: Doc<"events">,
+  duplicateIds: Id<"events">[],
+  cohort: PendingModerationDateCohort,
+  prepare: (event: Doc<"events">) => PreparedHumanApprovalCandidate,
+  rejectedByDate: Map<string, Doc<"events">[]>,
+): Promise<Doc<"events">[]> {
+  if (!duplicateIds.length || duplicateIds.length >= MAX_PENDING_REPRESENTATIVES) return [];
+  const ids = new Set([event._id, ...duplicateIds]);
+  const members = cohort.pending.filter((row) => ids.has(row._id));
+  if (members.length !== ids.size || members.some((row) => !row.instagramPostId?.trim() || !row.instagramPostUrl?.trim() || hasPreservedReview(row))) return [];
+  if (new Set(members.map((row) => row.instagramPostId?.trim())).size !== ids.size ||
+      new Set(members.map((row) => row.instagramPostUrl?.trim())).size !== ids.size) return [];
+  for (const [index, member] of members.entries()) {
+    if (members.slice(index + 1).some((other) => !sameNamedPendingRepresentativeSlot(member, other) ||
+        classifyApprovalCandidates(member, other) !== "proven_duplicate")) return [];
+  }
+  const blocksGroup = (other: Doc<"events">) =>
+    !ids.has(other._id) && members.some((row) => couldOccupySameSlot(row, prepare(other).candidate));
+  if (cohort.approved.some(blocksGroup) || cohort.pending.some(blocksGroup)) return [];
+  let rejected = rejectedByDate.get(event.date);
+  if (!rejected) {
+    rejected = await ctx.db.query("events").withIndex("by_status_date", (q) =>
+      q.eq("status", "rejected").eq("date", event.date)).take(MAX_REJECTED_PER_DATE + 1);
+    rejectedByDate.set(event.date, rejected);
+  }
+  if (rejected.length > MAX_REJECTED_PER_DATE || rejected.some(blocksGroup)) return [];
+  return members.sort((a, b) => a._creationTime - b._creationTime || String(a._id).localeCompare(String(b._id)));
+}
 
 function assertPendingModerationUniquenessReviewItems(
   items: PendingModerationUniquenessReviewItem[],
@@ -217,6 +273,7 @@ export async function buildPendingModerationUniquenessReview(
     items: PendingModerationUniquenessReviewItem[];
     asOfMs: number;
     moderationNote: string;
+    automaticRepresentatives?: boolean;
   },
 ): Promise<PendingModerationUniquenessBuild> {
   if (!Number.isSafeInteger(options.asOfMs) || options.asOfMs < 0) {
@@ -306,7 +363,11 @@ export async function buildPendingModerationUniquenessReview(
   };
 
   const classifications: PendingModerationUniquenessClassification[] = [];
-  for (const item of options.items) {
+  const representativeGroups = new Map<Id<"events">, Doc<"events">[]>();
+  const reviewItems = [...options.items];
+  const queuedIds = new Set(reviewItems.map((row) => row.id));
+  const rejectedByDate = new Map<string, Doc<"events">[]>();
+  for (const item of reviewItems) {
     const event = reviewedEvents.get(item.id);
     if (!event) {
       throw new Error(
@@ -394,7 +455,18 @@ export async function buildPendingModerationUniquenessReview(
       if (relation === "proven_duplicate") duplicateIds.push(other._id);
       if (relation === "ambiguous") ambiguousIds.push(other._id);
     }
-    if (duplicateIds.length > 0) {
+    if (options.automaticRepresentatives && dates.length === 1 && !representativeGroups.has(event._id) && !ambiguousIds.length) {
+      const members = await findPendingRepresentativeGroup(ctx, event, duplicateIds, cohort, prepare, rejectedByDate);
+      for (const member of members) {
+        representativeGroups.set(member._id, members);
+        if (!queuedIds.has(member._id)) {
+          queuedIds.add(member._id);
+          reviewedEvents.set(member._id, member);
+          reviewItems.push({ id: member._id, expectedUpdatedAt: member.updatedAt });
+        }
+      }
+    }
+    if (duplicateIds.length > 0 && !representativeGroups.has(event._id)) {
       classifications.push(
         buildPendingModerationUniquenessClassification(
           item,
@@ -478,5 +550,6 @@ export async function buildPendingModerationUniquenessReview(
     },
     reviewedEvents,
     approvals,
+    representativeGroups,
   };
 }

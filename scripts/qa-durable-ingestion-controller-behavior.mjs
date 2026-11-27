@@ -14,6 +14,7 @@ const {
   completeReceipt,
   releaseReceiptForRetry,
   markReceiptProviderAttemptStarted,
+  recordApifyAcquisitionPhase,
   markReceiptPostsPersisted,
   claimNextProcessingReceipt,
   releaseProcessingReceiptForRetry,
@@ -880,6 +881,33 @@ for (const boundary of ["no_post", "unconfirmed"]) {
   assert.equal((await db.get(runId)).status, "completed");
 }
 
+// Only the exact, durably accepted provider run survives a read failure.
+{
+  const db = new MemoryDb();
+  const runId = await queue(db, "daily", ["replay_venue"]);
+  const workerId = "replay-worker";
+  const fetched = await claim(db, runId, workerId);
+  await startProviderAttempt(db, runId, fetched.receiptId, workerId);
+  const args = { runId, receiptId: fetched.receiptId, workerId, serviceSecret: process.env.CRON_SECRET,
+    phase: "basic", onlyPostsNewerThan: new Date(Date.now() - 86_400_000).toISOString(),
+    accepted: { runId: "accepted-run", datasetId: "accepted-dataset" } };
+  await assert.rejects(() => recordApifyAcquisitionPhase._handler(ctx(db), { ...args, workerId: "wrong" }), /lease/);
+  await assert.rejects(() => recordApifyAcquisitionPhase._handler(ctx(db), { ...args, phase: "details" }), /basic run/);
+  await recordApifyAcquisitionPhase._handler(ctx(db), args);
+  await recordApifyAcquisitionPhase._handler(ctx(db), args);
+  await assert.rejects(() => recordApifyAcquisitionPhase._handler(ctx(db), { ...args, accepted: { runId: "other" } }), /identity/);
+  await releaseReceiptForRetry._handler(ctx(db), { runId, receiptId: fetched.receiptId, workerId, reason: "temporary dataset read", serviceSecret: process.env.CRON_SECRET });
+  const recovered = await claim(db, runId, "read-only-worker");
+  assert.deepEqual(recovered.apifyAcquisition, { onlyPostsNewerThan: args.onlyPostsNewerThan, basic: args.accepted });
+  assert.equal(recovered.providerAttemptCount, 1);
+  assert.equal((await db.get(fetched.receiptId)).chargedMicros, 10_000);
+  await assert.rejects(() => recordApifyAcquisitionPhase._handler(ctx(db), args), /lease/);
+  const failedRow = { reason: "provider_error_row" };
+  await completeReceipt._handler(ctx(db), { runId, receiptId: fetched.receiptId, workerId: "read-only-worker",
+    outcome: "failed", acquisitionIssues: [failedRow], serviceSecret: process.env.CRON_SECRET });
+  assert.deepEqual((await db.get(fetched.receiptId)).acquisitionIssues, [failedRow]);
+}
+
 // A paid daily window may contain several posts from the same venue. Every
 // exact saved identity must be processed in order under one receipt, including
 // after a single child reaches its retry limit.
@@ -992,6 +1020,9 @@ for (const boundary of ["no_post", "unconfirmed"]) {
     runId, receiptId: fetched.receiptId, workerId: "multi-ai-2", serviceSecret: process.env.CRON_SECRET,
   });
   assert.equal(lastCompletion.status, "failed", "a failed child must remain visible in run accounting");
+  assert.equal(lastCompletion.failureDetail, "child extraction failed");
+  assert.deepEqual((await db.get(fetched.receiptId)).failedSavedPosts,
+    [{ scrapedPostId: postIds[1], reason: "child extraction failed" }]);
   assert.equal(lastCompletion.complete, true);
   assert.equal((await db.get(fetched.receiptId)).providerAttemptCount, 1);
   assert.equal((await db.get(runId)).failedReceiptCount, 1);

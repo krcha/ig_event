@@ -146,7 +146,7 @@ export function produceStructuredFactsForInsert(
     const rawExtractionJson = options.rawExtractionJson ?? JSON.stringify(extracted);
     return produceCarouselStructuredFacts({ post, extracted, prepare: (scopedPost, scopedExtracted, scopedImageUrl) =>
       produceStructuredFactsForScope(scopedPost, scopedExtracted, scopedImageUrl,
-        args[3], args[4], args[5], { ...options, rawExtractionJson }) });
+        args[3], args[4], args[5], { ...options, rawExtractionJson, programmeCaptionForVenueConflict: post.caption }) });
   }
   return produceStructuredFactsForScope(...args);
 }
@@ -166,6 +166,7 @@ function produceStructuredFactsForScope(
     canonicalVenueLocationsByHandle?: Record<string, string>;
     venueResolverSnapshot?: IngestionVenueResolverSnapshotInput;
     rawExtractionJson?: string;
+    programmeCaptionForVenueConflict?: string | null;
   } = {},
 ): StructuredFactExtractionResult[] {
   const extractionContractVersion = normalizeString(extracted.extraction_contract_version);

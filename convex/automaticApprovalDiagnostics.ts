@@ -20,7 +20,7 @@ export const diagnosePending = query({
       if (!event || event.status !== "pending" || event.updatedAt !== item.expectedUpdatedAt) throw new Error(`Event changed since the reviewed version: ${item.id}.`);
     }
     if (new Set(events.map((event) => event!.date)).size !== 1) throw new Error("Automatic approval diagnostics require one same-date batch.");
-    const prebuiltReview = await buildPendingModerationUniquenessReview(ctx, { items: args.items, asOfMs: observedAt, moderationNote: "Automatic source and uniqueness verification; no human moderation is claimed." });
+    const prebuiltReview = await buildPendingModerationUniquenessReview(ctx, { items: args.items, asOfMs: observedAt, moderationNote: "Automatic source and uniqueness verification; no human moderation is claimed.", automaticRepresentatives: true });
     const items: AutomaticUniqueApprovalDiagnostic[] = [];
     for (const event of events) {
       if (!event) throw new Error("Exact pending event disappeared.");

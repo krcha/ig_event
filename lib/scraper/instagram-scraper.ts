@@ -75,6 +75,17 @@ export function getInstagramScrapeRawItemCount(posts: InstagramScrapedPost[]): n
   return annotated[INSTAGRAM_SCRAPE_RAW_ITEM_COUNT] ?? posts.length;
 }
 
+export type ApifyPhaseReceipt = { runId: string; datasetId?: string };
+export type ApifyAcquisitionReceipt = {
+  onlyPostsNewerThan: string;
+  basic: ApifyPhaseReceipt;
+  details?: ApifyPhaseReceipt;
+};
+export type InstagramAcquisitionIssue = {
+  reason: "provider_error_row" | "incomplete_post_details" | "details_unavailable";
+  postId?: string;
+};
+
 type ScrapeInstagramAccountOptions = {
   handle: string;
   resultsLimit?: number;
@@ -94,6 +105,12 @@ type ScrapeInstagramAccountOptions = {
   collectorReadinessChecked?: boolean;
   onRequestStarted?: () => void | Promise<void>;
   onTransportInvoked?: () => void;
+  /** Read only. A resumed acquisition can never dispatch another paid actor. */
+  resumeApify?: ApifyAcquisitionReceipt;
+  finalApifyReadAttempt?: boolean;
+  onApifyRunAccepted?: (phase: "basic" | "details", receipt: ApifyPhaseReceipt, cutoff: string) => Promise<void>;
+  /** Durable executors record exclusions before reporting success for the healthy posts. */
+  onAcquisitionIssue?: (issue: InstagramAcquisitionIssue) => void;
   onFollowerObservation?: (observation: InstagramFollowerObservation) => void;
 };
 
@@ -1162,7 +1179,7 @@ export async function loadRecentApifyRunPosts(
 export async function scrapeInstagramAccount(
   options: ScrapeInstagramAccountOptions,
 ): Promise<InstagramScrapedPost[]> {
-  if (getInstagramScraperProvider() === "instaloader") {
+  if (!options.resumeApify && getInstagramScraperProvider() === "instaloader") {
     const target = parseInstagramActorTarget(options.handle);
     const settings = buildApifyInstagramScrapeRequest({
       actorUsernameInput: target.actorUsernameInput,
@@ -1236,7 +1253,7 @@ export async function scrapeInstagramAccount(
     // The awaited hook commits a crash-safe marker, not proof of provider
     // transport. Re-check the absolute lease deadline after it returns: a slow
     // marker must never reset an expired deadline into a new paid window.
-    await options.onRequestStarted?.();
+    if (!options.resumeApify) await options.onRequestStarted?.();
     const remainingLeaseMs = deadlineMs - Date.now();
     if (remainingLeaseMs < 5_000) {
       throw new Error(`Apify scraper lease deadline expired before transport for ${target.label}.`);
@@ -1263,7 +1280,7 @@ export async function scrapeInstagramAccount(
       if (!payload.data || payload.data.id !== runId) throw new Error("Apify returned an invalid run receipt.");
       return payload.data;
     };
-    const runPhase = async (phaseInput: ApifyInstagramScrapeRequest["input"], maxTotalChargeUsd: number) => {
+    const startRun = async (phaseInput: ApifyInstagramScrapeRequest["input"], maxTotalChargeUsd: number) => {
       ensureDeadline(5_000);
       const query = new URLSearchParams({
         maxItems: String(phaseInput.username.length > 1 ? phaseInput.username.length : phaseInput.resultsLimit),
@@ -1297,8 +1314,19 @@ export async function scrapeInstagramAccount(
       if (!response.ok) {
         throw new Error(`Apify scraper request failed for ${target.label}: ${response.status} ${response.statusText} - ${await response.text()}`);
       }
-      let run = (await response.json() as { data?: ApifyActorRun }).data;
+      const run = (await response.json() as { data?: ApifyActorRun }).data;
       if (!run?.id) throw new Error("Apify did not return a paid run receipt.");
+      await options.onApifyRunAccepted?.(
+        phaseInput.dataDetailLevel === "basicData" ? "basic" : "details",
+        { runId: run.id, ...(run.defaultDatasetId ? { datasetId: run.defaultDatasetId } : {}) },
+        input.onlyPostsNewerThan,
+      );
+      return run;
+    };
+    const runPhase = async (phaseInput: ApifyInstagramScrapeRequest["input"], maxTotalChargeUsd: number) => {
+      const recorded = phaseInput.dataDetailLevel === "basicData" ? options.resumeApify?.basic : options.resumeApify?.details;
+      if (options.resumeApify && !recorded) throw new Error("Apify read-only recovery has no accepted run for this phase.");
+      let run = recorded ? await readRun(recorded.runId) : await startRun(phaseInput, maxTotalChargeUsd);
       const activeStatuses = new Set(["READY", "RUNNING", "TIMING-OUT", "ABORTING"]);
       // One paid start only; subsequent calls wait for that same run. The
       // attempt count and absolute deadline both bound these read-only waits.
@@ -1309,13 +1337,17 @@ export async function scrapeInstagramAccount(
       if (run.status !== "SUCCEEDED" || !run.defaultDatasetId) {
         throw new Error(`Apify paid run did not succeed: ${run.status ?? "unknown"}.`);
       }
+      if (recorded?.datasetId && recorded.datasetId !== run.defaultDatasetId) throw new Error("Apify run dataset identity changed.");
       ensureDeadline();
       const items = await loadDatasetItemsForRun(run.defaultDatasetId, apiToken, abortController.signal);
       if (!Array.isArray(items)) throw new Error("Apify returned an invalid Instagram dataset.");
       return { run, items };
     };
     const basic = await runPhase(input, runOptions.maxTotalChargeUsd);
-    const cutoffMs = Date.parse(input.onlyPostsNewerThan);
+    const cutoffMs = Date.parse(options.resumeApify?.onlyPostsNewerThan ?? input.onlyPostsNewerThan);
+    if (basic.items.some((item) => item && typeof item === "object" && item.error != null)) {
+      options.onAcquisitionIssue?.({ reason: "provider_error_row" });
+    }
     const freshItems = basic.items.filter((item) => {
       if (!item || typeof item !== "object") return false;
       const dateMs = parsePostDate(item)?.getTime();
@@ -1341,44 +1373,70 @@ export async function scrapeInstagramAccount(
     let followerObservation = readFollowerObservation(basic.items, basic.run);
     let completeItems = uniqueCandidates;
     if (hydrationCandidates.length > 0) {
-      // Immediate terminal metadata may still have preliminary costs. Apify
-      // documents a 10-second settlement interval before the authenticated
-      // receipt read. Missing/ambiguous costs cannot authorize another charge.
-      const finishedAtMs = basic.run.finishedAt ? Date.parse(basic.run.finishedAt) : Number.NaN;
-      if (!Number.isFinite(finishedAtMs)) throw new Error("Apify billing receipt has no settled completion time; details were not fetched.");
-      const settlementDelayMs = Math.max(0, finishedAtMs + 10_000 - Date.now());
-      ensureDeadline(settlementDelayMs + 5_000);
-      if (settlementDelayMs > 0) {
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => { clearTimeout(timer); reject(abortController.signal.reason); };
-          const timer = setTimeout(() => { abortController.signal.removeEventListener("abort", onAbort); resolve(); }, settlementDelayMs);
-          abortController.signal.addEventListener("abort", onAbort, { once: true });
+      const fetchDetails = async () => {
+        if (options.resumeApify) {
+          return runPhase({ ...input, dataDetailLevel: "detailedData" }, 0);
+        }
+        // Immediate terminal metadata may still have preliminary costs. Apify
+        // documents a 10-second settlement interval before the authenticated
+        // receipt read. Missing/ambiguous costs cannot authorize another charge.
+        const finishedAtMs = basic.run.finishedAt ? Date.parse(basic.run.finishedAt) : Number.NaN;
+        if (!Number.isFinite(finishedAtMs)) throw new Error("Apify billing receipt has no settled completion time; details were not fetched.");
+        const settlementDelayMs = Math.max(0, finishedAtMs + 10_000 - Date.now());
+        ensureDeadline(settlementDelayMs + 5_000);
+        if (settlementDelayMs > 0) {
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = () => { clearTimeout(timer); reject(abortController.signal.reason); };
+            const timer = setTimeout(() => { abortController.signal.removeEventListener("abort", onAbort); resolve(); }, settlementDelayMs);
+            abortController.signal.addEventListener("abort", onAbort, { once: true });
+          });
+        }
+        const settledRun = await readRun(basic.run.id as string);
+        const actualCharge = settledRun.usageTotalUsd;
+        if (settledRun.status !== "SUCCEEDED" || typeof actualCharge !== "number" || !Number.isFinite(actualCharge) || actualCharge < 0) {
+          throw new Error("Apify billing receipt has no verified total charge; details were not fetched.");
+        }
+        // Integer microdollars round the remaining authorization down, never up.
+        const remainingChargeUsd = Math.max(0, Math.floor((runOptions.maxTotalChargeUsd - actualCharge) * 1_000_000 + 0.000001) / 1_000_000);
+        if (remainingChargeUsd < MIN_APIFY_PAID_RUN_CHARGE_USD) {
+          throw new Error("Apify logical scrape budget cannot fund complete post details; refusing an incomplete source.");
+        }
+        const detailUrls = hydrationCandidates.map((item) => {
+          const code = canonicalInstagramPostCode(buildPostUrl(item));
+          if (!code) throw new Error("Apify fresh source has no verified Instagram permalink for details.");
+          return `https://www.instagram.com/p/${code}/`;
         });
+        return runPhase({ ...input, username: detailUrls, resultsLimit: 1, dataDetailLevel: "detailedData" }, remainingChargeUsd);
+      };
+      let details: Awaited<ReturnType<typeof fetchDetails>> | undefined;
+      try {
+        details = await fetchDetails();
+      } catch (error) {
+        // A transport/read failure may recover from an accepted run on the next
+        // claim. Preserve a complete sibling on the last read-only attempt.
+        if (!options.onAcquisitionIssue || (options.resumeApify?.details && !options.finalApifyReadAttempt) ||
+            (!options.resumeApify && options.onApifyRunAccepted)) throw error;
       }
-      const settledRun = await readRun(basic.run.id as string);
-      const actualCharge = settledRun.usageTotalUsd;
-      if (settledRun.status !== "SUCCEEDED" || typeof actualCharge !== "number" || !Number.isFinite(actualCharge) || actualCharge < 0) {
-        throw new Error("Apify billing receipt has no verified total charge; details were not fetched.");
+      const hydrated = new Map<ApifyInstagramItem, ApifyInstagramItem>();
+      for (const candidate of hydrationCandidates) {
+        try {
+          if (!details) throw new Error("Apify post details unavailable.");
+          const matches = details.items.filter((item) => item && buildPostId(item) === buildPostId(candidate));
+          if (matches.length !== 1) throw new Error("Apify did not return exactly one complete detail result per fresh post.");
+          hydrated.set(candidate, mergeApifyPostDetails(candidate, matches[0]));
+        } catch (error) {
+          if (!options.onAcquisitionIssue) throw error;
+          options.onAcquisitionIssue({ reason: details ? "incomplete_post_details" : "details_unavailable",
+            postId: buildPostId(candidate)?.slice(0, 128) });
+        }
       }
-      // Integer microdollars round the remaining authorization down, never up.
-      const remainingChargeUsd = Math.max(0, Math.floor((runOptions.maxTotalChargeUsd - actualCharge) * 1_000_000 + 0.000001) / 1_000_000);
-      if (remainingChargeUsd < MIN_APIFY_PAID_RUN_CHARGE_USD) {
-        throw new Error("Apify logical scrape budget cannot fund complete post details; refusing an incomplete source.");
+      completeItems = [];
+      for (const candidate of uniqueCandidates) {
+        const complete = needsApifyPostDetails(candidate) ? hydrated.get(candidate) : candidate;
+        if (complete) completeItems.push(complete);
       }
-      const detailUrls = hydrationCandidates.map((item) => {
-        const code = canonicalInstagramPostCode(buildPostUrl(item));
-        if (!code) throw new Error("Apify fresh source has no verified Instagram permalink for details.");
-        return `https://www.instagram.com/p/${code}/`;
-      });
-      const details = await runPhase({ ...input, username: detailUrls, resultsLimit: 1, dataDetailLevel: "detailedData" }, remainingChargeUsd);
-      const hydrated = new Map(hydrationCandidates.map((candidate) => {
-        const matches = details.items.filter((item) => buildPostId(item) === buildPostId(candidate));
-        if (matches.length !== 1) throw new Error("Apify did not return exactly one complete detail result per fresh post.");
-        return [candidate, mergeApifyPostDetails(candidate, matches[0])];
-      }));
-      completeItems = uniqueCandidates.map((candidate) => hydrated.get(candidate) ?? candidate);
-      const hydratedIds = new Set(hydrationCandidates.map(buildPostId));
-      followerObservation ??= readFollowerObservation(details.items.filter((item) => hydratedIds.has(buildPostId(item))), details.run);
+      const hydratedIds = new Set([...hydrated.keys()].map(buildPostId));
+      if (details) followerObservation ??= readFollowerObservation(details.items.filter((item) => item && hydratedIds.has(buildPostId(item))), details.run);
     }
     if (followerObservation) options.onFollowerObservation?.(followerObservation);
     return normalizeInstagramCollection(completeItems, target, apifyOptions, requestSettings, cutoffMs, basic.items.length);
@@ -1436,14 +1494,17 @@ function normalizeInstagramCollection(
   // Request a bounded over-fetch so local pinned-post filtering can choose the
   // latest genuine post. The durable caller asks for four; legacy callers keep
   // their explicit result count semantics.
+  const selectionTime = options.resumeApify ? Date.parse(options.resumeApify.onlyPostsNewerThan) + APIFY_RECENT_WINDOW_MS : undefined;
   const result = options.selectAllEligiblePosts
     ? selectRecentOriginalNonPinnedPosts(normalizedTopLevelPosts, {
         pinnedPostPolicy: options.pinnedPostPolicy,
+        nowMs: selectionTime,
         limit: resultsLimit,
       })
     : options.pinnedPostPolicy
     ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts, {
         pinnedPostPolicy: options.pinnedPostPolicy,
+        nowMs: selectionTime,
       })
     : options.skipPinnedPosts
     ? selectLatestOriginalNonPinnedPost(normalizedTopLevelPosts)

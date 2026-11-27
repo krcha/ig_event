@@ -443,6 +443,7 @@ export async function assertConsolidationFinalState(options: {
   const decision = await evaluateEventPublication(ctx, target);
   const publicationPatch = toPublicationPatch(
     decision,
+    target,
     target.publicationEvaluatedAt,
   );
   if (
@@ -496,6 +497,7 @@ export async function assertSourceOccurrenceFinalState(options: {
   const publicationDecision = await evaluateEventPublication(ctx, event);
   const publicationPatch = toPublicationPatch(
     publicationDecision,
+    event,
     event.publicationEvaluatedAt,
   );
   const publicationRefreshIsSafelyDeferred =

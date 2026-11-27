@@ -31,7 +31,10 @@ export const automaticUniqueApprovalDiagnosticValidator = v.object({
 });
 type ApprovedCandidate = NonNullable<ReturnType<PendingModerationUniquenessBuild["approvals"]["get"]>>;
 export type AutomaticUniqueApprovalPreflight = {
-  diagnostic: AutomaticUniqueApprovalDiagnostic; approval: { approved: ApprovedCandidate; nextCandidate: Doc<"events"> } | null;
+  diagnostic: AutomaticUniqueApprovalDiagnostic; approval: {
+    approved: ApprovedCandidate; nextCandidate: Doc<"events">;
+    corroborating?: Array<{ eventId: Id<"events">; updatedAt: number; instagramPostId: string }>;
+  } | null;
 };
 function parseFields(value: string | undefined): Record<string, unknown> | null {
   try { const parsed: unknown = JSON.parse(value ?? "null"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null; }
@@ -52,10 +55,9 @@ function repairCategoryForProof(proof: AutomaticUniqueSourceProofDiagnostic | nu
     default: return "none";
   }
 }
-/** Read-only preflight shared by the queue and exact-version diagnostics. */
-export async function evaluateAutomaticUniqueApproval(
+async function evaluateWithReview(
   ctx: QueryCtx | MutationCtx, event: Doc<"events">,
-  options: { asOfMs?: number; prebuiltReview?: PendingModerationUniquenessBuild } = {},
+  asOfMs: number, review?: PendingModerationUniquenessBuild,
 ): Promise<AutomaticUniqueApprovalPreflight> {
   let proof: AutomaticUniqueSourceProofDiagnostic | null = null;
   let conflictIds: Id<"events">[] = [];
@@ -69,9 +71,7 @@ export async function evaluateAutomaticUniqueApproval(
       return hold("human_reviewed");
     const fields = parseFields(event.normalizedFieldsJson);
     if (fields?.humanReviewedLegacySourcePolicyVersion !== undefined || fields?.humanReviewedStructuredSourcePolicyVersion !== undefined) return hold("human_reviewed");
-    const asOfMs = options.asOfMs ?? Date.now();
-    const review = options.prebuiltReview ?? await buildPendingModerationUniquenessReview(ctx, {
-      items: [{ id: event._id, expectedUpdatedAt: event.updatedAt }], asOfMs, moderationNote: CLASSIFICATION_NOTE });
+    if (!review) return hold("evaluation_error");
     const item = review.result.items.find((row) => row.id === event._id);
     if (!item || item.expectedUpdatedAt !== event.updatedAt) return hold("evaluation_error");
     conflictIds = item.conflictIds;
@@ -95,4 +95,38 @@ export async function evaluateAutomaticUniqueApproval(
     try { await assertPersistedServiceSourcePolicy(ctx, nextCandidate, { allowHumanReviewedStructured: true }); } catch { return hold("persisted_source_policy_failed"); }
     return { diagnostic: { ...hold("eligible").diagnostic, eligible: true }, approval: { approved, nextCandidate } };
   } catch { return hold("evaluation_error"); }
+}
+
+/** One immutable transaction view elects the oldest independently publishable source. */
+export async function evaluateAutomaticUniqueApproval(
+  ctx: QueryCtx | MutationCtx, event: Doc<"events">,
+  options: { asOfMs?: number; prebuiltReview?: PendingModerationUniquenessBuild } = {},
+): Promise<AutomaticUniqueApprovalPreflight> {
+  const asOfMs = options.asOfMs ?? Date.now();
+  if (event.reviewedAt !== undefined || event.reviewedBy !== undefined) return evaluateWithReview(ctx, event, asOfMs);
+  let review = options.prebuiltReview;
+  if (!review) {
+    try {
+      review = await buildPendingModerationUniquenessReview(ctx, { items: [{ id: event._id, expectedUpdatedAt: event.updatedAt }],
+        asOfMs, moderationNote: CLASSIFICATION_NOTE, automaticRepresentatives: true });
+    } catch { return evaluateWithReview(ctx, event, asOfMs); }
+  }
+  const members = review.representativeGroups?.get(event._id);
+  const own = await evaluateWithReview(ctx, event, asOfMs, review);
+  if (!members) return own;
+  for (const member of members) {
+    const evaluation = member._id === event._id ? own : await evaluateWithReview(ctx, member, asOfMs, review);
+    if (!evaluation.approval) continue;
+    if (member._id !== event._id) {
+      return { approval: null, diagnostic: { ...own.diagnostic, eligible: false, holdReason: "duplicate_same_occurrence",
+        repairCategory: "none", conflictIds: [member._id] } };
+    }
+    const corroborating = members.filter((other) => other._id !== event._id).map((other) =>
+      ({ eventId: other._id, updatedAt: other.updatedAt, instagramPostId: other.instagramPostId! }));
+    return { approval: { ...evaluation.approval, corroborating },
+      diagnostic: { ...own.diagnostic, conflictIds: corroborating.map((row) => row.eventId) } };
+  }
+  // An unresolved credit or incomplete receipt is actionable by the ordinary
+  // repair queue. Do not mask it behind a circle of pending duplicate holds.
+  return own;
 }

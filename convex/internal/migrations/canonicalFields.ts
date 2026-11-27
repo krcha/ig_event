@@ -234,6 +234,7 @@ export async function backfillCanonicalEventFieldsBatchHandler(
     if (canonical && !canonical.ok) counts.mismatchCount += 1;
     const publication = toPublicationPatch(
       await evaluateEventPublication(ctx, event),
+      event,
     );
     const publicationPatch =
       event.publicationPolicyVersion === publication.publicationPolicyVersion &&

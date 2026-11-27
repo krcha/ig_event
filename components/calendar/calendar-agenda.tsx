@@ -113,6 +113,7 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
 
     for (const item of items) {
       const { event, taxonomy } = item;
+      if (hiddenCategories.includes(event.category)) continue;
       const isStandUp = taxonomy.formats.includes("stand-up");
       const matchesFormat = !format || isStandUp;
       const hasUnknownGenre = !taxonomy.genres.length && musicIntents.some(category => taxonomy.categories.includes(category));
@@ -121,7 +122,6 @@ export function CalendarAgenda({ events, openNowActive, sortMode = "time", hasAc
         for (const category of new Set(taxonomy.categories)) categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
       }
       allCount += 1;
-      if (hiddenCategories.includes(event.category)) continue;
       if (categories.length && !taxonomy.categories.some(category => categories.includes(category))) continue;
       if (isStandUp && matchesGenre) standUpCount += 1;
       if (!matchesFormat) continue;

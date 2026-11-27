@@ -18,7 +18,6 @@ import {
 export const REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY =
   "reviewed-official-venue-directory-additions-v1";
 
-const MIGRATION_ACTOR = REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY;
 const AUDIT_ACTION = "reviewed_official_venue_directory_added";
 const AUDIT_NOTE =
   "Human-reviewed official venue directory addition. This does not enroll an Instagram ingestion source.";
@@ -33,6 +32,7 @@ type ReviewedVenueSpec = {
   instagramHandle: string;
   location: string;
   name: string;
+  evidenceUrl?: string;
 };
 
 export const REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS = [
@@ -58,6 +58,34 @@ export const REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS = [
     name: "Botanička bašta Jevremovac",
   },
 ] as const satisfies readonly ReviewedVenueSpec[];
+
+const NOVEMBER_PROGRAMME_VENUES: readonly ReviewedVenueSpec[] = [
+  {
+    name: "Bife Ipče", aliases: [], instagramHandle: "bifeipce",
+    location: "Uzun Mirkova 7, Beograd",
+    evidenceUrl: "https://wolt.com/sr/srb/belgrade/restaurant/bife-ipce",
+  },
+  {
+    name: "Dvorana Kulturnog centra Beograda", aliases: ["Dvorana KCB"],
+    instagramHandle: "", location: "Kolarčeva 6, Beograd",
+    evidenceUrl: "https://www.kcb.org.rs/premises/dvorana-kulturnog-centra/",
+  },
+  {
+    name: "Likovna galerija Kulturnog centra Beograda", aliases: ["Likovna galerija KCB"],
+    instagramHandle: "", location: "Knez Mihailova 6, Beograd",
+    evidenceUrl: "https://www.kcb.org.rs/premises/likovna-galerija/",
+  },
+];
+
+type DirectoryReview = { key: string; specs: readonly ReviewedVenueSpec[] };
+const originalReview: DirectoryReview = {
+  key: REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
+  specs: REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS,
+};
+
+function auditNote(spec: ReviewedVenueSpec): string {
+  return spec.evidenceUrl ? `${AUDIT_NOTE} Physical address: ${spec.evidenceUrl}` : AUDIT_NOTE;
+}
 
 type ReviewedVenue = Doc<"venues">;
 type ReviewedVenueIdentity = Doc<"venueIdentities">;
@@ -87,7 +115,7 @@ function expectedVenueRecord(spec: ReviewedVenueSpec) {
     instagramHandle: handle,
     location: spec.location,
     name: spec.name,
-    normalizedInstagramHandle: handle,
+    ...(handle ? { normalizedInstagramHandle: handle } : {}),
     publicStatus: "published" as const,
     scrapeActive: false,
   };
@@ -274,12 +302,13 @@ function exactAuditRows(
   venueId: Id<"venues">,
   spec: ReviewedVenueSpec,
   claims: readonly VenueIdentityClaim[],
+  actor: string,
 ): boolean {
   const matches = rows.filter((row) => row.action === AUDIT_ACTION);
   return (
     matches.length === 1 &&
-    matches[0].actor === MIGRATION_ACTOR &&
-    matches[0].note === AUDIT_NOTE &&
+    matches[0].actor === actor &&
+    matches[0].note === auditNote(spec) &&
     matches[0].beforeJson === beforeAuditJson() &&
     matches[0].afterJson === afterAuditJson(venueId, spec, claims)
   );
@@ -287,6 +316,7 @@ function exactAuditRows(
 
 async function inspectReviewedOfficialVenueDirectoryAdditions(
   ctx: MutationCtx,
+  review: DirectoryReview,
 ): Promise<Inspection> {
   const venueDirectory = await ctx.db
     .query("venues")
@@ -295,12 +325,16 @@ async function inspectReviewedOfficialVenueDirectoryAdditions(
   const boundedDirectory = venueDirectory.slice(0, MAX_VENUE_DIRECTORY);
   const inspections: SpecInspection[] = [];
 
-  for (const spec of REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS) {
+  for (const spec of review.specs) {
     const claims = expectedClaims(spec);
     const issues: string[] = [];
     if (directoryOverBound) issues.push("venue_directory_over_bound");
-    const candidates = await loadVenueCandidates(ctx, spec.instagramHandle);
-    if (candidates.length > 1) issues.push("venue_handle_not_unique");
+    // Rooms can share an institutional publisher without owning its account.
+    const candidates = spec.instagramHandle
+      ? await loadVenueCandidates(ctx, spec.instagramHandle)
+      : boundedDirectory.filter((row) =>
+          normalizeVenueComparableText(row.name) === normalizeVenueComparableText(spec.name));
+    if (candidates.length > 1) issues.push(spec.instagramHandle ? "venue_handle_not_unique" : "venue_name_not_unique");
     const venue = candidates.length === 1 ? candidates[0] : null;
     if (venue && !exactVenueRecord(venue, spec)) {
       issues.push("venue_shape_drifted");
@@ -369,7 +403,7 @@ async function inspectReviewedOfficialVenueDirectoryAdditions(
       postState =
         exactVenueRecord(venue, spec) &&
         exactIdentitySet &&
-        exactAuditRows(auditRows, venue._id, spec, claims);
+        exactAuditRows(auditRows, venue._id, spec, claims, review.key);
       if (issues.length === 0 && !postState) {
         issues.push("venue_addition_partial_or_unknown_state");
       }
@@ -396,7 +430,7 @@ async function inspectReviewedOfficialVenueDirectoryAdditions(
   const states = new Set(inspections.map((inspection) => inspection.state));
   const issues = inspections.flatMap((inspection) =>
     inspection.issues.map(
-      (issue) => `${inspection.spec.instagramHandle}:${issue}`,
+      (issue) => `${inspection.spec.instagramHandle || inspection.spec.name}:${issue}`,
     ),
   );
   if (states.size > 1 && !states.has("blocked")) {
@@ -423,8 +457,26 @@ export async function addReviewedOfficialVenueDirectoryEntriesHandler(
   ctx: MutationCtx,
   args: EventDomainMigrationBatchArgs,
 ) {
+  return applyDirectoryReview(ctx, args, originalReview);
+}
+
+export async function addReviewedNovemberProgrammeVenuesHandler(
+  ctx: MutationCtx,
+  args: EventDomainMigrationBatchArgs,
+) {
+  return applyDirectoryReview(ctx, args, {
+    key: "reviewed-november-programme-venues-2026-v1",
+    specs: NOVEMBER_PROGRAMME_VENUES,
+  });
+}
+
+async function applyDirectoryReview(
+  ctx: MutationCtx,
+  args: EventDomainMigrationBatchArgs,
+  review: DirectoryReview,
+) {
   const dryRun = args.dryRun ?? true;
-  const inspection = await inspectReviewedOfficialVenueDirectoryAdditions(ctx);
+  const inspection = await inspectReviewedOfficialVenueDirectoryAdditions(ctx, review);
   const identityWriteCount = inspection.specs.reduce(
     (count, specInspection) => count + specInspection.claims.length,
     0,
@@ -432,14 +484,14 @@ export async function addReviewedOfficialVenueDirectoryEntriesHandler(
   const counts: EventDomainMigrationBatchCounts = {
     errorCount: 0,
     mismatchCount: inspection.issues.length,
-    scannedCount: REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS.length,
+    scannedCount: review.specs.length,
     unchangedCount:
       inspection.state === "post_apply"
-        ? REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS.length
+        ? review.specs.length
         : 0,
     updatedCount:
       inspection.state === "pre_apply"
-        ? REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS.length * 2 +
+        ? review.specs.length * 2 +
           identityWriteCount
         : 0,
   };
@@ -460,7 +512,7 @@ export async function addReviewedOfficialVenueDirectoryEntriesHandler(
       }
       await ctx.db.insert("venueAuditLog", {
         action: AUDIT_ACTION,
-        actor: MIGRATION_ACTOR,
+        actor: review.key,
         afterJson: afterAuditJson(
           venueId,
           specInspection.spec,
@@ -468,12 +520,12 @@ export async function addReviewedOfficialVenueDirectoryEntriesHandler(
         ),
         beforeJson: beforeAuditJson(),
         createdAt: now,
-        note: AUDIT_NOTE,
+        note: auditNote(specInspection.spec),
         venueId,
       });
     }
     completionInspection =
-      await inspectReviewedOfficialVenueDirectoryAdditions(ctx);
+      await inspectReviewedOfficialVenueDirectoryAdditions(ctx, review);
     if (completionInspection.state !== "post_apply") {
       throw new Error(
         `Reviewed official venue additions failed same-transaction final-state attestation: ${completionInspection.issues.join(",") || "unknown_state"}.`,
@@ -486,16 +538,14 @@ export async function addReviewedOfficialVenueDirectoryEntriesHandler(
     ctx,
     cursor: "",
     detailJson: JSON.stringify({
-      handles: REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS.map(
-        (spec) => spec.instagramHandle,
-      ),
+      handles: review.specs.map((spec) => spec.instagramHandle).filter(Boolean),
       issues: completionInspection.issues,
       state: completionInspection.state,
     }),
     dryRun,
     inputCursor: args.cursor ?? null,
     isDone: true,
-    key: REVIEWED_OFFICIAL_VENUE_DIRECTORY_ADDITIONS_KEY,
+    key: review.key,
     phase: "reviewed_venue_directory_additions",
     restart: args.restart ?? false,
   });

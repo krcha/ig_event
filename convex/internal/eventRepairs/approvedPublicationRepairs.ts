@@ -220,7 +220,7 @@ async function refreshRepairedRepresentatives(ctx: MutationCtx, affected: Set<Id
   for (const id of affected) {
     const event = await readCtx.db.get(id);
     if (!event) throw new Error("A receipt representative disappeared during repair.");
-    const patch = toPublicationPatch(await evaluateEventPublication(readCtx, event));
+    const patch = toPublicationPatch(await evaluateEventPublication(readCtx, event), event);
     if (event.publicationState === "publishable" && patch.publicationState !== "publishable") {
       throw new Error("Receipt repair would hide an already published event.");
     }

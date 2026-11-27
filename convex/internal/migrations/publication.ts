@@ -113,6 +113,7 @@ export const backfillMaterializedPublicationBatch = internalMutation({
       try {
         const patch = toPublicationPatch(
           await evaluateEventPublication(ctx, event),
+          event,
         );
         if (publicationFieldsMatch(event, patch)) continue;
         updatedCount += 1;
@@ -250,6 +251,7 @@ export const auditMaterializedPublicationBatch = internalMutation({
       try {
         const patch = toPublicationPatch(
           await evaluateEventPublication(ctx, event),
+          event,
         );
         if (!publicationFieldsMatch(event, patch)) batchDrift += 1;
       } catch {

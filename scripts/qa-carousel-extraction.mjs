@@ -278,6 +278,18 @@ const caption = prepare([row({ title: "Joint Party", artists: ["DJ One"], source
 assertApproved(caption, 1);
 assert.equal(events(caption)[0].sourceCaption, scopedCaption.caption, "Persisted source captions must remain complete and original.");
 assert.deepEqual(caption.results[0].normalizedFields.carouselSourceSlideIndexes, []);
+const multiRoomLine = "17.10.2026 Pretpremijera dokumentarnog filma 22:00";
+const singleRoomLine = "18.10.2026 Drugi film 22:00";
+const roomProgramme = prepare([
+  row({ title: "Pretpremijera dokumentarnog filma", venue: "Dvorana KCB", source: "caption", slides: [],
+    sourceText: multiRoomLine, textEvidence: [{ source: "caption", text: multiRoomLine }] }),
+  row({ title: "Drugi film", venue: "Dvorana KCB", date: "2026-10-18", dateText: "18.10.2026", source: "caption", slides: [],
+    sourceText: singleRoomLine, textEvidence: [{ source: "caption", text: singleRoomLine }] }),
+], post(`📍 Dvorana KCB i Filmska galerija DKC\n${multiRoomLine}\n📍 Dvorana KCB\n${singleRoomLine}`));
+assert.equal(events(roomProgramme)[0].venue, "");
+assert.equal(events(roomProgramme)[0].status, "pending");
+assert.equal(roomProgramme.results[0].normalizedFields.sourceOccurrencePlanUnverified, true);
+assert.equal(roomProgramme.results[1].normalizedFields.sourceOccurrencePlanUnverified, false);
 assert.equal(caption.results[0].normalizedFields.carouselDisplaySlideIndex, 0, "Caption facts may use the retained cover only for presentation.");
 
 const borrowedArtist = prepare([row({ title: "Joint Party", artists: ["DJ Two"], source: "caption", slides: [],

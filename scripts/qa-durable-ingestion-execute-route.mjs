@@ -727,4 +727,45 @@ for (const state of [
   assert.equal(releases, 1);
 }
 
+for (const outcome of ["error", "empty", "partial"]) {
+  const savedReceipt = { basic: { runId: "accepted", datasetId: "known" }, onlyPostsNewerThan: "2026-10-16T12:00:00.000Z" };
+  const issue = { reason: "provider_error_row" };
+  const submitted = [];
+  const post = { postId: "123", instagramPostUrl: "https://www.instagram.com/p/QA123/" };
+  const POST = loadRouteWithMocks({
+    mutation: async (reference, args) => {
+      if (reference === claimProcessingReference) return null;
+      if (reference === claimFetchReference) return { receiptId: "retry-receipt", handle: "qa", mode: "daily",
+        supportsApifyRecovery: true, providerAttemptCount: 1, apifyAcquisition: savedReceipt,
+        controls: { resultsLimit: 6, daysBack: 1, costPerProfileMicros: 10_000, skipPinnedPosts: true } };
+      assert.notEqual(reference, markProviderAttemptReference, "A read-only replay must never reserve another paid start.");
+      if (reference === markPostsPersistedReference || reference === "durableIngestionRuns:completeReceipt") {
+        submitted.push({ reference, args });
+        return { complete: false };
+      }
+      assert.fail("Unexpected mutation during replay: " + reference);
+    },
+    scrape: async (options) => {
+      assert.deepEqual(options.resumeApify, savedReceipt);
+      if (outcome !== "empty") options.onAcquisitionIssue(issue);
+      return outcome === "partial" ? [post] : [];
+    },
+    persist: async (_client, _handle, posts) => posts.map((p) => ({ ...p, scrapedPostId: "saved", sourceRevision: 1 })),
+  });
+  const response = await (await executeRequest(POST)).json();
+  if (outcome === "empty") {
+    assert.equal(response.outcome, "no_post");
+    assert.equal(submitted.at(-1).args.outcome, "no_post");
+  } else if (outcome === "error") {
+    assert.equal(response.outcome, "failed");
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].args.acquisitionIssues[0].reason, issue.reason);
+  } else {
+    assert.equal(response.processingPending, true);
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].args.savedPostLinks.length, 1);
+    assert.equal(submitted[0].args.acquisitionIssues[0].reason, issue.reason);
+  }
+}
+
 console.log("durable execute-route lease classification and resilience QA passed");

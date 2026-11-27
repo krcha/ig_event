@@ -1,7 +1,5 @@
-import {
-  getEventPrimaryCategory,
-  type EventPrimaryCategory,
-} from "../taxonomy/event-categories";
+import type { EventPrimaryCategory } from "../taxonomy/event-categories";
+import { DISCOVERY_CATEGORY_TONES, getEventDiscoveryTaxonomy, type EventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
 import {
   matchesPublicEventNameArtistOrVenue,
   type PublicEventSearchFields,
@@ -39,6 +37,7 @@ export type PublicCalendarOverviewEvent = PublicEventSearchFields & {
   date: string;
   description?: string;
   eventType: string;
+  eventTaxonomy?: EventDiscoveryTaxonomy;
   venueId?: string;
   venueLocation?: string;
 };
@@ -70,7 +69,7 @@ export function buildPublicCalendarOverviewPage(
     // The month venue selector includes all public venues, even when no event
     // at that venue matches the current title/artist/venue search.
     if (!matchesPublicEventNameArtistOrVenue(event, filters.q)) continue;
-    const category = getEventPrimaryCategory(event);
+    const category = DISCOVERY_CATEGORY_TONES[getEventDiscoveryTaxonomy(event).primaryCategory];
     const key = JSON.stringify([event.date, category, venueValue]);
     const bucket = buckets.get(key) ?? {
       date: event.date,

@@ -32,7 +32,7 @@ function context({ events = [event, second, workshop], venues = [publicVenue], c
         calls.push({ name, args: structuredClone(args) });
         if (fail === name) throw new Error("Authoritative public query failed");
         if (name === "events:listPublicCalendarEventsWindowPaginated") {
-          assert.deepEqual(args, { ...window, cursor });
+          assert.deepEqual(args, { ...window, cursor, includeEventTaxonomy: true });
           return {
             page: structuredClone(events), continueCursor: "event-zeka-publication-cursor-v1:materialized:next",
             isDone, rawPageCount: 1, scanLimitReached: false,

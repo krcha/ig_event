@@ -1,5 +1,5 @@
 import type { DiscoveryCategory, DiscoveryFormat, EventDiscoveryTaxonomy, MusicGenre } from "./event-discovery";
-import { billedMusicProgramme } from "./billed-music-programme";
+import { billedHeadlineMatchesDate, billedMusicProgramme } from "./billed-music-programme";
 import { normalizeTaxonomyText } from "./venue-types";
 
 export const DISCOVERY_TEXT_SOURCES = ["sourceCaption", "occurrenceText", "title", "description"] as const;
@@ -124,7 +124,7 @@ export function summaryCancelsEvent(title: string | undefined, description: stri
 
 // Evaluate the calendar date before splitting sentences. Dots inside "27.11"
 // belong to the occurrence and cannot be treated as sentence terminators.
-const ACTIVITY_NOUN = "live music|koncert\\w*|concert|dj set|festival|radionic\\w*|workshop|quiz|kviz|projekc\\w*|screening|predstav\\w*|exhibition|izlozb\\w*|party|zurk\\w*|panel|talk|lecture";
+const ACTIVITY_NOUN = "live music|koncert\\w*|concert|dj set|festival|radionic\\w*|workshop|quiz|kviz|projekc\\w*|screening|predstav\\w*|exhibition|izlozb\\w*|party|zurk\\w*|panel|talk|lecture|speed dating";
 const CANCELLED_ACTIVITY = new RegExp(`\\b(?:otkazan\\w* (?:${ACTIVITY_NOUN})|(?:${ACTIVITY_NOUN}) (?:is |je )?(?:cancell?ed|otkazan\\w*))\\b`);
 const EXCLUDED_ACTIVITY = new RegExp(`\\b(?:no|without|bez|nema) (${ACTIVITY_NOUN})\\b`);
 
@@ -209,6 +209,18 @@ function confirmedShowStyles(words: string, names: readonly string[]) {
     ? GENRES.filter(genre => genreProof[genre].test(styles)) : [];
 }
 
+// A scoped invitation can bill the music across several floors without naming
+// a DJ set. Keep the dated invitation separate from the quoted music promise.
+function advertisedDancefloors(original: string, names: readonly string[], date: string | null | undefined) {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/u.test(date) || OTHER_SHOW_CONTEXT.test(normalizeTaxonomyText(original)) ||
+      NON_MUSIC_CONTEXT.test(normalizeTaxonomyText(original))) return;
+  const bill = /^join us on ([a-z]+ \d{1,2}) (across (?:two|three|\d) dancefloors?(?: at [^\s]{1,45})? for a night of ([\p{L} &,-]{2,82}))[.!]?$/iu.exec(original);
+  const month = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"][Number(date.slice(5, 7)) - 1];
+  if (!bill || bill[1].toLowerCase() !== month + " " + Number(date.slice(8)) || bill[2].length > 120) return;
+  const styles = confirmedShowStyles(normalizeTaxonomyText(bill[3]).replace(/\b(?:deep|immersive|multi layered)\b/g, " "), names);
+  if (styles.length) return { quote: bill[2], styles, role: "party" as const };
+}
+
 function showStyles(original: string, names: readonly string[]) {
   const raw = readDatedProgrammeRow(original)?.bill ?? original;
   const text = normalizeTaxonomyText(raw);
@@ -266,6 +278,12 @@ export function hasExplicitGenreEvidence(input: ExplicitDiscoveryInput, source: 
     !containsTerm(styleWords(normalizeTaxonomyText(input[source]), names), proof)) return false;
   return clauses(input[source] ?? "").some((part) => {
     if (!part.quote.includes(quote) || !discoveryQuoteMatchesOccurrence(part.quote, input.date) || NON_MUSIC_CONTEXT.test(part.words)) return false;
+    if (source === "sourceCaption" || source === "occurrenceText") {
+      const floors = advertisedDancefloors(part.quote, names, input.date);
+      if (floors?.quote === quote) return floors.styles.includes(genre) &&
+        !OTHER_SHOW_CONTEXT.test(normalizeTaxonomyText(input.title)) && !NON_MUSIC_CONTEXT.test(normalizeTaxonomyText(input.title)) &&
+        !isExternalMusicRoleExcluded(input, "party");
+    }
     const programme = showStyles(quote, names);
     if (programme?.styles.includes(genre)) {
       const current = showStyles(part.quote, names);
@@ -376,6 +394,8 @@ const ACTIVITIES: readonly ActivityRule[] = [
   { category: "culture", format: "screening", cue: /\b(?:projekc\w* (?:film\w*|dokumentarc\w*)|filmsk\w* projekc\w*|film screening|documentary screening|kino ?pokaz\w*|(?:nakon|posle|after) (?:the )?(?:projekc\w*|screening))\b|^projekc\w*$/,
     except: /\b(?:utakmic\w*|sports?)\b/ },
   { category: "culture", format: "theatre", cue: /\b(?:(?:pozorisn\w*|premijer\w*) predstav\w*|theat(?:re|er) play|monodram\w*|balet\w*|ballet\w*|mjuzikl\w*|opera)\b/ },
+  { category: "culture", format: "theatre", cue: /\b(?:(?:uzrast\w*|tem\w*|termin\w*|trajanj\w*) predstave (?:\w+ ){0,3}(?:ulaznice|karte)|(?:rezervisite|kupite|obezbedite) (?:svoje )?(?:ulaznice|karte) za predstavu)\b/,
+    except: /\b(?:snimak|snimljen\w*|projekc\w*|film|nagradn\w*|giveaway)\b/ },
   { category: "culture", format: "stand-up", cue: /\b(?:stand up|standup|stendap|standap)\b/,
     except: /\b(?:radionic\w*|workshop\w*|masterclass)\b/ },
   { category: "culture", format: "festival", cue: /\b(?:film festival|filmsk\w* festival\w*|festival\w* (?:autorsk\w* |nem\w* |kratk\w* |dokumentarn\w* )?film\w*)\b/ },
@@ -393,8 +413,33 @@ const ACTIVITIES: readonly ActivityRule[] = [
   { category: "food", format: "dinner", cue: /\b(?:chef dinner|wine dinner|gala dinner|gala vecer\w*|vecer\w* i dj set|vecer\w* sa degustac\w*|vecer\w* uz degustac\w*)\b/, except: ROUTINE_MENU },
   { category: "food", format: "festival", cue: /\b(?:food festival|gastro festival|festival\w* hran\w*|festival\w* piv\w*|craft beer festival)\b/ },
   { category: "talk", format: "talk", cue: ADVERTISED_TALK },
+  { category: "talk", format: "talk", cue: /^predstavljanje (?:knjige|memoara|monografije)\b/ },
   { category: "talk", format: "lecture", cue: /\b(?:predavanj\w*|lecture\w*|konferencij\w*|conference\w*)\b/ },
 ];
+
+function advertisedHeadline(input: ExplicitDiscoveryInput, bySource: Record<DiscoveryTextSource, Clause[]>, names: string[]) {
+  const title = normalizeTaxonomyText(input.title);
+  if (!title || names.includes(title)) return;
+  const styleParty = /\bparty$/.test(title) && showStyles(input.title ?? "", names)?.role === "party";
+  const speedDating = /^(?:[a-z0-9]+ ){0,3}speed dating$/.test(title);
+  if (!styleParty && !speedDating) return;
+  const parts = Object.values(bySource).flat();
+  if (parts.some(({ words }) => NON_MUSIC_CONTEXT.test(words) ||
+    /\b(?:film|movie|documentary|predstav\w*|theat\w*|predavanj\w*|lecture|intervju|interview|radionic\w*|otkazan\w*|cancel\w*|postponed|odlozen\w*)\b/.test(words))) return;
+  if (speedDating && !bySource.sourceCaption.some(({ words }) =>
+    /\b(?:potvrd\w* ucesca|prijav\w* za (?:ucesc\w*|upoznavanj\w*)|(?:rezervisite|prijavite se) za upoznavanje|meet (?:other |new )?singles|register (?:to meet|for speed dating))\b/.test(words))) return;
+  for (const source of ["occurrenceText", "sourceCaption"] as const) {
+    for (const { quote } of bySource[source]) {
+      const parentLines = (input[source] ?? "").split(/\r?\n/u).filter(line => line.includes(quote));
+      if (quote.length > 120 || !parentLines.length || parentLines.some(line => !billedHeadlineMatchesDate(line, input.date)) ||
+          !discoveryQuoteMatchesOccurrence(quote, input.date)) continue;
+      const headline = quote.split(/\s+[|—–]\s+/u, 1)[0].trim();
+      const name = normalizeTaxonomyText(headline).replace(/ je tu$/, "");
+      if (name === title) return { category: styleParty ? "party" as const : "participate" as const,
+        format: styleParty ? "party" as const : undefined, source, quote: headline };
+    }
+  }
+}
 
 function findJazzEveningHeadline(
   input: ExplicitDiscoveryInput, bySource: Record<DiscoveryTextSource, Clause[]>,
@@ -454,8 +499,13 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
   }
   let billedSelection = false;
   if (!input.currentTaxonomy && !categorySet.size) {
-    const billed = billedMusicProgramme(input, bySource);
-    if (billed && !isExternalMusicRoleExcluded(input, billed.category)) {
+    const eventName = normalizeTaxonomyText(input.title);
+    const floors = !OTHER_SHOW_CONTEXT.test(eventName) && !NON_MUSIC_CONTEXT.test(eventName) &&
+      bySource.sourceCaption.map(({ quote }) => advertisedDancefloors(quote, names, input.date)).find(Boolean);
+    const billed = advertisedHeadline(input, bySource, names) ??
+      (floors ? { category: "party" as const, format: "party" as const, source: "sourceCaption" as const, quote: floors.quote } : undefined) ??
+      billedMusicProgramme(input, bySource);
+    if (billed && (billed.category === "participate" || !isExternalMusicRoleExcluded(input, billed.category))) {
       const { category, format, source, quote } = billed;
       billedSelection = category === "party" && !format;
       categorySet.add(category);
@@ -491,7 +541,7 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
       for (const { quote, words } of bySource[source]) {
         const context = styleWords(words, names);
         if (NON_MUSIC_CONTEXT.test(context)) continue;
-        const programme = showStyles(quote, names);
+        const programme = (source === "sourceCaption" || source === "occurrenceText" ? advertisedDancefloors(quote, names, input.date) : undefined) ?? showStyles(quote, names);
         const isStyleHeading = (source === "title" || source === "description") && PROGRAMME_STYLE_SUFFIX.test(context) &&
           isGenreList(context.replace(PROGRAMME_STYLE_SUFFIX, "").replace(/\blive\b/g, " "));
         const isBilledStyleList = PROGRAMME_STYLE_PREFIX.test(context) &&

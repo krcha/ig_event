@@ -1,6 +1,6 @@
 import "server-only";
-import { getEventPrimaryCategory, getEventTags } from "../taxonomy/event-categories";
-import { getEventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
+import { getEventTags } from "../taxonomy/event-categories";
+import { DISCOVERY_CATEGORY_TONES, getEventDiscoveryTaxonomy } from "../taxonomy/event-discovery";
 import { resolveEventTimePresentation } from "./event-time-presentation";
 import { normalizeEventTime } from "./event-time";
 import { getCalendarTimeBandKey } from "./calendar-time-bands";
@@ -22,10 +22,11 @@ export function projectCalendarAgendaEvents(
     delete row.description;
     delete row.venueHours;
     delete row.venueInstagramFollowerCount;
+    const eventTaxonomy = getEventDiscoveryTaxonomy(event);
     return {
       ...row,
-      eventTaxonomy: getEventDiscoveryTaxonomy(event),
-      category: getEventPrimaryCategory(event),
+      eventTaxonomy,
+      category: DISCOVERY_CATEGORY_TONES[eventTaxonomy.primaryCategory],
       tags: getEventTags(event),
       mobileOrder: mobileOrder.get(event._id) ?? 0,
       sessionLabel: getEventSessionLabel(event),

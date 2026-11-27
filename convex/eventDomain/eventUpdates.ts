@@ -270,6 +270,7 @@ export async function applyEventUpdate(
       ...occurrenceIndexPatch,
       updatedAt,
     }),
+    existingEvent,
   );
   await ctx.db.patch(args.id, {
     ...patch,

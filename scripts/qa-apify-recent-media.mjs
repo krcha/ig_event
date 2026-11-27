@@ -226,6 +226,71 @@ try {
     "enriching one carousel must preserve every other selected complete basic source");
   assert.deepEqual(mixed.calls[1].input.username, [BASIC_CAROUSEL.url]);
 
+  const issues = [];
+  const partial = await scenario([SINGLE, BASIC_CAROUSEL], [{ ...DETAILED_CAROUSEL, ownerUsername: "foreign" }],
+    { onAcquisitionIssue: (issue) => issues.push(issue) });
+  assert.deepEqual(partial.posts.map((post) => post.postId), [SINGLE.id]);
+  assert.deepEqual(issues, [{ reason: "incomplete_post_details", postId: BASIC_CAROUSEL.id }]);
+  const inaccessibleIssues = [];
+  await scenario([profile], [], { onAcquisitionIssue: (issue) => inaccessibleIssues.push(issue) });
+  assert.deepEqual(inaccessibleIssues, [{ reason: "provider_error_row" }]);
+  await scenario([], [], { onAcquisitionIssue: () => assert.fail("A genuine empty dataset has no error.") });
+
+  // Crash after receipt acceptance but before a dataset can be read. Replay through
+  // the public scraper entry point and fail if it attempts any additional paid start.
+  for (const failingPhase of ["basic", "details"]) {
+    const recorded = {};
+    let failOnce = true;
+    let paid = 0;
+    const billable = [];
+    const originalProviderFetch = globalThis.fetch;
+    const urls = [];
+    const mockRun = (phase) => ({ id: phase, status: "SUCCEEDED", defaultDatasetId: "ds-" + phase,
+      finishedAt: new Date(NOW - 20_000).toISOString(), usageTotalUsd: 0.002 });
+    globalThis.fetch = async (url, init) => {
+      const pathname = new URL(url).pathname;
+      urls.push(pathname);
+      if (init?.method === "POST") {
+        paid++;
+        const phase = JSON.parse(init.body).dataDetailLevel === "basicData" ? "basic" : "details";
+        assert.equal(billable.includes(phase), false);
+        billable.push(phase);
+        return Response.json({ data: mockRun(phase) });
+      }
+      if (pathname.includes("/actor-runs/")) return Response.json({ data: mockRun(pathname.split("/").at(-1)) });
+      const phase = pathname.includes("/ds-basic/") ? "basic" : "details";
+      if (failOnce && phase === failingPhase) {
+        failOnce = false;
+        return new Response("", { status: 503 });
+      }
+      return Response.json(phase === "basic" ? [SINGLE, BASIC_CAROUSEL] : [DETAILED_CAROUSEL]);
+    };
+    try {
+      const readIssues = [];
+      const options = { handle: OWNER, daysBack: 1, resultsLimit: 6, selectAllEligiblePosts: true,
+        maxTotalChargeUsd: 0.01, onAcquisitionIssue: (issue) => readIssues.push(issue),
+        onApifyRunAccepted: async (phase, receipt, cutoff) => {
+          assert.equal(recorded[phase], undefined);
+          recorded.onlyPostsNewerThan = cutoff;
+          recorded[phase] = receipt;
+        } };
+      await assert.rejects(() => scrapeInstagramAccount(options), /503/);
+      const startsBeforeRecovery = paid;
+      const beforeReads = urls.length;
+      const resumed = await scrapeInstagramAccount({ ...options, resumeApify: recorded });
+      assert.equal(paid, startsBeforeRecovery);
+      assert.ok(urls.slice(beforeReads).every((url) => /actor-runs|datasets/.test(url)));
+      assert.deepEqual(resumed.map((post) => post.postId).sort(),
+        failingPhase === "basic" ? [SINGLE.id] : [SINGLE.id, BASIC_CAROUSEL.id].sort());
+      assert.deepEqual(readIssues, failingPhase === "basic" ? [{ postId: BASIC_CAROUSEL.id, reason: "details_unavailable" }] : []);
+      await assert.rejects(() => scrapeInstagramAccount({ ...options, resumeApify: {
+        ...recorded, basic: { ...recorded.basic, datasetId: "different" },
+      } }), /dataset identity/);
+      assert.equal(paid, startsBeforeRecovery);
+      checks++;
+    } finally { globalThis.fetch = originalProviderFetch; }
+  }
+
   for (const detailed of [
     { ...DETAILED_CAROUSEL, id: "99999999" },
     { ...DETAILED_CAROUSEL, url: "https://www.instagram.com/p/OTHER/" },

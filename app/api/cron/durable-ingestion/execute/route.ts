@@ -8,7 +8,7 @@ import {
   processSavedScrapedPostForDurableReceipt,
   runApprovedDuplicateCleanupForCompletedDurableRun,
 } from "@/lib/pipeline/run-instagram-ingestion";
-import { getInstagramScrapeRawItemCount, scrapeInstagramAccount } from "@/lib/scraper/instagram-scraper";
+import { getInstagramScrapeRawItemCount, scrapeInstagramAccount, type ApifyAcquisitionReceipt, type InstagramAcquisitionIssue } from "@/lib/scraper/instagram-scraper";
 import { persistInstagramFollowerObservations } from "@/lib/pipeline/ingestion/follower-observations";
 import type { InstagramFollowerObservation } from "@/lib/venues/instagram-follower-observation";
 import { getInstagramScraperProvider, getInstaloaderReadiness } from "@/lib/scraper/instaloader-client";
@@ -25,6 +25,7 @@ const complete = "durableIngestionRuns:completeReceipt" as unknown as FunctionRe
 const retry = "durableIngestionRuns:releaseReceiptForRetry" as unknown as FunctionReference<"mutation">;
 const probe = "durableIngestionRuns:probeRun" as unknown as FunctionReference<"query">;
 const markProviderAttempt = "durableIngestionRuns:markReceiptProviderAttemptStarted" as unknown as FunctionReference<"mutation">;
+const checkpointApify = "durableIngestionRuns:recordApifyAcquisitionPhase" as unknown as FunctionReference<"mutation">;
 const markPostsPersisted = "durableIngestionRuns:markReceiptPostsPersisted" as unknown as FunctionReference<"mutation">;
 const claimProcessing = "durableIngestionRuns:claimNextProcessingReceipt" as unknown as FunctionReference<"mutation">;
 const completeProcessing = "durableIngestionRuns:completeProcessingReceipt" as unknown as FunctionReference<"mutation">;
@@ -183,6 +184,7 @@ export async function POST(request: Request) {
           complete: boolean;
           status: "processing_pending" | "fetched" | "failed";
           processingOutcome: string;
+          failureDetail?: string;
         };
         const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
         if (cleanupDeferred) return cleanupDeferred;
@@ -194,6 +196,7 @@ export async function POST(request: Request) {
             ? { processingPending: true }
             : { outcome: completion.status }),
           processingOutcome: completion.processingOutcome,
+          ...(completion.failureDetail ? { failureDetail: completion.failureDetail } : {}),
         }, { status: completion.status === "processing_pending" ? 202 : 200 });
       }
 
@@ -268,6 +271,9 @@ export async function POST(request: Request) {
     receiptId: string; handle: string; mode?: "canary" | "catch_up" | "daily"; controls: { resultsLimit: number; daysBack?: number; noAgeCutoff?: boolean; skipPinnedPosts: boolean; pinnedPostPolicy?: "exclude_all" | "include_recent"; ignoreCheckpoint: boolean; ignoreCooldown: boolean; costPerProfileMicros: number };
     providerAttemptCount?: number;
     providerResultStatus?: "persisted" | "no_post";
+    supportsApifyRecovery?: boolean;
+    apifyAcquisition?: ApifyAcquisitionReceipt;
+    finalApifyReadAttempt?: boolean;
   } | null;
   try {
     claimed = await convex.mutation(claim, {
@@ -294,10 +300,11 @@ export async function POST(request: Request) {
       status: state?.status ?? "missing",
     });
   }
+  let hasAcceptedApifyRun = Boolean(claimed.apifyAcquisition);
   try {
     let posts: Awaited<ReturnType<typeof scrapeInstagramAccount>> = [];
     const alreadyFetched = (claimed.providerAttemptCount ?? 0) > 0;
-    if (alreadyFetched && claimed.providerResultStatus === undefined) {
+    if (alreadyFetched && claimed.providerResultStatus === undefined && !claimed.apifyAcquisition) {
       // Apify may have charged before the process crashed, but no durable
       // post-persistence receipt exists. Do not re-fetch and do not pretend a
       // post was saved; surface the exact uncertainty for operator recovery.
@@ -386,9 +393,11 @@ export async function POST(request: Request) {
         if (cleanupDeferred) return cleanupDeferred;
         return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "deferred" });
       }
-      // The controller owns the provider reservation and eight-slot semaphore.
-      // Do not enter the legacy singleton paid-fetch lease here: that old safety
-      // layer serializes all accounts and would turn eight workers into one.
+    }
+    if (!alreadyFetched || claimed.apifyAcquisition) {
+      // Durable workers own independent lanes; do not enter the legacy singleton paid-fetch lease.
+      const receiptId = claimed.receiptId;
+      const issues: InstagramAcquisitionIssue[] = [];
       const followerObservations: InstagramFollowerObservation[] = [];
       posts = await scrapeInstagramAccount({
         requestId: `durable:${runId}:${claimed.receiptId}`,
@@ -404,6 +413,14 @@ export async function POST(request: Request) {
         selectAllEligiblePosts: claimed.mode === "daily" || claimed.mode === "catch_up",
         maxTotalChargeUsd: claimed.controls.costPerProfileMicros / 1_000_000,
         onFollowerObservation: (observation) => { followerObservations.push(observation); },
+        ...(claimed.apifyAcquisition ? { resumeApify: claimed.apifyAcquisition, finalApifyReadAttempt: claimed.finalApifyReadAttempt } : {}),
+        ...(claimed.supportsApifyRecovery ? {
+          onApifyRunAccepted: async (phase, accepted, onlyPostsNewerThan) => {
+            await convex.mutation(checkpointApify, { runId, receiptId, workerId, phase, accepted, onlyPostsNewerThan, serviceSecret });
+            hasAcceptedApifyRun = true;
+          },
+          onAcquisitionIssue: (issue) => { issues.push(issue); },
+        } : {}),
       });
       const rawItemCount = getInstagramScrapeRawItemCount(posts);
       if (rawItemCount >= claimed.controls.resultsLimit) {
@@ -417,6 +434,15 @@ export async function POST(request: Request) {
           rawItemCount,
           resultsLimit: claimed.controls.resultsLimit,
         }));
+      }
+      if (issues.length && posts.length === 0) {
+        const completion = await convex.mutation(complete, {
+          runId, receiptId, workerId, outcome: "failed", detail: issues[0].reason, acquisitionIssues: issues, serviceSecret,
+        });
+        await persistInstagramFollowerObservations(convex, followerObservations, serviceSecret);
+        const cleanupDeferred = await runCompletionCleanupOrDefer(completion, true);
+        if (cleanupDeferred) return cleanupDeferred;
+        return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: "failed", detail: issues[0].reason });
       }
       // Controller receipts fence this new path. Omit the legacy global lease
       // owner so persistence accepts the controller-owned concurrent fetch.
@@ -445,6 +471,7 @@ export async function POST(request: Request) {
         receiptId: claimed.receiptId,
         workerId,
         postCount: posts.length,
+        ...(issues.length ? { acquisitionIssues: issues } : {}),
         ...(multiPostProtocol ? { savedPostLinks } : {}),
         ...(selectedPersistedPost?.scrapedPostId
           ? { scrapedPostId: selectedPersistedPost.scrapedPostId }
@@ -460,6 +487,8 @@ export async function POST(request: Request) {
         serviceSecret,
       });
       await persistInstagramFollowerObservations(convex, followerObservations, serviceSecret);
+    } else {
+      throw new Error("Unrecognized durable provider receipt; acquisition cannot resume.");
     }
     if (posts.length > 0) {
       return NextResponse.json({
@@ -482,7 +511,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ claimed: true, handle: claimed.handle, outcome: result.outcome });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown execution failure";
-    const preserveAttempt = isTransientSavedPostProcessingError(error);
+    const preserveAttempt = !hasAcceptedApifyRun && isTransientSavedPostProcessingError(error);
     // A provider/network failure remains explicit and retryable; it does not
     // become a false "checked" receipt.
     try {
@@ -491,7 +520,8 @@ export async function POST(request: Request) {
         receiptId: claimed.receiptId,
         workerId,
         reason,
-        ...(preserveAttempt ? { retryAfterMs: 30_000, preserveAttempt: true } : {}),
+        ...(hasAcceptedApifyRun || preserveAttempt ? { retryAfterMs: 30_000 } : {}),
+        ...(preserveAttempt ? { preserveAttempt: true } : {}),
         serviceSecret,
       });
     } catch (releaseError) {

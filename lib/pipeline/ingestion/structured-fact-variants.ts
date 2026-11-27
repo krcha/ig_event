@@ -1,7 +1,7 @@
 import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { EventTimeProvenance } from "@/lib/events/event-time";
 import { buildUnnamedScheduleFallbackTitle, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
-import { hasSharedCaptionVenue } from "@/lib/domain/venues/shared-caption-venue";
+import { hasSharedCaptionVenue, rowHasMultipleProgrammeRooms } from "@/lib/domain/venues/shared-caption-venue";
 import type { IngestionVenueResolver } from "@/lib/domain/venues/index";
 import { findPositiveLocativeVenueHandleEvidence, resolveIngestionVenue } from "@/lib/domain/venues/index";
 import type { DateNormalization, EventDateEvidenceSource, EventVariant, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
@@ -37,7 +37,7 @@ type BuildStructuredFactVariantsInput = {
   ingestionVenueResolver: IngestionVenueResolver;
   normalizedSourceHandle: string;
   normalizedVenue: string;
-  options: { preserveExplicitDateEvidenceRelativeFlag?: boolean };
+  options: { preserveExplicitDateEvidenceRelativeFlag?: boolean; programmeCaptionForVenueConflict?: string | null };
   post: InstagramScrapedPost;
   rawExtractedTime: string;
   rawModelVenue: string;
@@ -433,7 +433,9 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
                     independentPostTextEvidence,
                   )))),
         );
-        const variantVenueRaw = usesStructuredEvidence
+        const multipleProgrammeRooms = usesStructuredEvidence &&
+          rowHasMultipleProgrammeRooms(options.programmeCaptionForVenueConflict ?? post.caption ?? "", entry.sourceLine);
+        const variantVenueRaw = multipleProgrammeRooms ? "" : usesStructuredEvidence
           ? (rowVenueIsDirect || Boolean(carouselRow && rowVenue))
             ? rowVenueMatchesConfiguredLocation
               ? normalizedVenue
@@ -635,7 +637,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           canonicalVenueEvidenceHandle: variantCanonicalVenueEvidenceHandle,
           splitSource: entry.source,
           splitSourceLine: entry.sourceLine,
-          occurrencePlanUnverified: entry.occurrencePlanUnverified ?? false,
+          occurrencePlanUnverified: multipleProgrammeRooms || (entry.occurrencePlanUnverified ?? false),
         };
       })
     : candidateDates.map((date) => ({

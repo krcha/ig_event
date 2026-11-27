@@ -87,7 +87,9 @@ export function MobileWeekCalendar({ days: initialDays, monthDays: initialMonthD
         {days.map((day) => (
           <Link
             aria-current={day.dayKey === selectedDayKey ? "date" : undefined}
-            aria-label={`${day.label}, ${Number(day.dayKey.slice(8))}, ${formatEventCount(locale, day.eventCount)}`}
+            aria-label={`${day.label}, ${Number(day.dayKey.slice(8))}, ${day.countsPending
+              ? { sr: "Broj događaja se učitava", en: "Loading event count", ru: "Загружается число событий" }[locale]
+              : formatEventCount(locale, day.eventCount)}`}
             className={styles.day}
             data-calendar-date={day.dayKey}
             data-calendar-client-navigation="true"

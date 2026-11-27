@@ -393,6 +393,26 @@ category. Admin rows show the latest matching diagnostic/recovery state from
 `automaticApprovalHolds`; recording this state does not change event versions.
 Human-ready approval remains a separate, weaker policy than machine approval.
 
+For two to four pending posts corroborating the same named performance, the
+automatic sweep elects the oldest source that independently passes public
+grounding. It compares the confirmed date, start, venue and billed names,
+checks the full bounded same-date cohorts including rejected rows, and
+preserves all peer rows. An overlapping published, hidden, rejected or
+human-reviewed row blocks election. A festival or salon and a separately
+titled work with a subset of its performers remain ambiguous for review.
+
+For a scoped replay, call `automaticApprovalDiagnostics:diagnosePending`
+with `items: [{id, expectedUpdatedAt}]` for the same date. An eligible
+representative includes the corroborating IDs in `conflictIds`. After obtaining
+their exact current versions, call `internal/automaticUniqueApproval:approvePendingRepresentative`
+with `{id, expectedUpdatedAt, corroborating: [{id, expectedUpdatedAt}]}`.
+One transaction rechecks the whole group, current sources and public grounding
+and records the peer versions in the existing approval audit entry. A repeat
+reports `already_approved`. For an unresolved stored artist conflict, use
+`pendingSourceConflictReclassification:previewExact` before the usual
+`recheckExact` on that exact version. The latter can approve in the same
+transaction after reclassification and fresh representative selection.
+
 Event details and moderation show separately billed artist names and Instagram
 handles even when the source does not establish that they belong to the same
 person. These display credits do not change the stored lineup, source conflict,
@@ -456,8 +476,16 @@ support for a reused profile.
 Unresolved upcoming events enter `eventDiscoveryIngestionQueue`. The existing
 ten-minute Convex cron calls the authenticated `POST /api/cron/event-discovery`
 route and prioritizes the next 48 hours. Model reservations share the existing
-daily allowance, with 12 slots reserved until Belgrade noon and six until
-18:00. A new event revision or new direct evidence can resolve
+daily allowance of 96. Before the 09:00 Belgrade ingestion at most 36
+reservations are available. At 09:00 another 48 become available, six at
+noon and the final six at 18:00. A newly published confirmed start inside
+48 hours can claim a category check during the date scanner's cooldown.
+New urgent work also wakes the shared executor after ten seconds, coalesced
+across arrivals for one minute while budget is available.
+Genre evidence alone keeps that category check open. A change from category
+to performer research starts a separate retry interval for the genre.
+An older genre task moves up the queue when its event enters the window.
+A new event revision or new direct evidence can resolve
 locally during a search cooldown. The daily ingestion callback schedules
 the same idempotent local worker. Only the shared sweep reserves paid work.
 A newly linked Instagram handle can qualify a previously ambiguous artist for

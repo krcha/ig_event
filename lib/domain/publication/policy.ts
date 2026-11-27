@@ -5,6 +5,23 @@ export type PublicationState =
   | "hidden"
   | "pending_verification";
 
+/** Keep an unknown historical publication time unknown across revocation and republication. */
+export function firstPublicationPatch(
+  previous: { status: string; publicationState?: PublicationState; firstPublishableAt?: number | null },
+  nextState: PublicationState,
+  evaluatedAt: number,
+): { firstPublishableAt?: number | null } {
+  if (previous.firstPublishableAt !== undefined) return {};
+  if (previous.publicationState === "publishable") {
+    return nextState === "publishable" ? {} : { firstPublishableAt: null };
+  }
+  if (previous.publicationState === undefined && previous.status === "approved") {
+    // Older approved rows could already be visible through the legacy public reader.
+    return { firstPublishableAt: null };
+  }
+  return nextState === "publishable" ? { firstPublishableAt: evaluatedAt } : {};
+}
+
 export type PublicationDecision = {
   policyVersion: typeof PUBLICATION_POLICY_VERSION;
   reason:

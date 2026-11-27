@@ -31,7 +31,7 @@ function context({ events = [event, second, workshop], venues = [publicVenue], c
         calls.push({ name, args: structuredClone(args) });
         if (fail === name) throw new Error("Authoritative public query failed");
         if (name === "events:listPublicCalendarEventsWindowPaginated") {
-          assert.deepEqual(args, { ...window, cursor });
+          assert.deepEqual(args, { ...window, cursor, includeEventTaxonomy: true });
           return {
             page: structuredClone(events), continueCursor: "event-zeka-publication-cursor-v1:materialized:next",
             isDone, rawPageCount: 1, scanLimitReached: false,
@@ -47,6 +47,10 @@ function context({ events = [event, second, workshop], venues = [publicVenue], c
 }
 
 const fixture = context();
+const karaoke = { ...event, eventType: "nightlife", title: "Svaštaroke", description: "",
+  eventTaxonomy: { primaryCategory: "participate", categories: ["participate"], formats: ["karaoke"], genres: [] } };
+const karaokeDay = await listWindow._handler(context({ events: [karaoke] }).ctx, window);
+assert.equal(karaokeDay.page[0].category, "event");
 const result = await listWindow._handler(fixture.ctx, { ...window, venue: " Source Venue " });
 assert.deepEqual(result.page, [
   { date: "2026-10-20", category: "live", venueValue: "id:venue-public", count: 2, legacyVenueMatchCount: 1 },

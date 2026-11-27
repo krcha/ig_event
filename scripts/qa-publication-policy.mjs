@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { apply, preview } from "../convex/approvedPublicationRepairs.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
-import { evaluatePublicationEligibility } from "../lib/domain/publication/policy.ts";
+import { evaluatePublicationEligibility, firstPublicationPatch } from "../lib/domain/publication/policy.ts";
 import {
   evaluateEventPublication,
   isEventPubliclyVisible,
@@ -10,6 +10,14 @@ import {
   refreshEventPublicationStates,
   refreshVenuePublicationPage,
 } from "../convex/publicationPolicy.ts";
+
+{
+  const fresh = { status: "approved", publicationState: "pending_verification" };
+  assert.deepEqual(firstPublicationPatch(fresh, "pending_verification", 10), {});
+  assert.deepEqual(firstPublicationPatch(fresh, "publishable", 20), { firstPublishableAt: 20 });
+  assert.deepEqual(firstPublicationPatch({ status: "approved" }, "publishable", 20), { firstPublishableAt: null });
+  assert.deepEqual(firstPublicationPatch({ status: "pending" }, "publishable", 20), { firstPublishableAt: 20 });
+}
 
 assert.deepEqual(
   evaluatePublicationEligibility({
@@ -733,6 +741,19 @@ function makeLegacyVenueRefreshContext() {
     assert.equal(tables.sourceOccurrences.get(`occurrence-${missing.key}`).canonicalEventId, b.event._id);
     assert.equal(tables.sourceOccurrences.get(`occurrence-${missing.key}`).factsJson, missing.factsJson);
     assert.equal(tables.events.size, 2);
+    const first = Date.now();
+    assert.equal(tables.events.get(a.event._id).firstPublishableAt, first);
+    assert.equal(tables.events.get(b.event._id).firstPublishableAt, undefined);
+    Date.now = () => first + 60_000;
+    await ctx.db.patch(venue._id, { publicStatus: "hidden" });
+    await refreshEventPublicationStates(ctx, [a.event._id, b.event._id]);
+    assert.notEqual(tables.events.get(a.event._id).publicationState, "publishable");
+    assert.equal(tables.events.get(b.event._id).firstPublishableAt, null);
+    await ctx.db.patch(venue._id, { publicStatus: "published" });
+    await refreshEventPublicationStates(ctx, [a.event._id, b.event._id]);
+    assert.equal(tables.events.get(a.event._id).publicationState, "publishable");
+    assert.equal(tables.events.get(a.event._id).firstPublishableAt, first);
+    assert.equal(tables.events.get(b.event._id).firstPublishableAt, null);
   } finally {
     Date.now = originalNow;
     if (originalSecret === undefined) delete process.env.CRON_SECRET;

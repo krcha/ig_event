@@ -187,6 +187,13 @@ function verifiedArtistAlias(
   if (!sources) return false;
   const display = comparableText(name);
   const tag = comparableText(handle);
+  // https://www.mixcloud.com/vojkanbecir/ identifies the performer's own
+  // Instagram account. Both identities must still be in opposite sources
+  // for this occurrence, with the handle matched as a complete username.
+  if (display === comparableText("Vojkan Bećir") && handle.toLowerCase() === "@vojislavzapravo") {
+    const credit = /(?<![\p{L}\p{N}._@-])@vojislavzapravo(?![\p{L}\p{N}._-])/iu;
+    if (sources.some((source, index) => textContainsIdentity(source, name) && credit.test(sources[1 - index]))) return true;
+  }
   return sources.some((source) => source.split(/\n/u).some((line) => {
     return [...line.matchAll(/\(\s*(@[\p{L}\p{N}._-]+)\s*\)/gu)].some((match) =>
       comparableText(match[1]) === tag && ` ${comparableText(line.slice(0, match.index))} `.endsWith(` ${display} `));

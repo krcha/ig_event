@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "csv-parse/sync";
 
 import {
+  addReviewedNovemberProgrammeVenues,
   addReviewedOfficialVenueDirectoryEntries,
   auditVenueCompatibilitySeeds,
   backfillCanonicalEventFieldsBatch,
@@ -29,6 +30,7 @@ import { parseCanonicalEventPayload } from "../lib/domain/occurrences/canonical-
 import { serializeStructuredFacts } from "../lib/domain/occurrences/facts.ts";
 import { buildInstagramSourceOccurrenceFingerprint } from "../lib/domain/occurrences/source-fingerprint.ts";
 import { buildSourceDocumentIdentity } from "../lib/domain/source-documents.ts";
+import { rowHasMultipleProgrammeRooms } from "../lib/domain/venues/shared-caption-venue.ts";
 import { LEGACY_VENUE_ALIAS_SEEDS } from "../lib/config/legacy-venue-alias-seeds.ts";
 import {
   normalizeHandle,
@@ -1081,6 +1083,47 @@ function makeCanonicalPayloadMigrationState() {
   assert.equal(blockedResult.updatedCount, 0);
   assert.deepEqual(blocked.tables.events.get(duplicateId), blockedBefore);
   assert.equal(blocked.tables.eventAuditLog.size, 0);
+}
+
+{
+  const parent = { _id: "venue_kcb", name: "Kulturni centar Beograda", instagramHandle: "kulturni_centar_beograda", category: "venue", isActive: true };
+  const rooms = makeDb({ venues: [parent] });
+  const run = (dryRun) => addReviewedNovemberProgrammeVenues._handler(
+    { db: rooms.db }, { cursor: null, dryRun, limit: 3 },
+  );
+  assert.equal((await run(true)).mismatchCount, 0);
+  assert.equal(rooms.tables.venues.size, 1);
+  assert.equal((await run(false)).mismatchCount, 0);
+  assert.equal((await run(true)).unchangedCount, 3);
+  const records = [...rooms.tables.venues.values()];
+  const snapshot = buildConvexVenueSnapshot(records, [...rooms.tables.venueIdentities.values()]);
+  const target = (claim) => resolveVenueFromSnapshot(snapshot, claim).venueFields;
+  const hall = target("Dvorana KCB");
+  const gallery = target("Likovna galerija KCB");
+  assert.ok(hall.venueId && gallery.venueId && hall.venueId !== gallery.venueId);
+  assert.equal(hall.venueLocation, "Kolarčeva 6, Beograd");
+  assert.equal(gallery.venueLocation, "Knez Mihailova 6, Beograd");
+  assert.equal(hall.venueInstagramHandle, undefined);
+  assert.equal(gallery.venueInstagramHandle, undefined);
+  assert.equal(target("@kulturni_centar_beograda").venueId, parent._id);
+  assert.equal(target("Bife Ipce").venueInstagramHandle, "bifeipce");
+  assert.equal(target("Likovna galerija").venueId, undefined);
+  assert.equal(rooms.tables.venueAuditLog.size, 3);
+  assert.ok([...rooms.tables.venueAuditLog.values()].every(row => row.note.includes("https://")));
+  assert.ok(records.filter(v => v._id !== parent._id).every(v => v.scrapeActive === false));
+
+  const caption = "Petak, 4. decembar\n📍 Dvorana i Kulturnog centra Beograda i Filmska galerija DKC\n19.00 – Otvaranje izložbe\nPretpremijera dokumentarnog filma\nSubota, 5. decembar\n📍Dvorana kulturnog centra Beograda\n19.00 Čovek od mramora";
+  assert.ok(rowHasMultipleProgrammeRooms(caption, "Petak, 4. decembar\nPretpremijera dokumentarnog filma"));
+  assert.ok(rowHasMultipleProgrammeRooms(caption, "19.00 – Otvaranje izložbe"));
+  assert.equal(rowHasMultipleProgrammeRooms(caption, "19.00 Čovek od mramora"), false);
+  assert.equal(rowHasMultipleProgrammeRooms("📍Dvorana umetnosti i kulture\n19.00 Čovek od mramora", "19.00 Čovek od mramora"), false);
+  const collision = makeDb({ venues: [{ ...parent, aliases: ["Likovna galerija KCB"] }] });
+  const blocked = await addReviewedNovemberProgrammeVenues._handler(
+    { db: collision.db }, { cursor: null, dryRun: false, limit: 3 },
+  );
+  assert.ok(blocked.mismatchCount > 0);
+  assert.equal(collision.tables.venues.size, 1);
+  assert.equal(collision.tables.venueAuditLog.size, 0);
 }
 
 {

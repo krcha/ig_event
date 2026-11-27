@@ -349,6 +349,12 @@ function timeFixture() {
     e => { const r = JSON.parse(e.rawExtractionJson); delete r.field_confirmation; e.rawExtractionJson = JSON.stringify(r); const f = JSON.parse(e.normalizedFieldsJson); f.sourcePosterTexts = ["Doors open 20:00"]; e.normalizedFieldsJson = JSON.stringify(f); },
   ]) { const held = timeFixture(); mutate(held); assert.throws(() => preparePendingSourceConflictReclassification(held)); }
   const context = buildPendingSourceConflictContext(event, JSON.parse(event.normalizedFieldsJson));
+  const alias = { field: "artists", poster_value: "Vojkan Bećir", caption_value: "@vojislavzapravo", reason: "Different artist names." };
+  const billing = { ...context, artists: ["Vojkan Bećir"], singleOccurrenceSource: true, dateEvidenceVerified: true,
+    identityEvidenceVerified: true, sourcePosterTexts: ["Vojkan Bećir at Komsa"], sourceCaption: "Tonight with @vojislavzapravo" };
+  assert.equal(eventEvidenceConflictIsBenign(alias, billing), true);
+  assert.equal(eventEvidenceConflictIsBenign(alias, { ...billing, sourceCaption: "Tonight with @vojislavzapravo.other" }), false);
+  assert.equal(eventEvidenceConflictIsBenign(alias, { ...billing, identityEvidenceVerified: false }), false);
   assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "Tuesday 13 October", caption_value: "Tuesday 20 October", reason: "Different dates." }, context), false);
   assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "Tuesday 31 February", caption_value: "Tuesday 13 October", reason: "Invalid poster date." }, context), false);
   assert.equal(eventEvidenceConflictIsBenign({ field: "date", poster_value: "2026-10-13", caption_value: "13.10.2026", reason: "Equivalent dates." }, context), true);

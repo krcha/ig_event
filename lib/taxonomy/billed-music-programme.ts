@@ -25,6 +25,16 @@ function calendarEvidence(quote: string, date: string) {
       dates.every(m => +m[1] === +date.slice(8) && +m[2] === +date.slice(5, 7) && (!m[3] || m[3] === date.slice(0, 4))) };
 }
 
+export function billedHeadlineMatchesDate(quote: string, date?: string | null): boolean {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const months = ["jan", "feb", "mar", "apr", "ma", "jun", "jul", "a", "sep", "o", "nov", "dec"];
+  const month = (token: string) => months.findIndex(prefix => token.startsWith(prefix)) + 1;
+  const heading = normalizeTaxonomyText(quote);
+  const match = /\b(\d{1,2}) (jan\w*|feb\w*|mar\w*|apr\w*|maj\w*|may|jun\w*|jul\w*|aug\w*|avg\w*|sep\w*|oct\w*|okt\w*|nov\w*|dec\w*)\b/g;
+  return calendarEvidence(quote, date).matches && [...heading.matchAll(match)].every(([, day, name]) =>
+    Number(day) === Number(date.slice(8)) && month(name) === Number(date.slice(5, 7)));
+}
+
 /** Source-scoped billing, independent of a venue's reputation or legacy event type. */
 export function billedMusicProgramme(input: ExplicitDiscoveryInput, bySource: Clauses): Programme | undefined {
   if (!input.date || !/^\d{4}-\d{2}-\d{2}$/.test(input.date) || !input.artists?.length) return;
@@ -39,6 +49,14 @@ export function billedMusicProgramme(input: ExplicitDiscoveryInput, bySource: Cl
   const rowWords = normalizeTaxonomyText(row.replace(/#[\p{L}\p{N}_-]+/gu, " "));
   const rowDate = calendarEvidence(row, input.date);
   if (row && row.length <= 120 && rowDate.dated && rowDate.matches) {
+    if (acts.length >= 2 && billedHeadlineMatchesDate(row, input.date) &&
+        acts.every(act => /^dj [a-z0-9]/.test(act) && (" " + rowWords + " ").includes(" " + act + " "))) {
+      const remaining = [...acts].sort((a, b) => b.length - a.length).reduce((rest, act) => rest.replace(" " + act + " ", " "),
+        " " + rowWords + " ").replace(" " + title + " ", " ").trim();
+      if (remaining.split(/\s+/u).filter(Boolean).every(token => SLOT_WORD.test(token))) {
+        return { category: "party", format: "dj-set", source: "occurrenceText", quote: row };
+      }
+    }
     for (const act of acts) {
       if (!/^dj [a-z0-9]/.test(act) || !(` ${rowWords} `).includes(` ${act} `)) continue;
       const remainder = (` ${rowWords} `).replace(` ${act} `, " ").replace(` ${title} `, " ").trim();
@@ -63,6 +81,10 @@ export function billedMusicProgramme(input: ExplicitDiscoveryInput, bySource: Cl
           const at = text.indexOf(` ${act} `);
           if (at < 0) continue;
           const after = text.slice(at + act.length + 2);
+          if (/^dj [a-z0-9]/.test(act) && /^(?:za (?:dj )?pultom|behind the decks)\s*$/.test(after) &&
+              matchingLines.every(line => billedHeadlineMatchesDate(line, input.date))) {
+            return { category: "party", format: "dj-set", source, quote: part };
+          }
           if (/^(?:(?:ponovo|veceras|tonight|will|ce) )?(?:vrti|pusta|pustati|spins?|spin) (?:najvec\w* |vinil\w* )?(?:hitov\w*|hits|ploc\w*|records|vinyl|techno|tehno|house|haus|disco|disko|funk|punk|pank|rock|rok|hip hop|reggae|dnb)\b/.test(after)) {
             return { category: "party", format: "dj-set", source, quote: part };
           }

@@ -2,6 +2,7 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { ConvexError, v } from "convex/values";
 import { normalizeHandle } from "../../../lib/domain/venues/normalization";
+import { rowHasMultipleProgrammeRooms } from "../../../lib/domain/venues/shared-caption-venue";
 import {
   hasHumanReviewableStructuredSourceAttestation,
   nextEventUpdatedAt,
@@ -132,6 +133,9 @@ export async function prepareUpcomingVenueRepair(
   if (!link || !receipt || topology.links.length !== 1 || topology.receipts.length !== 1 || !sourcePost) {
     throw new ConvexError("Venue repair needs one exact saved source and receipt.");
   }
+  if (rowHasMultipleProgrammeRooms(sourcePost.caption ?? "", text(fields.rowSourceText) || text(fields.splitSourceLine))) {
+    throw new ConvexError("The saved programme assigns this occurrence to multiple physical rooms.");
+  }
 
   const accountRows = await ctx.db.query("instagramSources")
     .withIndex("by_handle", (q) => q.eq("handle", sourceHandle)).take(2);
@@ -156,7 +160,7 @@ export async function prepareUpcomingVenueRepair(
   }
   const venue = await ctx.db.get(venueId);
   const venueHandle = normalizeHandle(venue?.instagramHandle ?? "");
-  if (!venue || !venueHandle || !isVenuePublic(venue) ||
+  if (!venue || (!venueHandle && !claims.length) || !isVenuePublic(venue) ||
       resolved.canonicalVenueName !== venue.name ||
       (event.venueInstagramHandle && normalizeHandle(event.venueInstagramHandle) !== venueHandle)) {
     throw new ConvexError("The source venue is unavailable or contradicts an existing handle.");

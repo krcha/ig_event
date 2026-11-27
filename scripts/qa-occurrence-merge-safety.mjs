@@ -867,6 +867,7 @@ const emptyVenueCreate = await createEvent._handler(adminCtx(emptyVenueCreateSta
   returnCreateDisposition: true,
 });
 assert.equal(emptyVenueCreate.created, true);
+assert.equal(emptyVenueCreateState.tables.events.get(emptyVenueCreate.eventId).firstPublishableAt, undefined);
 assert.equal(
   emptyVenueCreateState.tables.sourceOccurrences.size,
   1,

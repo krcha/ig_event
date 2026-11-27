@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { recheckNamedPending as recheckNamed } from "../convex/upcomingVenueRepairs.ts";
 import { check as checkNamedVenue } from "../convex/internal/namedPendingVenueApproval.ts";
 import { hasNamedPendingVenueEvidence } from "../convex/internal/eventRepairs/namedPendingVenue.ts";
-import { sweepPage } from "../convex/internal/automaticUniqueApproval.ts";
+import { approvePendingRepresentative, sweepPage } from "../convex/internal/automaticUniqueApproval.ts";
+import { classifyApprovalCandidates } from "../convex/eventDomain/sourceApproval.ts";
 import { evaluateAutomaticUniqueApproval } from "../convex/internal/automaticUniqueApprovalPreflight.ts";
 import { diagnosePending } from "../convex/automaticApprovalDiagnostics.ts";
 import {
@@ -49,12 +50,12 @@ const sourceUrl = "https://www.instagram.com/p/QAEXACT1/";
 const event = {
   _id: "qa-auto-unique",
   _creationTime: 1,
-  title: "QA Concert",
+  title: "Cobalt Concert",
   date: "2035-01-15",
   time: "20:00",
   venue: "QA Hall",
   artists: ["QA Band"],
-  sourceCaption: "QA Concert 15 January 2035 at QA Hall",
+  sourceCaption: "Cobalt Concert 15 January 2035 at QA Hall",
   instagramPostId: "QAEXACT1",
   instagramPostUrl: sourceUrl,
   sourceOccurrenceKey: "qa-child-1",
@@ -531,7 +532,7 @@ const collisionFields = {
   sourceOccurrenceAmbiguousProvenance: true,
   sourceOccurrenceCollisionOrdinal: 1,
   splitEventIndex: 1,
-  rowSourceText: "15.01.2035 QA Concert",
+  rowSourceText: "15.01.2035 Cobalt Concert",
   automaticUniqueCollisionProofVersion: 1,
 };
 const collisionReceipt = {
@@ -935,6 +936,65 @@ const repairAccount = {
   _id: "qa-repair-account", handle: "qa_hall", role: "venue", active: true,
   venueId: repairVenue._id, updatedAt: 1,
 };
+function representativeFixture() {
+  const fixture = makeHappySweepContext();
+  fixture.tables.set("venues", new Map([[repairVenue._id, repairVenue]]));
+  const rows = fixture.tables.get("events");
+  const first = rows.get(fixture.eventId);
+  Object.assign(first, { venueId: repairVenue._id, venueInstagramHandle: "qa_hall", normalizedVenueInstagramHandle: "qa_hall",
+    timeStatus: "confirmed", normalizedFieldsJson: JSON.stringify({ ...JSON.parse(proofFields),
+      timeStatus: "confirmed", timeEvidenceKind: "start_time_stated", timeEvidenceVerified: true, dateEvidenceVerified: true }) });
+  const post = { ...proofSource, _id: "qa-second-post", postId: "QAEXACT2", instagramPostUrl: "https://www.instagram.com/p/QAEXACT2/" };
+  const sourceIdentity = adaptInstagramScrapedPostToSourceDocument(post).sourceIdentity;
+  const sourceFingerprint = buildInstagramSourceOccurrenceFingerprint(post);
+  const second = { ...first, _id: "qa-second-event", _creationTime: first._creationTime + 1,
+    instagramPostId: post.postId, instagramPostUrl: post.instagramPostUrl, sourceOccurrenceKey: "qa-second-key",
+    normalizedFieldsJson: JSON.stringify({ ...JSON.parse(first.normalizedFieldsJson), sourceGroundingInstagramPostId: post.postId,
+      sourceGroundingInstagramPostUrl: post.instagramPostUrl, sourceOccurrenceSourceFingerprint: sourceFingerprint, sourceOccurrenceKey: "qa-second-key" }) };
+  const link = { ...proofLink, _id: "qa-second-link", eventId: second._id, sourceIdentity, sourceFingerprint, sourceOccurrenceKey: second.sourceOccurrenceKey };
+  const receipt = { ...basePartialReceipt, _id: "qa-second-receipt", sourceFingerprint, sourceIdentity, expectedKeys: [second.sourceOccurrenceKey],
+    expectedOccurrences: [{ ...ownExpected, key: second.sourceOccurrenceKey }], satisfiedKeys: [second.sourceOccurrenceKey],
+    satisfiedOccurrences: [{ key: second.sourceOccurrenceKey, eventId: second._id }] };
+  rows.set(second._id, second);
+  for (const [table, doc] of [["scrapedPosts", post], ["instagramEventSources", link], ["instagramSourceOccurrenceReceipts", receipt]]) {
+    fixture.tables.get(table).set(doc._id, doc);
+  }
+  return { ...fixture, rows, first, second };
+}
+
+try {
+  Date.now = () => proofAsOfMs;
+  const { ctx, tables, rows, first, second } = representativeFixture();
+  const args = { id: first._id, expectedUpdatedAt: first.updatedAt, corroborating: [{ id: second._id, expectedUpdatedAt: second.updatedAt }] };
+  const diag = async (event) => (await evaluateAutomaticUniqueApproval(ctx, event)).diagnostic;
+  assert.deepEqual((await diag(second)).conflictIds, [first._id], "The winner is stable even when the newer source is read first.");
+  assert.equal((await diag(first)).eligible, true);
+  assert.equal((await diag(second)).eligible, false);
+  const receipt = tables.get("instagramSourceOccurrenceReceipts").get(basePartialReceipt._id);
+  tables.get("instagramSourceOccurrenceReceipts").delete(receipt._id);
+  assert.equal((await diag(second)).eligible, true, "A source missing its own receipt cannot displace a fully proven peer.");
+  tables.get("instagramSourceOccurrenceReceipts").set(receipt._id, receipt);
+  for (const extra of [
+    { status: "approved", publicationState: "publishable" }, { status: "approved", publicationState: "hidden" },
+    { status: "rejected" }, { status: "pending", reviewedBy: "admin" },
+    { status: "approved", publicationState: "publishable", title: "A separate announcement", time: "TBD", timeStatus: "unknown", artists: [] },
+  ]) {
+    rows.set("outside", { ...first, _id: "outside", ...extra });
+    assert.equal((await diag(first)).eligible, false, JSON.stringify(extra));
+    rows.delete("outside");
+  }
+  assert.equal((await approvePendingRepresentative._handler(ctx, { ...args, corroborating: [{ id: second._id, expectedUpdatedAt: 999 }] })).outcome, "stale");
+  assert.equal((await approvePendingRepresentative._handler(ctx, args)).outcome, "approved");
+  assert.equal((await approvePendingRepresentative._handler(ctx, args)).outcome, "already_approved");
+  assert.equal((await diag(second)).holdReason, "duplicate_same_occurrence");
+  assert.equal(rows.get(second._id).status, "pending");
+  assert.equal(tables.get("eventAuditLog").size, 1);
+  const salon = { ...first, title: "International Performance Art Salon", artists: ["Branko Žujković", "Pino Ivančić"] };
+  const work = { ...second, title: "Oproštaj / Forgiveness", artists: ["Branko Žujković"] };
+  assert.equal(classifyApprovalCandidates(salon, work), "ambiguous");
+  assert.equal(classifyApprovalCandidates(work, salon), "ambiguous");
+  assert.equal(classifyApprovalCandidates(work, { ...work, instagramPostId: "SECOND", instagramPostUrl: "https://www.instagram.com/p/SECOND/", sourceOccurrenceKey: "SECOND" }), "proven_duplicate");
+} finally { Date.now = originalHappyNow; }
 function makeBlankVenueRepairContext(status = "pending") {
   const blank = makeHappySweepContext();
   const blankEvent = blank.tables.get("events").get(blank.eventId);
