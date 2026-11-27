@@ -107,10 +107,10 @@ const SYSTEM_PROMPT = [
 const THOROUGH_PROMPT = "Use two independent search passes per artist. First search the exact billed act for a profile and explicit style, then independently search the name or handle with the supplied city or venue, including earlier local lineups. If a handle search is sparse, also search the display spelling suggested by the title without treating the title as identity proof. Examine the second pass even if the first results look conclusive.";
 const STANDARD_PROMPT = "For named acts, search the exact billed act name or handle first, with artist, DJ or band and genre terms; use dates and venues to disambiguate as needed.";
 const ADAPTIVE_PROMPT = [
-  "Start with one query per distinct occurrence combining its event title, venue, full date and billed names or handles. Reuse results for the same occurrence. Do not combine unrelated events into a query. When a confirmed start time is provided, distinguish it from doors or another show.",
+  "For every discoveryOnly row with an artistQuery, start with that individual query. Search each named act separately using the exact name or billed handle and local city. Do not require a date, the venue, the combined title or the other billed name in these queries. Evaluate and return the evidence for each individual even if its co-billed act remains ambiguous or unverified. Use the remaining shared allowance to inspect a source or corroborate a name. For rows without artistQuery start with the exact occurrence title, venue and full date, including the billed name when relevant. Never combine different occurrences in a query. Distinguish confirmed start from doors and other shows.",
   "When listingTitle is supplied, return listing if it proves the event genre. Its identity quote must contain the exact event title, venue, and full date; the genre quotes must describe the advertised music on the same page. In that case do not duplicate the claims in main identity and genres. Otherwise return listing null and give independently verified named-act claims. A translated venue name must refer to the exact venue.",
-  "For discoveryOnly rows ignore trustedFormat. Search the exact occurrence first. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) explicitly describing an advertised activity, including non-musical programmes. When titleOnly is true never look up an artist: leave main identity null, genres empty and status unverified. Otherwise each row is an independently billed act. If the exact listing gives no programme, verify that act's identity, performance role and typical genres. Quote a clause directly identifying the named person as a DJ, selector, or the named band as a music group; look for local evidence and a billed handle for homonyms. Never assign one act's role or genres to another. Leave discoveryEvidence empty for ordinary genre lookups.",
-  "Stop once an exact listing establishes the genre, or the billed artist's identity and typical style are sufficiently verified. When the first query only finds identity or ambiguous names, make one focused second query for the missing evidence. Do not use venue profiles, adjoining events, venue-wide calendars or a different edition as proof of an event genre.",
+  "For discoveryOnly rows ignore trustedFormat. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) explicitly describing an advertised activity, including non-musical programmes. For a titleOnly row, use only its exact occurrence: leave main identity null, genres empty and status unverified. For named rows, verify the individual identity, performance role and typical genres. Quote a clause directly identifying the named person as a DJ, selector, or the named band as a music group; look for local evidence and a billed handle for homonyms. Never assign one act's role or genres to another. Leave discoveryEvidence empty for ordinary genre lookups.",
+  "Within the search limit, give each supplied artistQuery a turn before spending the remainder on corroboration. Stop when every row has been checked or the budget is exhausted. For an exact occurrence, stop when its listing establishes the genre. Do not use venue profiles, adjoining events, venue-wide calendars or a different edition as proof of an event genre.",
 ].join("\n");
 
 type JsonObject = Record<string, unknown>;
@@ -585,7 +585,11 @@ export async function researchPerformerGenresBatch(
     tool_choice: "required",
     include: ["web_search_call.action.sources"],
     input: [{ role: "system", content: extraInstructions ? `${SYSTEM_PROMPT}\n${extraInstructions}` : SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify({ rows }) }],
+      { role: "user", content: JSON.stringify({ rows: rows.map(row => {
+        if (!row.discoveryOnly || row.titleOnly) return row;
+        const name = (row.billedHandle || row.billedName).replace(/["\r\n]/g, " ").trim();
+        return { ...row, artistQuery: `"${name}" ${row.city ?? ""} DJ band musician`.trim() };
+      }) }) }],
     text: { format: { type: "json_schema", name: "performer_genre_research_v1", strict: true, schema: researchOutputSchema(options.adaptive === true) } },
   });
   const maxAttempts = options.singleAttempt ? 1 : MAX_ATTEMPTS;

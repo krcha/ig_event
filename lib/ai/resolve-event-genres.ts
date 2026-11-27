@@ -265,6 +265,9 @@ export async function resolveEventGenresBatch(
             result.deferred = true;
             continue;
           }
+          const supportedActs = acts.filter((act, index): act is PerformerGenreResearchResult =>
+            !lookup.acts[index].titleOnly && act?.status === "resolved" && act.billedName === lookup.acts[index].billedName &&
+            Boolean(act.identityEvidence && canPublishPerformerGenreSource(act.identityEvidence.url)));
           if (lookup.discoveryOnly) {
             const listing = acts[0]?.listing;
             const discovered = listing?.discovery;
@@ -279,7 +282,12 @@ export async function resolveEventGenresBatch(
                 !lookup.acts[index].titleOnly && act.programmeRole && canPublishPerformerGenreSource(act.programmeRole.evidence.url)
                 ? [{ performer: act.billedName, ...act.programmeRole, identity: act.identityEvidence, corroboration: act.identityCorroboration }] : []);
               const category = roles[0]?.category;
-              if (!category || !roles.every(role => role.category === category)) continue;
+              if (!category || !roles.every(role => role.category === category)) {
+                if (supportedActs.length) result.auditJson = JSON.stringify({
+                  ...JSON.parse(result.auditJson), partialProgramme: { responseId: found.responseId, acts: supportedActs },
+                });
+                continue;
+              }
               // A billed musician's typical role supports a broad music category.
               // Only the actual announcement may establish the format of this show.
               result.taxonomy = { primaryCategory: category, categories: [category], genres: [], formats: [] };
@@ -296,7 +304,7 @@ export async function resolveEventGenresBatch(
               result.webResearch = { model: found.model, matches, auditJson: JSON.stringify(audit) };
             } else {
               skipEstimates.add(result.eventId);
-              result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), partialProgramme: audit });
+              result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), partialProgramme: { ...audit, acts: supportedActs } });
             }
           }
           if (!result.webResearch && acts.some((act) => act?.status === "ambiguous")) {

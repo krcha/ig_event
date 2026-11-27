@@ -695,7 +695,7 @@ const categoryWeb = await resolveEventGenresBatch([
   fetch: async (_url, request) => {
     categoryLookups++;
     const { rows } = JSON.parse(JSON.parse(request.body).input.find(({ role }) => role === "user").content);
-    assert.ok(rows.every(({ discoveryOnly, titleOnly }) => discoveryOnly && titleOnly));
+    assert.ok(rows.every(({ discoveryOnly, titleOnly, artistQuery }) => discoveryOnly && titleOnly && !artistQuery));
     return Response.json({ status: "completed", output: [
       { type: "web_search_call", status: "completed", action: { sources: [{ url: exhibitUrl }, { url: wrongTitleUrl }] } },
       { content: [{ type: "output_text", text: JSON.stringify({ rows: rows.map(({ row }) => ({
@@ -735,6 +735,14 @@ async function checkBilledProgramme(event, { name = "Mina Valez", quote = primar
       const body = JSON.parse(request.body);
       const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
       assert.ok(rows.every(row => row.discoveryOnly && !row.titleOnly));
+      const system = body.input.find(message => message.role === "system").content;
+      assert.ok(system.includes("Search each named act separately"));
+      assert.ok(system.includes("give each supplied artistQuery a turn"));
+      for (const row of rows) {
+        assert.equal(row.artistQuery, `"${row.billedHandle || row.billedName}" Belgrade DJ band musician`);
+        assert.ok(!row.artistQuery.includes(row.date) && !row.artistQuery.includes(row.venue));
+        assert.ok(rows.every(other => other === row || !row.artistQuery.includes(other.billedName)));
+      }
       assert.equal(body.max_tool_calls, 3, "Two credits on the same occurrence share its existing search allowance.");
       return Response.json({ status: "completed", output: [
         { type: "web_search_call", status: "completed", action: { sources: [{ url: profile, title: name }, { url: festival, title: name }] } },
@@ -761,6 +769,13 @@ const jointBilled = await checkBilledProgramme(neutralBilling("Mina Valez, Secon
 assert.equal(jointBilled.taxonomy.primaryCategory, "party");
 assert.equal(jointBilled.webResearch, undefined);
 assert.equal(JSON.parse(jointBilled.auditJson).partialProgramme.acts[0].billedName, "Mina Valez");
+assert.equal(JSON.parse(jointBilled.auditJson).partialProgramme.acts.length, 1);
+const styleWithoutRole = await checkBilledProgramme(neutralBilling("Mina Valez, Second Name", ["Mina Valez", "Second Name"]), {
+  quote: "Mina Valez plays electronic music in Belgrade.", corroboration: "Mina Valez works alongside local DJ collectives in Serbia.",
+});
+assert.equal(styleWithoutRole.taxonomy, null);
+assert.equal(styleWithoutRole.webResearch, undefined);
+assert.deepEqual(JSON.parse(styleWithoutRole.auditJson).partialProgramme.acts.map(act => [act.billedName, act.genres]), [["Mina Valez", ["electronic"]]]);
 assert.equal((await checkBilledProgramme(neutralBilling("Echo", ["Echo"]), { name: "Echo",
   quote: "Echo is a Serbian rock band.", corroboration: "Echo is a DJ from Serbia." })).taxonomy, null,
   "Short homonyms cannot establish an unknown programme using profiles without event or billed-handle linkage.");
