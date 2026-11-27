@@ -156,7 +156,17 @@ try {
     assert.equal(finished.satisfiedKeys.length, 7); assert.equal(finished.satisfiedOccurrences.find(s => s.key === review.orphanKey).eventId, lika._id);
     for (const retained of receipt.satisfiedOccurrences) assert.deepEqual(finished.satisfiedOccurrences.find(s => s.key === retained.key), retained);
     const coreEvent = event => Object.fromEntries(Object.entries(event).filter(([key]) => !key.startsWith("publication")));
-    for (const event of seed.events) assert.deepEqual(coreEvent(await h.db.get(event._id)), coreEvent(event));
+    for (const event of seed.events) {
+      const actual = await h.db.get(event._id);
+      if (event._id === lika._id) {
+        assert.equal(event.firstPublishableAt, undefined);
+        assert.equal(actual.publicationState, "pending_verification");
+        assert.equal(actual.publicationReason, "derived_state_refresh_deferred");
+        assert.deepEqual(coreEvent(actual), { ...coreEvent(event), firstPublishableAt: null });
+      } else {
+        assert.deepEqual(coreEvent(actual), coreEvent(event));
+      }
+    }
     for (const occurrence of seed.sourceOccurrences) {
       const after = await h.db.get(occurrence._id);
       assert.equal(after.factsJson, occurrence.factsJson); assert.equal(after.canonicalEventJson, occurrence.canonicalEventJson);

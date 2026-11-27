@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { adaptInstagramScrapedPostToSourceDocument } from "../../../lib/domain/source-documents";
@@ -276,6 +277,7 @@ export async function applyFalseCinemaAutomaticApprovalReversalHandler(
     };
     const updatedAt = nextEventUpdatedAt(event.updatedAt);
     await ctx.db.patch(event._id, {
+      ...beforeModerationStatusChange(event, "pending"),
       status: "pending",
       automaticUniqueApprovalPolicyVersion: undefined,
       normalizedFieldsJson: JSON.stringify(nextFields),

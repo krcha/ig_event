@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../lib/domain/publication/policy";
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { evaluateAutomaticUniqueApproval } from "./internal/automaticUniqueApprovalPreflight";
@@ -174,7 +175,7 @@ export const approveReviewedEarlierStart = internalMutation({
     if (!eventRepresentsExpectedOccurrence(representative, nextExpected)) throw new Error("Reviewed start would invalidate the occurrence receipt.");
     if (args.dryRun) return { outcome: "verified" as const, updatedAt: event.updatedAt, time: selection.time };
 
-    await ctx.db.patch(event._id, patch);
+    await ctx.db.patch(event._id, { ...beforeModerationStatusChange(event, patch.status), ...patch });
     await ctx.db.patch(receipt._id, { expectedOccurrences: [nextExpected], updatedAt: nextEventUpdatedAt(receipt.updatedAt, approvedAt) });
     if (!(await sourceOccurrenceProvenanceRepository.updateSatisfiedOccurrenceFromExpected(ctx, { expected: nextExpected,
       representative, sourceFingerprint: receipt.sourceFingerprint, sourceLink: link, topologyEpochVerified: true }))) {

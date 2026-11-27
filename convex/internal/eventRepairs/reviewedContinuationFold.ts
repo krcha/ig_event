@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
@@ -770,6 +771,7 @@ export async function foldReviewedStructuredSameSourceContinuationHandler(
     updatedAt: receiptUpdatedAt,
   });
   await ctx.db.patch(continuation._id, {
+    ...beforeModerationStatusChange(continuation, "rejected"),
     status: "rejected",
     reviewedAt,
     reviewedBy: authorization.actor,

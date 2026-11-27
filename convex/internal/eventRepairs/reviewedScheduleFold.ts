@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
@@ -714,6 +715,7 @@ export async function foldReviewedCrossPostScheduleDuplicateHandler(
     updatedAt: primaryReceiptUpdatedAt,
   });
   await ctx.db.patch(duplicate._id, {
+    ...beforeModerationStatusChange(duplicate, "rejected"),
     status: "rejected",
     normalizedFieldsJson: JSON.stringify(duplicateNextFields),
     reviewedAt,

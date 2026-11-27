@@ -78,6 +78,8 @@ export function vinylTavanHarness(seed) {
 
 try {
   const seed = vinylTavanFixture();
+  const priorFirstPublication = 1;
+  seed.events.find(event => event._id === review.primaryId).firstPublishableAt = priorFirstPublication;
   const h = vinylTavanHarness(seed);
   const before = await getContext._handler(h.ctx, { serviceSecret: secret });
   assert.equal(before.complete, false);
@@ -89,6 +91,12 @@ try {
   assert.equal(result.vinylEventId, review.primaryId);
   assert.notEqual(result.tavanEventId, review.primaryId);
   assert.equal(after.events.length, 2);
+  const [vinyl, tavan] = after.events;
+  assert.equal(vinyl.firstPublishableAt, priorFirstPublication);
+  assert.equal(tavan.publicationState, "publishable");
+  assert.equal(typeof tavan.firstPublishableAt, "number");
+  assert.equal(tavan.firstPublishableAt, tavan.publicationEvaluatedAt);
+  assert.ok(tavan.firstPublishableAt > priorFirstPublication);
   assert.equal(after.occurrences.length, 3);
   assert.equal(after.links.length, 2);
   assert.equal(after.oldOccurrence.state, "superseded");

@@ -6,6 +6,7 @@ import { hasHumanReviewedStructuredSourceAttestation, HUMAN_REVIEWED_STRUCTURED_
 import { sourceOccurrenceRepresentativeMatchesExpected } from "../../../lib/events/source-occurrence-representation";
 import { parseCanonicalEventPayload, serializeCanonicalEventPayload } from "../../../lib/domain/occurrences/canonical-event-payload";
 import { parseStructuredFactsJson, serializeStructuredFacts, structuredFactsMatchOccurrenceBinding } from "../../../lib/domain/occurrences/facts";
+import { PUBLICATION_POLICY_VERSION } from "../../../lib/domain/publication/policy";
 import { sha256Hex } from "../../../lib/domain/reconciliation/evidence-digest";
 import { buildInstagramSourceOccurrenceFingerprint } from "../../../lib/domain/occurrences/source-fingerprint";
 import { isVenuePublic } from "../../../lib/venues/venue-lifecycle";
@@ -215,6 +216,13 @@ export async function splitReviewedVinylTavanHandler(ctx: MutationCtx, args: { e
     const result: Doc<"events"> = { ...primary, ...venueFields, venue: program.venue, artists: [...program.artists], description: program.description,
       sourceOccurrenceKey: key, normalizedFieldsJson: JSON.stringify(nextFields), humanReviewedStructuredSourcePolicyVersion: 1,
       reviewedAt: now, reviewedBy: actor, moderationNote: note, updatedAt: primaryUpdatedAt };
+    if (program.role === "tavan") {
+      delete result.firstPublishableAt;
+      result.publicationState = "pending_verification";
+      result.publicationReason = "canonical_source_grounding_missing";
+      result.publicationPolicyVersion = PUBLICATION_POLICY_VERSION;
+      result.publicationEvaluatedAt = now;
+    }
     return { ...result, ...buildEventOccurrenceIndexPatch(result) };
   }
   let vinyl = candidate(review.programs[0], 0, null);

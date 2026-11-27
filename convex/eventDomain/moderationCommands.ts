@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../lib/domain/publication/policy";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { DomainError } from "../../lib/domain/errors";
@@ -143,6 +144,7 @@ export async function approveUniquePendingEventsHandler(
       provenanceRebind.affectedRepresentativeIds;
     topologyMutated ||= provenanceRebind.topologyMutated;
     await ctx.db.patch(item.id, {
+      ...beforeModerationStatusChange(event, appliedDecision.eventPatch.status),
       ...approval.prepared.venuePatch,
       ...approval.humanReviewPatch,
       ...buildEventOccurrenceIndexPatch(approval.prepared.candidate),
@@ -248,7 +250,7 @@ export async function setEventStatusHandler(
       reviewedBy: args.reviewedBy?.trim() || identity.subject,
     }),
   );
-  await ctx.db.patch(args.id, appliedDecision.eventPatch);
+  await ctx.db.patch(args.id, { ...beforeModerationStatusChange(existingEvent, appliedDecision.eventPatch.status), ...appliedDecision.eventPatch });
   if (rejectionInvalidatesTopology) {
     await markSourceOccurrenceTopologyMutation(ctx, { verified: false });
   } else if (topologyMutated) {
@@ -453,7 +455,7 @@ export async function setEventStatusesHandler(
         reviewedBy: args.reviewedBy?.trim() || identity.subject,
       }),
     );
-    await ctx.db.patch(id, appliedDecision.eventPatch);
+    await ctx.db.patch(id, { ...beforeModerationStatusChange(existingEvent, appliedDecision.eventPatch.status), ...appliedDecision.eventPatch });
     await refreshCanonicalEventDerivedStates(ctx, affectedRepresentativeIds);
     await writeEventAuditLog(ctx, id, validatedDecision.targetStatus, {
       actor: identity.subject,

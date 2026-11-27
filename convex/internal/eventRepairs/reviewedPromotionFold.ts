@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { isCrossPostCampaignLineageEvent } from "../../../lib/events/cross-post-campaign-aggregate-attestation";
@@ -509,6 +510,7 @@ export async function foldReviewedStructuredPromotionVariantHandler(
   });
   const variantModerationNote = `[reviewed_promotion_variant:v1] ${operationId} - ${moderationNote}`;
   await ctx.db.patch(variant._id, {
+    ...beforeModerationStatusChange(variant, "rejected"),
     status: "rejected",
     reviewedAt,
     reviewedBy: authorization.actor,

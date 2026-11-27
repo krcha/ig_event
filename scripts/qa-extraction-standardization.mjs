@@ -11950,6 +11950,7 @@ async function runTransactionalSourceGroundingReprocessQa() {
         (key) => JSON.stringify(current[key]) !== JSON.stringify(previous[key]),
       );
       assert.deepEqual(changedKeys.sort(), [
+        "firstPublishableAt",
         "normalizedFieldsJson",
         "occurrenceArtistFingerprint",
         "occurrenceDateKey",
@@ -11966,7 +11967,11 @@ async function runTransactionalSourceGroundingReprocessQa() {
         "status",
         "updatedAt",
       ]);
+      assert.equal(previous.status, "pending");
       assert.equal(current.status, "approved");
+      assert.equal(current.publicationState, "publishable");
+      assert.equal(typeof current.firstPublishableAt, "number");
+      assert.equal(current.firstPublishableAt, current.publicationEvaluatedAt);
       assert.equal(current.normalizedFieldsJson, source.nextNormalizedFieldsJson);
     }
     for (const audit of after.audits) {

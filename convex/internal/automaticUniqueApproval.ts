@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../lib/domain/publication/policy";
 import { evaluateAutomaticUniqueApproval, type AutomaticUniqueApprovalPreflight } from "./automaticUniqueApprovalPreflight";
 import { attemptAutomaticPendingRepair } from "./autonomousModerationRepair";
 import type { FunctionReference } from "convex/server";
@@ -42,6 +43,7 @@ export async function persistAutomaticUniqueApproval(
 ): Promise<Doc<"events">> {
   const { approved, nextCandidate } = preflight;
   await ctx.db.patch(event._id, {
+    ...beforeModerationStatusChange(event, "approved"),
     ...approved.prepared.venuePatch,
     automaticUniqueApprovalPolicyVersion: AUTOMATIC_UNIQUE_APPROVAL_POLICY_VERSION,
     normalizedFieldsJson: nextCandidate.normalizedFieldsJson,

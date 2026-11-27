@@ -5,19 +5,33 @@ export type PublicationState =
   | "hidden"
   | "pending_verification";
 
+type PreviousPublication = {
+  status: string;
+  publicationState?: PublicationState;
+  firstPublishableAt?: number | null;
+};
+
+/** Retain the pre-moderation state when the publication evaluator will run after the status write. */
+export function beforeModerationStatusChange(previous: PreviousPublication, nextStatus: string):
+  { publicationState?: "hidden"; firstPublishableAt?: null } {
+  if (previous.status === nextStatus || previous.publicationState !== undefined ||
+    previous.firstPublishableAt !== undefined) return {};
+  if (previous.status === "approved") return { firstPublishableAt: null };
+  return nextStatus === "approved" ? { publicationState: "hidden" } : {};
+}
+
 /** Keep an unknown historical publication time unknown across revocation and republication. */
 export function firstPublicationPatch(
-  previous: { status: string; publicationState?: PublicationState; firstPublishableAt?: number | null },
+  previous: PreviousPublication,
   nextState: PublicationState,
   evaluatedAt: number,
 ): { firstPublishableAt?: number | null } {
   if (previous.firstPublishableAt !== undefined) return {};
-  if (previous.publicationState === "publishable") {
+  // Older approved rows could already be visible through the legacy public reader.
+  const previouslyPublic = previous.publicationState === "publishable" ||
+    (previous.publicationState === undefined && previous.status === "approved");
+  if (previouslyPublic) {
     return nextState === "publishable" ? {} : { firstPublishableAt: null };
-  }
-  if (previous.publicationState === undefined && previous.status === "approved") {
-    // Older approved rows could already be visible through the legacy public reader.
-    return { firstPublishableAt: null };
   }
   return nextState === "publishable" ? { firstPublishableAt: evaluatedAt } : {};
 }

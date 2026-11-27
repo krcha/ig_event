@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
@@ -1395,7 +1396,7 @@ export async function consolidateReviewedVenueLinksNovember2026Handler(ctx: Muta
     satisfiedOccurrences: plan.satisfiedOccurrences, updatedAt: nextEventUpdatedAt(plan.receipt.updatedAt, now) });
   let movedSaveCount = 0; let dedupedSaveCount = 0;
   for (const [index, event] of components.entries()) {
-    await ctx.db.patch(event._id, { status: "rejected", normalizedFieldsJson: JSON.stringify({ ...fieldsOf(event), reviewedNovember2026Repair: { ...marker, role: "component" } }),
+    await ctx.db.patch(event._id, { ...beforeModerationStatusChange(event, "rejected"), status: "rejected", normalizedFieldsJson: JSON.stringify({ ...fieldsOf(event), reviewedNovember2026Repair: { ...marker, role: "component" } }),
       reviewedAt: now, reviewedBy: actor, moderationNote: `[reviewed_november_component:v1] ${marker.operationId} - ${note}`, updatedAt: nextEventUpdatedAt(event.updatedAt, now) });
     await reassignInstagramOccurrenceReferences(ctx, event._id, primary._id, topologies[index]!);
     const saves = await reassignSavedEventReferences(ctx, event._id, primary._id); movedSaveCount += saves.movedCount; dedupedSaveCount += saves.dedupedCount;

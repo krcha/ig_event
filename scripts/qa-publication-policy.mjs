@@ -15,7 +15,8 @@ import {
   const fresh = { status: "approved", publicationState: "pending_verification" };
   assert.deepEqual(firstPublicationPatch(fresh, "pending_verification", 10), {});
   assert.deepEqual(firstPublicationPatch(fresh, "publishable", 20), { firstPublishableAt: 20 });
-  assert.deepEqual(firstPublicationPatch({ status: "approved" }, "publishable", 20), { firstPublishableAt: null });
+  assert.deepEqual(firstPublicationPatch({ status: "approved" }, "publishable", 20), {});
+  assert.deepEqual(firstPublicationPatch({ status: "approved" }, "pending_verification", 20), { firstPublishableAt: null });
   assert.deepEqual(firstPublicationPatch({ status: "pending" }, "publishable", 20), { firstPublishableAt: 20 });
 }
 

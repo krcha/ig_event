@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../lib/domain/publication/policy";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -1370,6 +1371,7 @@ export async function coalesceApprovedCrossPostPromotionOccurrencesHandler(
       movedSaveCount += saveResult.movedCount;
       dedupedSaveCount += saveResult.dedupedCount;
       await ctx.db.patch(item.event._id, {
+        ...beforeModerationStatusChange(item.event, "rejected"),
         status: "rejected",
         reviewedAt: now,
         reviewedBy: authorization.actor,

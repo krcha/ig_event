@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
@@ -499,7 +500,7 @@ export async function consolidateReviewedNovember2026Handler(ctx: MutationCtx,
     updatedAt: nextEventUpdatedAt(plan.receipt.updatedAt, now) });
   let movedSaveCount = 0; let dedupedSaveCount = 0;
   for (const [index, component] of components.entries()) {
-    await ctx.db.patch(component._id, { status: "rejected", reviewedAt: now, reviewedBy: actor,
+    await ctx.db.patch(component._id, { ...beforeModerationStatusChange(component, "rejected"), status: "rejected", reviewedAt: now, reviewedBy: actor,
       moderationNote: `[reviewed_november_component:v1] ${operationId} - ${note}`,
       normalizedFieldsJson: JSON.stringify({ ...parseFields(component), reviewedNovember2026Repair: { ...marker, role: "component" } }),
       updatedAt: nextEventUpdatedAt(component.updatedAt, now) });

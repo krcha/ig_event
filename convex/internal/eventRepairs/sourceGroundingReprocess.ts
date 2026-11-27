@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import {
@@ -147,6 +148,7 @@ export async function reprocessPendingSourceGroundingBatchHandler(
       [event._id],
     );
     await ctx.db.patch(event._id, {
+      ...beforeModerationStatusChange(event, "approved"),
       status: "approved",
       normalizedFieldsJson: item.nextNormalizedFieldsJson,
       updatedAt: nextEventUpdatedAt(event.updatedAt),

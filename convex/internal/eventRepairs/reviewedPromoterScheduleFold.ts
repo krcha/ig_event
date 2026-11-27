@@ -1,3 +1,4 @@
+import { beforeModerationStatusChange } from "../../../lib/domain/publication/policy";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { exactJsonValue } from "../../../lib/events/exact-json-value";
@@ -580,6 +581,7 @@ export async function foldReviewedPromoterScheduleDuplicateHandler(
       updatedAt: nextEventUpdatedAt(plan.context.receipt.updatedAt, reviewedAt),
     });
   await ctx.db.patch(duplicate._id, {
+    ...beforeModerationStatusChange(duplicate, "rejected"),
     status: "rejected",
     normalizedFieldsJson: JSON.stringify({
       ...duplicateContext.currentFields,
