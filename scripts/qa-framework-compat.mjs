@@ -10,14 +10,14 @@ const packageJson = JSON.parse(read("package.json"));
 const packageLock = JSON.parse(read("package-lock.json"));
 
 const expectedDependencies = {
-  next: "15.5.20",
+  next: "15.5.29",
   react: "19.2.7",
   "react-dom": "19.2.7",
 };
 const expectedDevDependencies = {
   "@types/react": "19.2.17",
   "@types/react-dom": "19.2.3",
-  "eslint-config-next": "15.5.20",
+  "eslint-config-next": "15.5.29",
 };
 
 for (const [name, expected] of Object.entries(expectedDependencies)) {

@@ -194,7 +194,7 @@
     "leaflet": "1.9.4",
     "lucide-react": "^0.564.0",
     "mmdb-lib": "3.0.3",
-    "next": "15.5.20",
+    "next": "15.5.29",
     "opening_hours": "^3.13.0",
     "radix-ui": "^1.4.3",
     "react": "19.2.7",
@@ -211,10 +211,15 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "eslint": "^8.57.0",
-    "eslint-config-next": "15.5.20",
+    "eslint-config-next": "15.5.29",
     "shadcn": "^3.8.5",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.33"
+    }
   }
 }
