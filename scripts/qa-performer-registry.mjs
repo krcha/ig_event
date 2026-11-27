@@ -1101,6 +1101,7 @@ try {
       assert.equal(await record({...card,proofs:[{...booking,date:"2026-11-01"}]}),"stale");
       assert.equal(await record(card),"insert");
       assert.equal(await record(card),"unchanged");
+      assert.equal((await findProfiles._handler(q.ctx,{name:"DJ DOO"})).profiles[0]?.profileId,nearProfile._id);
       const aliasTarget = billedAlias("new-directory-alias","DJ DOO","nearaccount");
       assert.ok((await lookupPerformerRegistryProgramme(q.ctx,aliasTarget)).matches.length);
       assert.ok((await readProfile._handler(q.ctx,{profileId:nearProfile._id})).genres.includes("drum-and-bass"));
@@ -1134,6 +1135,8 @@ try {
       await syncPerformerRegistryForEvent(q.ctx,bare._id);
       const row=[...q.table("performerRegistryAppearances").values()].find(a=>a.eventId===bare._id && a.name==="First Guest");
       assert.ok(row?.profileId);
+      assert.deepEqual((await findProfiles._handler(q.ctx,{name:"First Guest"})).profiles.map(p=>p.profileId),[row.profileId]);
+      assert.equal((await findProfiles._handler(q.ctx,{name:"DJ DOO"})).profiles.length,0,"Withdrawn show cannot surface its alias");
       assert.deepEqual((await readProfile._handler(q.ctx,{profileId:row.profileId})).genres,["house"]);
       const varied = pub("alternate-spelling",["Linna","Guest A","Guest B"]);
       q.put("events",varied);

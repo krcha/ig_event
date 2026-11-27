@@ -1002,9 +1002,13 @@ export const findProfiles = internalQuery({
       .order("desc")
       .take(9);
     if (handle && rows.length !== 1) return { profiles: [], more: false };
+    const byStage = !handle && await directoryCardByName(ctx, name);
+    const reviewed = byStage && (await directoryCards(ctx, byStage.profile)).some(card => card.url === byStage.card.url)
+      ? byStage.profile : undefined;
+    if (reviewed && !rows.some(p => p._id === reviewed._id)) rows.unshift(reviewed);
     const visible = [];
     for (const p of rows) {
-      if (!p.independentAppearances && !p.instagramHandle) continue;
+      if (!p.independentAppearances && !p.instagramHandle && p._id !== reviewed?._id) continue;
       let instagramHandle: string | null = null;
       if (handle || p.instagramHandle || p.identityKey.startsWith("handle:")) {
         const sources = await profileSources(ctx, p._id);
@@ -1015,7 +1019,7 @@ export const findProfiles = internalQuery({
           if (proof) current.push(proof);
         }
         instagramHandle = await visibleInstagramHandle(ctx, p, current);
-        if ((handle || !p.independentAppearances) && !instagramHandle) continue;
+        if ((handle || (!p.independentAppearances && p._id !== reviewed?._id)) && !instagramHandle) continue;
       }
       visible.push({ profileId: p._id, name: p.name, instagramHandle });
     }
