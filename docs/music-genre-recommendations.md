@@ -58,8 +58,15 @@ venues are eligible. The urgent window uses a rolling 48 elapsed hours in
 Europe/Belgrade. A stated overnight interval remains eligible while it is in
 progress. A listing with no confirmed start can qualify by date, including the
 previous outing until 07:00. This does not assign a start time to it. The
-indexed bounds stay fixed while a pass is paginating. The next pass starts
-within 30 minutes of completing the previous one at the usual cron cadence.
+first pass applies local rules across the entire window. It reserves model
+slots only for confirmed future starts and confirmed intervals still running.
+After reaching the end of that index range, another pass can reserve slots
+for today's undated listings and subsequent fully covered dates. Undated
+listings on the partially covered final date get a separate last pass. An
+undated listing from yesterday's outing can receive a local classification
+but cannot reserve a slot in either model sweep. Each phase keeps one bounded
+index cursor; a new Belgrade day restarts at confirmed times. A new full
+scan becomes eligible 30 minutes after completion.
 
 For a missing, stale or unsupported generic label, the mutation first tries
 occurrence-specific rules. A positive local decision writes the taxonomy,
@@ -75,13 +82,17 @@ the scoped announcement and does no performer search or estimation. At most
 72 daily attempts can serve this purpose. Until 18:00 Belgrade time ordinary
 enrichment can use up to 72, reserving 24 for later announcements. After 18:00
 the ordinary sweep can consume unspent capacity. After three consecutive
-priority batches with normal capacity available, the normal cursor gets a
-turn. The shared lease expires after four minutes, and the executor stops
+priority batches with more than twelve total slots remaining and normal
+capacity available, the normal cursor gets a turn. With twelve or fewer
+remaining slots, the current priority scan can hold its share across ticks
+while it searches later pages. That hold expires after 20 minutes without
+progress. The 72-slot priority ceiling still applies. The shared lease expires after four minutes, and the executor stops
 provider work at its 220-second deadline. Only a transient failure may retry
 once after one hour for the same event revision and priority-rule version.
 
 The authenticated executor response includes a `priority` count for the pages
-it actually scanned. `eligible` counts in-window public rows, including already
+it actually scanned. A listing may be visited again in a lower-priority pass.
+`eligible` counts in-window public row visits, including already
 `known` ones. `attempted` counts reserved model slots. `written` counts durable
 primary classifications, including local decisions. `unresolved` counts the
 eligible unclassified rows that did not receive a durable primary on this

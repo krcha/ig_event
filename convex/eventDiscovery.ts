@@ -7,7 +7,7 @@ import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { canonicalizeSourceUrl } from "../lib/domain/source-url";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
 import { normalizeEventTime } from "../lib/events/event-time";
-import { formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
+import { addDaysToDateKey, formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
 import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getStoredOrLegacyEventTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
@@ -20,7 +20,7 @@ import {
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
-import { categoryWindow, discoveryBudgets, PRIORITY_CATEGORY_VERSION } from "../lib/taxonomy/priority-event-discovery";
+import { categoryWindow, discoveryBudgets, UPCOMING_DAILY_BUDGET, type CategoryScanPhase, PRIORITY_CATEGORY_VERSION } from "../lib/taxonomy/priority-event-discovery";
 import { revalidateEventDiscoveryClassification } from "../lib/ai/classify-event-discovery";
 import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
@@ -570,6 +570,7 @@ function loadEnrichmentState(ctx: Pick<QueryCtx, "db">) {
 async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, now: number) {
   if (event.status !== "approved" || event.publicationState !== "publishable" ||
       event.date < getNightlifeDefaultDateKey(new Date(now))) return null;
+  if (event.date < getBelgradeDayKey(now) && (event.timeStatus !== "confirmed" || categoryWindow(now).tier(event) !== "confirmed")) return null;
   const row = await loadLabel(ctx, event._id);
   const current = labelIsCurrent(row, event.updatedAt) ? row : null;
   const taxonomy = current?.taxonomy;
@@ -647,23 +648,25 @@ export const claimPriorityCategories = mutation({
     const events: Awaited<ReturnType<typeof discoveryCandidate>>[] = [];
     if (state?.lease && state.lease.until > now) return { counts, events, more: false };
     const window = categoryWindow(now), budgets = discoveryBudgets(now, state);
-    const scan = state?.categoryScan;
-    if (scan?.completedAt && now - scan.completedAt < CATEGORY_RESCAN_MS && scan.throughDate === window.throughDate) {
-      return { counts, events, more: false };
-    }
-    // A Convex cursor must continue with exactly the same index bounds, even
-    // across midnight. Eligibility is independently checked against the live clock.
-    const fromDate = scan?.cursor ? scan.fromDate : window.fromDate;
-    const throughDate = scan?.cursor ? scan.throughDate : window.throughDate;
+    // Old cursors used a single model pass. Restart those on the highest tier,
+    // as well as scans whose civil-day bounds have changed since the last call.
+    const saved = state?.categoryScan;
+    const scan = saved?.phase && saved.fromDate === window.fromDate && saved.throughDate === window.throughDate ? saved : undefined;
+    if (scan?.completedAt && now - scan.completedAt < CATEGORY_RESCAN_MS) return { counts, events, more: false };
+    const phase = scan?.completedAt ? "confirmed" : scan?.phase ?? "confirmed";
+    const { fromDate, throughDate } = window;
+    const lower = phase === "confirmed" ? fromDate : phase === "undated" ? addDaysToDateKey(fromDate, 1) : throughDate;
+    const upper = phase === "undated" ? addDaysToDateKey(throughDate, -1) : throughDate;
     const page = await ctx.db.query("events").withIndex("by_publicationState_date", q =>
-      q.eq("publicationState", "publishable").gte("date", fromDate).lte("date", throughDate)).paginate({
+      q.eq("publicationState", "publishable").gte("date", lower).lte("date", upper)).paginate({
       cursor: scan?.cursor ?? null, numItems: 12,
     });
     const attempts = new Map((state?.categoryAttempts ?? []).filter(item => item.at > now - 4 * 86_400_000)
       .map(item => [item.eventId, item]));
     for (const event of page.page) {
       counts.scanned++;
-      if (!window.includes(event) || !await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
+      const tier = window.tier(event);
+      if (!tier || (phase !== "confirmed" && tier !== phase) || !await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
       counts.eligible++;
       const label = await loadLabel(ctx, event._id);
       if (hasKnownCategory(label, event)) { counts.known++; continue; }
@@ -680,14 +683,27 @@ export const claimPriorityCategories = mutation({
       counts.unresolved++;
       const old = attempts.get(event._id);
       const same = old && old.version === PRIORITY_CATEGORY_VERSION && old.updatedAt === event.updatedAt ? old : undefined;
-      if (!allowModel || events.length >= budgets.urgent || (same && (same.tries >= 2 || now - same.at < ENRICHMENT_RETRY_MS))) continue;
+      if (tier !== phase || !allowModel || events.length >= budgets.urgent || (same && (same.tries >= 2 || now - same.at < ENRICHMENT_RETRY_MS))) continue;
       attempts.set(event._id, { eventId: event._id, updatedAt: event.updatedAt, version: PRIORITY_CATEGORY_VERSION,
         at: now, tries: (same?.tries ?? 0) + 1 });
       events.push(candidate);
     }
     counts.attempted = events.length;
-    const categoryScan = { fromDate, throughDate, cursor: page.isDone ? null : page.continueCursor,
-      ...(page.isDone ? { completedAt: now } : {}) };
+    const remaining = UPCOMING_DAILY_BUDGET - budgets.total - events.length;
+    const canSpendLater = allowModel && remaining > 0 && budgets.priority.attempted + events.length < 72;
+    let nextPhase: CategoryScanPhase | undefined;
+    if (!page.isDone) {
+      if (phase === "confirmed" || canSpendLater) nextPhase = phase;
+    } else if (canSpendLater) {
+      if (phase === "confirmed") nextPhase = "undated";
+      if (phase === "undated") nextPhase = "boundary";
+    }
+    const more = nextPhase !== undefined;
+    // Keep a scarce last batch across cron ticks and old web callers. The hold
+    // expires if priority scanning stops; it never extends a model lease.
+    const reserve = more && allowModel && budgets.urgent > 0 && remaining > 0 && remaining <= 12;
+    const categoryScan = { fromDate, throughDate, phase: nextPhase ?? phase, cursor: more && !page.isDone ? page.continueCursor : null,
+      ...(reserve ? { reserveUntil: now + 20 * 60_000 } : {}), ...(!more ? { completedAt: now } : {}) };
     const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, categoryOnly: true as const, nextCursor: null,
       events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
     const next = { dayKey: budgets.dayKey, attempted: budgets.total + events.length, categoryScan,
@@ -696,7 +712,7 @@ export const claimPriorityCategories = mutation({
     if (state) await ctx.db.patch(state._id, { ...next, lease });
     else await ctx.db.insert("eventDiscoveryEnrichmentState", { key: "upcoming", fromDate: getNightlifeDefaultDateKey(new Date(now)),
       cursor: null, ...next, ...(lease ? { lease } : {}) });
-    return { events, more: !page.isDone, counts };
+    return { events, more, counts };
   },
 });
 
@@ -710,8 +726,9 @@ export const claimUpcomingBatch = mutation({
     const state = await loadEnrichmentState(ctx);
     const now = Date.now();
     if (state?.lease && state.lease.until > now) return { state: "busy" as const, events: [] };
-    const { dayKey, total: attempted, general: budget, priority } = discoveryBudgets(now, state);
-    if (budget <= 0) return { state: "idle" as const, events: [] };
+    const { dayKey, total: attempted, general: budget, urgent, priority } = discoveryBudgets(now, state);
+    const reserved = urgent > 0 && UPCOMING_DAILY_BUDGET - attempted <= 12 && (state?.categoryScan?.reserveUntil ?? 0) > now;
+    if (budget <= 0 || reserved) return { state: "idle" as const, events: [] };
     const cursor = state?.cursor ?? null;
     const fromDate = cursor && state ? state.fromDate : getNightlifeDefaultDateKey(new Date(now));
     const page = await ctx.db.query("events").withIndex("by_publicationState_date", (q) =>

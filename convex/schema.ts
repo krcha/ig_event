@@ -412,6 +412,8 @@ export default defineSchema({
     dayKey: v.string(),
     attempted: v.number(),
     categoryScan: v.optional(v.object({
+      phase: v.optional(v.union(v.literal("confirmed"), v.literal("undated"), v.literal("boundary"))),
+      reserveUntil: v.optional(v.number()),
       fromDate: v.string(), throughDate: v.string(), cursor: v.union(v.string(), v.null()), completedAt: v.optional(v.number()),
     })),
     categoryBudget: v.optional(v.object({ dayKey: v.string(), attempted: v.number(), consecutive: v.number() })),

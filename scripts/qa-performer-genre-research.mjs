@@ -784,6 +784,13 @@ try {
   Date.now = () => nearNow;
   try {
     const priorityClaim = (allowModel = true) => claimPriorityCategories._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner, allowModel });
+    const scanUntilClaim = async () => {
+      for (let page = 0; page < 20; page++) {
+        const batch = await priorityClaim();
+        if (batch.events.length || !batch.more) return batch;
+      }
+      assert.fail("Bounded priority fixture did not finish scanning.");
+    };
     const normalClaim = () => claimUpcomingBatch._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner });
     const finish = (results) => completeUpcomingBatch._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner, model: "fixture", results });
     const before = await priorityClaim(false);
@@ -815,8 +822,7 @@ try {
     state.attempted = 72; state.categoryScan = undefined; state.cursor = null;
     assert.equal((await normalClaim()).state, "idle");
     put("late-unknown", { title: "Session L", eventType: "live music", description: "An evening of soul, jazz, blues, gospel and swing. The band plays." });
-    await priorityClaim();
-    const later = await priorityClaim();
+    const later = await scanUntilClaim();
     assert.ok(later.events.some(e => e.key === "late-unknown")); assert.equal(state.attempted, 72 + later.events.length);
     assert.equal((await normalClaim()).state, "busy");
     const result = { eventId: "late-unknown", expectedUpdatedAt: template.updatedAt,
@@ -831,14 +837,75 @@ try {
     assert.ok(JSON.parse(saved.auditJson).evidence.some(e => e.kind === "genre" && e.source === "description"));
     assert.equal(priorityFixture.labels.has("without-proof"), false, "Abstention never becomes a durable category.");
     nearNow += 2 * 3_600_000; state.categoryScan = undefined;
-    await priorityClaim(); assert.equal((await priorityClaim()).events.length, 0, "Confirmed abstention is terminal for this unchanged revision.");
+    assert.equal((await scanUntilClaim()).events.length, 0, "Confirmed abstention is terminal for this unchanged revision.");
     priorityFixture.events.get("without-proof").updatedAt++; state.categoryScan = undefined;
-    await priorityClaim(); assert.deepEqual((await priorityClaim()).events.map(e => e.key), ["without-proof"]);
+    assert.deepEqual((await scanUntilClaim()).events.map(e => e.key), ["without-proof"]);
     await finish([]); nearNow += 2 * 3_600_000; state.categoryScan = undefined;
-    await priorityClaim(); assert.deepEqual((await priorityClaim()).events.map(e => e.key), ["without-proof"]);
+    assert.deepEqual((await scanUntilClaim()).events.map(e => e.key), ["without-proof"]);
     await finish([]); nearNow += 2 * 3_600_000; state.categoryScan = undefined;
-    await priorityClaim(); assert.deepEqual((await priorityClaim()).events, []);
+    assert.deepEqual((await scanUntilClaim()).events, []);
   } finally { Date.now = actualNow; }
+
+  // At 05:50 Belgrade time, past undated listings are still on the public
+  // outing calendar. They must not claim even one of the remaining model slots.
+  const ordered = dailyQueueFixture();
+  const base = ordered.events.get("single");
+  ordered.events.clear(); ordered.labels.clear();
+  const oldNow = Date.now;
+  let rankedNow = Date.parse("2026-11-27T04:50:00Z");
+  Date.now = () => rankedNow;
+  try {
+    const add = (id, date, fields = {}) => ordered.events.set(id, { ...base, _id: id, date,
+      time: undefined, timeStatus: "unknown", title: `Programme ${id}`, artists: [], description: undefined,
+      normalizedFieldsJson: undefined, sourceCaption: undefined, instagramPostUrl: undefined, ...fields });
+    const urgent = () => claimPriorityCategories._handler(ordered.dailyCtx, { serviceSecret: "", owner, allowModel: true });
+    const ordinary = () => claimUpcomingBatch._handler(ordered.dailyCtx, { serviceSecret: "", owner });
+    const finishUnknown = (id) => completeUpcomingBatch._handler(ordered.dailyCtx, { serviceSecret: "", owner, model: "fixture",
+      results: [ { eventId: id, expectedUpdatedAt: base.updatedAt, taxonomy: null, auditJson: "{}" } ] });
+    await urgent();
+    const state = ordered.enrichmentState();
+    const lastSlot = () => {
+      state.attempted = 95; state.dayKey = "2026-11-27";
+      state.categoryBudget = { dayKey: state.dayKey, attempted: 35, consecutive: 3 };
+      // Existing rollout state can be halfway through the old unranked scan.
+      state.categoryScan = { fromDate: "2026-11-26", throughDate: "2026-11-29", cursor: "12" };
+    };
+    lastSlot();
+    add("yesterday-free", "2026-11-26", { title: "Pub kviz" });
+    for (let i = 0; i < 15; i++) add(`yesterday-${i}`, "2026-11-26");
+    for (let i = 0; i < 43; i++) add(`today-${i}`, "2026-11-27");
+    add("tomorrow-confirmed", "2026-11-28", { timeStatus: "confirmed", time: "20:00" });
+    add("boundary", "2026-11-29");
+    const nextReservation = async () => {
+      for (let i = 0; i < 32; i++) {
+        const batch = await urgent();
+        if (batch.events.length) return batch.events.map(e => e.key);
+        if (!batch.more) return [];
+        // This is what the ordinary worker can do at the executor page limit.
+        if ((i + 1) % 4 === 0) assert.equal((await ordinary()).state, "idle");
+      }
+      assert.fail("The multi-page scan never reached the event it should reserve.");
+    };
+    assert.deepEqual(await nextReservation(), ["tomorrow-confirmed"]);
+    assert.equal(state.attempted, 96); assert.equal(ordered.labels.get("yesterday-free").taxonomy.primaryCategory, "participate");
+    assert.equal(state.categoryAttempts.some(a => a.eventId.startsWith("yesterday")), false);
+    await finishUnknown("tomorrow-confirmed");
+    lastSlot();
+    assert.deepEqual(await nextReservation(), ["today-0"], "A current undated listing outranks a partially covered last date once confirmed rows are exhausted.");
+    await finishUnknown("today-0");
+    for (let i = 0; i < 43; i++) ordered.events.delete(`today-${i}`);
+    lastSlot();
+    assert.deepEqual(await nextReservation(), ["boundary"]);
+    await finishUnknown("boundary");
+    // A live interval with a confirmed end is different from a past undated row.
+    lastSlot(); add("overnight", "2026-11-26", { timeStatus: "confirmed", time: "23:00–06:30" });
+    assert.deepEqual(await nextReservation(), ["overnight"]); await finishUnknown("overnight");
+    // Reaching a new local day discards stale lower-tier cursors and resets the normal daily counter.
+    state.categoryScan = { fromDate: "2026-11-26", throughDate: "2026-11-29", phase: "boundary", cursor: "12" };
+    rankedNow += 86_400_000;
+    add("new-day-confirmed", "2026-11-29", { timeStatus: "confirmed", time: "19:00" });
+    assert.deepEqual(await nextReservation(), ["new-day-confirmed"]); assert.equal(state.attempted, 1);
+  } finally { Date.now = oldNow; }
 
   // Both old external worker entry points must be fenced during backend-first rollout.
   const cancelled = dailyQueueFixture();
