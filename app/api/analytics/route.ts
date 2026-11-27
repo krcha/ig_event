@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { NextResponse, userAgent, type NextRequest } from "next/server";
 import { api } from "@/convex/_generated/api";
 import { createConvexHttpClient, requireServiceSecret } from "@/lib/convex/server";
+import { isTravelMeasurement } from "@/lib/analytics/travel-metrics";
 import { cleanLabel, cleanPath } from "@/lib/analytics/model";
 import { getVisitorCountry } from "@/lib/analytics/geolocation";
 
@@ -46,6 +47,16 @@ export async function POST(request: NextRequest) {
       chunks.push(value);
     }
     const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (data?.kind === "travel") {
+      if (!isTravelMeasurement(data)) return new NextResponse(null, { status: 400, headers: noStore });
+      if (agent.device.type === "mobile") {
+        await createConvexHttpClient().mutation(api.analytics.recordTravel, {
+          serviceSecret: requireServiceSecret(), stage: data.stage, outcome: data.outcome,
+          ...(data.outcome === "ready" ? { ms: data.ms } : {}),
+        });
+      }
+      return new NextResponse(null, { status: 204, headers: noStore });
+    }
     const path = cleanPath(data.path);
     if (!path || !uuid.test(data.eventId) || !uuid.test(data.visitorId) || !uuid.test(data.sessionId) || !["pageview", "click"].includes(data.kind)) {
       return new NextResponse(null, { status: 400, headers: noStore });

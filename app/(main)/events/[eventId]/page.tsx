@@ -1,3 +1,4 @@
+import { CompareTravelLink } from "@/components/travel/compare-timing";
 import { getLocale as getMetadataLocale } from "@/i18n/server";
 import { localizedMetadata, SITE_COPY, formatSeoDate } from "@/lib/i18n/seo";
 import { getEventContentLocales, getLocalizedEventDescription } from "@/lib/i18n/event-content";
@@ -510,9 +511,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                   </details>
                 ) : null}
 
-                <Link className="button-secondary min-h-10 gap-2 px-3" href={`/next/event/${event._id}`} prefetch={false}>
+                <CompareTravelLink href={`/next/event/${event._id}`}>
                   <Shuffle aria-hidden="true" className="h-4 w-4" />{travelText(locale, "compareEvents")}
-                </Link>
+                </CompareTravelLink>
 
                 <div className="hidden flex-wrap gap-2 md:flex">
                   <SaveEventButton event={event} eventId={event._id} eventTitle={event.title} variant="full" />

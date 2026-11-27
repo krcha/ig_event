@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import { Activity, ArrowDownToLine, ArrowDownRight, ArrowUpRight, CalendarDays, Globe2, LockKeyhole, MonitorSmartphone, MousePointer2, RefreshCw } from "lucide-react";
 import { DeviceBreakdown, TrafficChart } from "./analytics-charts";
+import { TravelMetrics } from "./travel-metrics";
 import { AnalyticsWorldMap } from "./analytics-world-map";
 import { getAnalyticsRange, localDay, shiftDay, type AnalyticsGroup, type AnalyticsReport, type AnalyticsRow } from "@/lib/analytics/model";
 import styles from "./analytics.module.css";
@@ -170,6 +171,7 @@ export function AnalyticsDashboard() {
         </div>
         <section className={styles.panel}><div className={styles.panelHeading}><h2><MonitorSmartphone size={16} aria-hidden="true" />Devices & browsers</h2><span>By page views</span></div><div className={styles.devices}><DeviceBreakdown title="Device type" rows={report.devices} total={totals.views} /><DeviceBreakdown title="Browsers" rows={report.browsers} total={totals.views} /><DeviceBreakdown title="Operating systems" rows={report.operatingSystems} total={totals.views} /></div><p className={styles.footnote}>Estimated from browser information. Unique visitors are counted once across the selected period.</p></section>
         <div className={styles.tablesGrid}><DataTable title="Traffic sources" rows={report.sources} total={totals.views} firstColumn="Source / campaign" showClicks /><DataTable title="Top pages" rows={report.pages} total={totals.views} firstColumn="Page" showClicks /></div>
+        <TravelMetrics {...range} refresh={refresh} />
         <DataTable title="Link & button performance" rows={report.buttons} metric="clicks" total={totals.clicks} firstColumn="Link / button" />
         <footer className={styles.footer}><span><MousePointer2 size={13} aria-hidden="true" />Visitor statistics · 400-day retention</span><span aria-live="polite">{loading ? "Refreshing…" : `Updated ${new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Belgrade", hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)} · refreshes every minute`}</span></footer>
       </>}

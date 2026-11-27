@@ -1309,3 +1309,4 @@ try {
 }
 
 console.log("Performer genre research QA passed: cited web transport, daily scope, exact Instagram captions, and source-aware Unknown backfill.");
+await import("./qa-performer-account-source.mjs");

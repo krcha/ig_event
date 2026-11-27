@@ -25,7 +25,7 @@ function queryResult(path, args) {
   switch (path) {
     case "venues:listPublicCompassVenues": return venues;
     case "events:listPublicRecommendationWindowPaginated":
-      return page(args.fromDate === calendarDate ? events.map(event => ({ ...event, date: calendarDate, venueId: venues[0]._id,
+      return page(args.fromDate <= calendarDate && calendarDate < args.beforeDate ? events.map(event => ({ ...event, date: calendarDate, venueId: venues[0]._id,
         eventTaxonomy: { primaryCategory: "live", categories: ["live"], genres: ["rock"], formats: ["concert"] }, genreEstimated: false })) : []);
     case "events:listPublicCalendarEventsWindowPaginated": return page(events);
     case "publicCalendarOverviewAction:listWindow":

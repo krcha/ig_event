@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { requestOutingPart } from "../lib/travel/outing-request.ts";
+import { getCompassView, requestOutingPart } from "../lib/travel/outing-request.ts";
 import { compactCompassHoursJson } from "../lib/venues/venue-hours-cache.ts";
 import { getEventDiscoveryTaxonomy } from "../lib/taxonomy/event-discovery.ts";
 import { sortPublicEventsByDateVenueTimeTitle } from "../lib/events/public-event-sort.ts";
@@ -192,6 +192,15 @@ for (const [i, place] of fullDeck.entries()) {
       compassCandidates(fullDeck, getCompassSourceAt(place, now), origin, mode, now).map(output));
   }
 }
+// The chooser remains usable immediately after confirming a place. A selection
+// can wait or retry without running the ranker on an incomplete programme.
+for (const status of ["loading", "error", "ready"]) {
+  assert.equal(getCompassView("confirm", status, false), "confirm");
+  assert.equal(getCompassView("vibe", status, true), "vibe");
+}
+for (const status of ["loading", "error"]) assert.equal(getCompassView("results", status, false), "programme-status");
+assert.equal(getCompassView("results", "ready", true), "music-status");
+assert.equal(getCompassView("results", "ready", false), "results");
 // A stalled listing request must reach retry, and a revoked location or
 // unmounted screen must suppress late success/error updates.
 const requests = [];
@@ -204,6 +213,15 @@ function pendingFetch(url, { signal }) {
 await new Promise(resolve => requestOutingPart("places", () => assert.fail("timeout resolved"), resolve, { fetcher: pendingFetch, timeoutMs: 5 }));
 assert.equal(requests[0].url, "/api/travel/places");
 assert.equal(requests[0].signal.aborted, true);
+// Some mobile fetch layers stay pending after abort. A failed part still exposes
+// a retry by its deadline, exactly once, and suppresses any subsequent reply.
+let settleLate, stallErrors = 0;
+await new Promise(resolve => requestOutingPart("programmes", () => assert.fail("late data was applied"), () => {
+  stallErrors++; resolve();
+}, { timeoutMs: 5, fetcher: () => new Promise(resolve => { settleLate = resolve; }) }));
+settleLate(Response.json({ programmes: [] }));
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(stallErrors, 1);
 const updates = [];
 const dispose = requestOutingPart("programmes", value => updates.push(value), () => updates.push("error"), { fetcher: pendingFetch });
 dispose();

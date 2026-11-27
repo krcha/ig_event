@@ -33,3 +33,18 @@ export const performerBackfillPhase = v.union(
   v.literal("reconcile"),
   v.literal("done"),
 );
+
+export const accountClaim = v.object({ genre: musicGenre, url: v.string(), quote: v.string(), dominant: v.optional(v.boolean()), binding: v.optional(performerSource) });
+export const accountEvidence = v.object({
+  handle: v.string(), displayName: v.optional(v.object({ value: v.string(), url: v.string(), quote: v.string() })),
+  genres: v.array(accountClaim), identityLink: v.optional(performerSource),
+});
+export const accountStage = v.union(v.literal("instagram"), v.literal("web"), v.literal("waiting"),
+  v.literal("running"), v.literal("complete"));
+export const accountWork = v.object({
+  stage: accountStage, retryAt: v.optional(v.number()), owner: v.optional(v.string()),
+  phase: v.optional(v.union(v.literal("instagram"), v.literal("web"))), debited: v.optional(v.boolean()),
+});
+export const accountRank = v.object({
+  ready: v.boolean(), generation: v.number(), tier: v.number(), order: v.number(), refreshAt: v.optional(v.number()),
+});

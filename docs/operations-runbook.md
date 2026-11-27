@@ -523,12 +523,52 @@ Set `EVENT_DISCOVERY_EXECUTOR_ORIGIN` in Convex to the web origin when the
 existing `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` is unavailable. Convex uses the
 same `CRON_SECRET` as the web service. The web service uses its existing
 `OPENAI_API_KEY`. Without an origin or secret the Convex cron exits without
-calling the web service. Without an OpenAI key the sweep route reports `idle`.
+calling the web service. Without an OpenAI key the sweep still checks explicit local event evidence and the public Instagram profiles of confirmed performers.
 
 The sweep persists its cursor and leases one batch of up to 12 events per
 invocation, with a daily allowance of 96 candidate events in Belgrade time.
 Transient provider failures retry on a later sweep with at least an hour of
 backoff. Reads and writes recheck publication eligibility and event revision.
+
+The same 10-minute cron runs the per-account queue independently of an event's
+category or genre. A confirmed new billing schedules an indexed rank refresh.
+Existing profiles are seeded eight at a time. Each rank page reads up to twelve
+appearances, deduplicates event IDs and advances with a generation fence. A
+known future start or ongoing published interval inside 48 hours comes first.
+A whole undated calendar day entirely inside the window also qualifies. A
+partial boundary day stays in the general future group. The queue then orders
+profiles by the number of distinct remaining announcements and finally includes
+confirmed accounts with no future billing. A confirmed imminent booking can proceed
+while an older profile is being re-ranked. Time boundaries are in Belgrade.
+
+A tick claims up to two free Instagram reads and one web-research job. A
+five-minute account lease prevents duplicate concurrent searches. The existing
+96-unit daily budget is debited immediately before the paid provider request.
+An exhausted model allowance still permits free Instagram reads. The worker
+stores each accepted display name and genre with the identifying URL and quote.
+A missing genre is retried after fourteen days, a transient provider failure
+after one hour. The cron response includes account reads, web jobs, actual paid
+attempts, writes and failures in `accounts`. A distinct self-reported style can
+be reused for the exact billed account. A specific programme's own evidence
+takes precedence, and a tribute or listening session needs programme evidence.
+
+Operators can call the internal `performerAccountResearch:recordReviewedEvidence`
+with `{apply:false,evidence:{handle,displayName?,genres,identityLink?}}`. Each
+display name has `value`, its exact public Instagram URL and a short verbatim
+quote. Each genre has a taxonomy key, URL and quote. A different artist page
+also needs an identity link to the same account. A MusicBrainz relationship
+record can identify an exact Apple Music artist or Bandcamp artist profile by
+both canonical URLs from the same record. A public personal Instagram bio and an
+editorial interview can also corroborate a full artist name and the unique band tag
+when the quote explicitly names the artist's own style and band. A confirmed
+prior billing alias is looked up on the same handle and rechecked before reuse. `written` in preview means the same
+validated facts would change a profile. Set `apply:true` to persist them.
+A second application returns `unchanged`. `stale` identifies a missing,
+conflicting or withdrawn identity and `no_evidence` means no submitted claim
+passed validation. Inspect `performerRegistry:readProfile` for the actual
+sources. Count profiles with any genres separately from those with a uniquely
+supported dominant genre. The account's own genre never establishes the
+category or format of a particular appearance.
 
 All lanes preserve human decisions, duplicate ambiguity, source-generation
 fences and existing publication checks. Deployment requires matching web and

@@ -40,6 +40,8 @@ const messages = {
   until: ["do", "until", "до"],
   loadingProgrammes: ["Učitavamo program…", "Loading programmes…", "Загружаем программу…"],
   loadingPlaces: ["Učitavamo lokale…", "Loading venues…", "Загружаем места…"],
+  placesLoadError: ["Imenik lokala trenutno nije dostupan. Pokušaj ponovo.", "The venue directory is unavailable. Please try again.", "Список мест недоступен. Повтори попытку."],
+  programmeLoadError: ["Program trenutno nije dostupan. Pokušaj ponovo.", "The programme is unavailable. Please try again.", "Программа недоступна. Повтори попытку."],
   loadError: ["Ponuda trenutno nije dostupna. Pokušaj ponovo.", "Listings are unavailable. Please try again.", "Подборка недоступна. Повтори попытку."],
   nearest: ["Od najbližeg ka daljim", "Nearest first", "Сначала ближайшие"],
   route: ["Prikaži rutu", "Show route", "Показать маршрут"],

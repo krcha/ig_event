@@ -6,7 +6,8 @@ import { NextRequest } from "next/server.js";
 import { buildAnalyticsReport } from "../lib/analytics/aggregate.ts";
 import { getAnalyticsOwnerId, isAnalyticsOwner } from "../lib/analytics/access.ts";
 import { bucketKey, cleanPath, getAnalyticsRange, localDay, localMidnight } from "../lib/analytics/model.ts";
-import { cleanup, readPage, record, report } from "../convex/analytics.ts";
+import { cleanup, readPage, record, recordTravel, report, travelReport } from "../convex/analytics.ts";
+import * as travelMetrics from "../lib/analytics/travel-metrics.ts";
 import * as localeConfig from "../i18n/config.ts";
 
 const require = createRequire(import.meta.url);
@@ -30,21 +31,24 @@ function compile(file, mocks, extra = "") {
 }
 
 function database() {
-  const rows = [];
+  const rows = [], days = [];
   return {
-    rows,
+    rows, days,
     db: {
       query(table) {
-        assert.equal(table, "analyticsEvents");
+        assert.ok(["analyticsEvents", "travelDailyMetrics"].includes(table));
+        const source = table === "analyticsEvents" ? rows : days;
         const filters = [];
         const index = {
           eq: (key, value) => { filters.push((row) => row[key] === value); return index; },
           gte: (key, value) => { filters.push((row) => row[key] >= value); return index; },
+          lte: (key, value) => { filters.push(row => row[key] <= value); return index; },
           lt: (key, value) => { filters.push((row) => row[key] < value); return index; },
         };
-        const selected = () => rows.filter((row) => filters.every((filter) => filter(row))).sort((a, b) => a.at - b.at);
+        const selected = () => source.filter((row) => filters.every((filter) => filter(row))).sort((a, b) => a.at - b.at);
         const query = {
           withIndex(_name, build) { build(index); return query; },
+          unique: async () => selected()[0] ?? null,
           first: async () => selected()[0] ?? null,
           take: async (limit) => selected().slice(0, limit),
           paginate: async ({ cursor, numItems }) => {
@@ -55,8 +59,12 @@ function database() {
         };
         return query;
       },
-      async insert(_table, row) { rows.push({ ...row, _id: `event-${rows.length}`, _creationTime: now }); },
-      async delete(id) { const index = rows.findIndex((row) => row._id === id); if (index >= 0) rows.splice(index, 1); },
+      async insert(table, row) {
+        const source = table === "analyticsEvents" ? rows : days;
+        source.push({ ...row, _id: `${table}-${source.length}`, _creationTime: now });
+      },
+      async patch(id, changes) { Object.assign(days.find(row => row._id === id), changes); },
+      async delete(id) { for (const source of [rows, days]) { const index = source.findIndex(row => row._id === id); if (index >= 0) source.splice(index, 1); } },
     },
   };
 }
@@ -256,16 +264,38 @@ try {
   assert.equal(await geo.getVisitorCountry(forwarded, { ANALYTICS_COUNTRY_DB_PATH: "/country.mmdb", ANALYTICS_TRUST_PROXY: "true" }), "RS");
   assert.equal(geoReads, 1, "the immutable country database is loaded once");
   const collector = compile("app/api/analytics/route.ts", {
-    "@/convex/_generated/api": { api: { analytics: { record: "analytics:record" } } },
+    "@/convex/_generated/api": { api: { analytics: { record: "analytics:record", recordTravel: "analytics:recordTravel" } } },
     "@/lib/convex/server": {
       requireServiceSecret: () => process.env.CRON_SECRET,
-      createConvexHttpClient: () => ({ mutation: (_ref, args) => record._handler({ db: collected.db }, args) }),
+      createConvexHttpClient: () => ({ mutation: (ref, args) => (ref === "analytics:recordTravel" ? recordTravel : record)._handler({ db: collected.db }, args) }),
     },
     "@/lib/analytics/model": await import("../lib/analytics/model.ts"),
     "@/lib/analytics/geolocation": geo,
+    "@/lib/analytics/travel-metrics": travelMetrics,
   });
   const payload = { eventId: "d26ed1ac-31ee-4c4e-88b0-062db05e3312", visitorId: "d26ed1ac-31ee-4c4e-88b0-062db05e3313", sessionId: "d26ed1ac-31ee-4c4e-88b0-062db05e3314", kind: "pageview", path: "/calendar?token=do-not-store", source: "instagram.com" };
   const request = (body = payload, headers = {}) => new NextRequest("https://eventzeka.com/api/analytics", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://eventzeka.com", "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1", ...headers }, body: JSON.stringify(body) });
+  const travelSample = { kind: "travel", stage: "places", outcome: "ready", ms: 511 };
+  for (const headers of [{ DNT: "1" }, { "Sec-GPC": "1" }, { "User-Agent": "Googlebot/2.1" }, { "User-Agent": "Desktop" }]) {
+    assert.equal((await collector.POST(request(travelSample, headers))).status, 204);
+  }
+  assert.equal(collected.days.length, 0);
+  for (const extra of [{ latitude: 44 }, { path: "/next/event/private" }, { sessionId: "private" }, { ms: -1 }]) {
+    assert.equal((await collector.POST(request({ ...travelSample, ...extra }))).status, 400);
+  }
+  for (const ms of [511, 201, 501, 100_001]) assert.equal((await collector.POST(request({ ...travelSample, ms }))).status, 204);
+  for (const outcome of ["error", "retry"]) await collector.POST(request({ kind: "travel", stage: "programmes", outcome }));
+  assert.deepEqual(collected.days.map(({ _id, _creationTime, ...row }) => Object.keys(row).sort()),
+    Array(2).fill(["buckets", "day", "errors", "retries", "stage"]));
+  const reportCtx = { db: collected.db, auth: { getUserIdentity: async () => ({ subject: "user_owner" }) } };
+  const travelRows = await travelReport._handler(reportCtx, { start: "2026-10-31", end: "2026-10-31" });
+  assert.deepEqual(travelRows[0], { stage: "places", samples: 4, errors: 0, retries: 0, p75Ms: 750, overflow: false });
+  assert.deepEqual(travelRows[1], { stage: "programmes", samples: 0, errors: 1, retries: 1, p75Ms: null, overflow: false });
+  const verySlow = travelMetrics.addTravelTiming([], 400_000);
+  assert.equal(travelMetrics.summarizeTravelTimings([{ stage: "places", buckets: verySlow, errors: 0, retries: 0 }])[0].overflow, true);
+  await assert.rejects(travelReport._handler({ ...reportCtx, auth: { getUserIdentity: async () => ({ subject: "user_other" }) } },
+    { start: "2026-10-31", end: "2026-10-31" }), /owner/);
+  assert.equal(collected.rows.length, 0);
   assert.equal((await collector.POST(request())).status, 204);
   assert.equal(collected.rows.length, 1);
   assert.equal(collected.rows[0].path, "/calendar");
@@ -294,6 +324,7 @@ try {
 
   const countryAccess = compile("app/api/internal/country-access/route.ts", {
     "@/lib/analytics/geolocation": geo,
+    "@/lib/analytics/travel-metrics": travelMetrics,
   });
   process.env.ANALYTICS_COUNTRY_DB_PATH = "/country.mmdb";
   process.env.ANALYTICS_COUNTRY_HEADER = "CF-IPCountry";

@@ -1,3 +1,4 @@
+import { advancePerformerAccounts } from "@/lib/ai/advance-performer-accounts";
 import { randomUUID } from "node:crypto";
 import type { FunctionReference } from "convex/server";
 import { NextResponse } from "next/server";
@@ -41,6 +42,9 @@ export async function POST(request: Request) {
     if (!runId) {
       const owner = randomUUID();
       const allowModel = Boolean(process.env.OPENAI_API_KEY?.trim());
+      // The free account queue also runs with an empty paid budget or no model key.
+      const accounts = await advancePerformerAccounts(convex,serviceSecret,owner,allowModel,Math.min(deadlineAt,Date.now()+65_000))
+        .catch(()=>({unavailable:true}));
       const priority = { scanned: 0, eligible: 0, known: 0, written: 0, attempted: 0, unresolved: 0 };
       for (let page = 0; page < 4 && Date.now() < deadlineAt; page++) {
         const batch = await convex.mutation(claimPriorityCategories, { serviceSecret, owner, allowModel }) as {
@@ -52,37 +56,37 @@ export async function POST(request: Request) {
             const resolved = await resolveEventGenresBatch(batch.events, { deadlineAt, categoryOnly: true });
             const applied = await convex.mutation(completeUpcomingBatch, { serviceSecret, owner, model: resolved.model,
               results: storageRows(resolved.results) }) as { completed: boolean; counts: { written: number } };
-            if (!applied.completed) return NextResponse.json({ state: "deferred", priority }, { status: 503 });
+            if (!applied.completed) return NextResponse.json({ state: "deferred", priority, accounts }, { status: 503 });
             priority.written += applied.counts.written;
             priority.unresolved -= applied.counts.written;
-            return NextResponse.json({ state: "processed", priority, tested: resolved.results.length, searchCalls: resolved.searchCalls, applied });
+            return NextResponse.json({ state: "processed", priority, accounts, tested: resolved.results.length, searchCalls: resolved.searchCalls, applied });
           } catch {
             await convex.mutation(completeUpcomingBatch, { serviceSecret, owner, model: "deferred", results: [] });
-            return NextResponse.json({ state: "deferred", priority }, { status: 503 });
+            return NextResponse.json({ state: "deferred", priority, accounts }, { status: 503 });
           }
         }
         if (!batch.more) break;
       }
-      if (!allowModel) return NextResponse.json({ state: "scanned", tested: 0, priority });
+      if (!allowModel) return NextResponse.json({ state: "scanned", tested: 0, priority, accounts });
       for (let page = 0; page < MAX_SWEEP_PAGES && Date.now() < deadlineAt; page++) {
         const batch = await convex.mutation(claimUpcomingBatch, { serviceSecret, owner }) as {
           state: "claimed" | "scanned" | "idle" | "busy"; events: EventGenreCandidate[];
         };
         if (batch.state === "scanned") continue;
-        if (batch.state !== "claimed") return NextResponse.json({ state: batch.state, tested: 0, priority });
+        if (batch.state !== "claimed") return NextResponse.json({ state: batch.state, tested: 0, priority, accounts });
         try {
           const resolved = await resolveEventGenresBatch(batch.events, { deadlineAt });
           const applied = await convex.mutation(completeUpcomingBatch, { serviceSecret, owner, model: resolved.model,
             results: storageRows(resolved.results) }) as { completed: boolean; counts: { written: number; unchanged: number; stale: number } };
           if (!applied.completed) return NextResponse.json({ state: "deferred" }, { status: 503 });
-          return NextResponse.json({ state: "processed", tested: resolved.results.length, searchCalls: resolved.searchCalls, priority, applied });
+          return NextResponse.json({ state: "processed", tested: resolved.results.length, searchCalls: resolved.searchCalls, priority, accounts, applied });
         } catch {
           // Advance the sweep so one failing batch never blocks later events.
           await convex.mutation(completeUpcomingBatch, { serviceSecret, owner, model: "deferred", results: [] });
           return NextResponse.json({ state: "deferred" }, { status: 503 });
         }
       }
-      return NextResponse.json({ state: "scanned", tested: 0, priority });
+      return NextResponse.json({ state: "scanned", tested: 0, priority, accounts });
     }
     const page: { scheduled: number; cursor: string | null } = await convex.mutation(scheduleDailyPage, { serviceSecret, runId, cursor });
     return NextResponse.json({ state: page.scheduled || page.cursor ? "processed" : "idle",

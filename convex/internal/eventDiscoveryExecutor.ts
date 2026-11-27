@@ -1,10 +1,12 @@
 import { v } from "convex/values";
+import { internal } from "../_generated/api";
 import { internalAction } from "../_generated/server";
 
 export const advance = internalAction({
   args: {},
   returns: v.object({ invoked: v.boolean(), reason: v.string() }),
-  handler: async () => {
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.performerAccountResearch.prepare,{});
     const configured = process.env.EVENT_DISCOVERY_EXECUTOR_ORIGIN?.trim() ||
       process.env.AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN?.trim();
     const secret = process.env.CRON_SECRET?.trim();

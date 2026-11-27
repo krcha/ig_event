@@ -140,7 +140,7 @@ function cleanHandle(value: unknown): string | undefined {
   return /^[a-z0-9_][a-z0-9_.]{1,29}$/.test(handle) ? handle : undefined;
 }
 
-function cleanUrl(value: unknown): URL | null {
+export function cleanPerformerSourceUrl(value: unknown): URL | null {
   if (typeof value !== "string" || value.length > 2000) return null;
   try {
     const url = new URL(value);
@@ -369,7 +369,7 @@ function resolveIdentity(raw: unknown, row: PreparedRow, sources: Map<string, So
 
 function evidence(raw: unknown, sources: Map<string, SourceMetadata>): PerformerWebEvidence | null {
   const { url: claimedUrl, quote } = asObject(raw);
-  const url = cleanUrl(claimedUrl)?.href;
+  const url = cleanPerformerSourceUrl(claimedUrl)?.href;
   const source = url && sources.get(url);
   if (!source || typeof quote !== "string" || quote.trim().length < 4 || quote.length > 170 ||
     quote.trim().split(/\s+/).length > 20) return null;
@@ -485,12 +485,7 @@ function decodeAdaptiveRow(raw: JsonObject, row: PreparedRow, sources: Map<strin
   return { ...result, listing: { title: row.listingTitle, identityEvidence: primary, genreEvidence: verified.genreEvidence, discovery } };
 }
 
-function decodeBatch(
-  body: string, rows: PreparedRow[], inputs: readonly PerformerGenreResearchInput[],
-  domains: string[], model: string, attempts: number,
-): PerformerGenreResearchBatchResult {
-  const envelope = asObject(parseJson(body));
-  if (envelope.status !== "completed") throw new EventDiscoveryProviderError("performer research did not complete", undefined, attempts);
+export function readPerformerSearchSources(envelope: JsonObject, domains: string[] = []) {
   const output = asArray(envelope.output).map(asObject);
   const calls = output.filter((item) => item.type === "web_search_call");
   const completed = calls.filter((item) => item.status === "completed");
@@ -500,7 +495,7 @@ function decodeBatch(
   const sourceMap = new Map<string, SourceMetadata>();
   function register(raw: unknown) {
     const source = asObject(raw);
-    const url = cleanUrl(source.url);
+    const url = cleanPerformerSourceUrl(source.url);
     if (!url || (domains.length && !domains.some((domain) => onDomain(url.hostname, domain)))) return;
     const title = typeof source.title === "string" ? clip(source.title, 180) : "";
     if (!sourceMap.has(url.href) || title) {
@@ -518,6 +513,16 @@ function decodeBatch(
     }
   }
   const text = typeof envelope.output_text === "string" ? envelope.output_text : parts.map((part) => part.text).join("");
+  return { calls, completed, sourceMap, text, refused };
+}
+
+function decodeBatch(
+  body: string, rows: PreparedRow[], inputs: readonly PerformerGenreResearchInput[],
+  domains: string[], model: string, attempts: number,
+): PerformerGenreResearchBatchResult {
+  const envelope = asObject(parseJson(body));
+  if (envelope.status !== "completed") throw new EventDiscoveryProviderError("performer research did not complete", undefined, attempts);
+  const { calls, completed, sourceMap, text, refused } = readPerformerSearchSources(envelope, domains);
   const parsedClaims = asArray(asObject(parseJson(text)).rows).map(asObject);
   const claims = refused && !parsedClaims.length
     ? rows.map(({ row }) => ({ row, status: "unverified" })) : parsedClaims;

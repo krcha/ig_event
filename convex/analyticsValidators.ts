@@ -18,3 +18,9 @@ export const analyticsReport = v.object({
   countries: v.array(row), devices: v.array(row), browsers: v.array(row), operatingSystems: v.array(row),
   sources: v.array(row), pages: v.array(row), buttons: v.array(row),
 });
+
+export const travelStage = v.union(v.literal("places"), v.literal("programmes"), v.literal("reference"), v.literal("recommendations"));
+export const travelCounts = { stage: travelStage, buckets: v.array(v.number()), errors: v.number(), retries: v.number() };
+export const travelReportRow = v.object({
+  stage: travelStage, samples: v.number(), errors: v.number(), retries: v.number(), p75Ms: v.union(v.number(), v.null()), overflow: v.boolean(),
+});

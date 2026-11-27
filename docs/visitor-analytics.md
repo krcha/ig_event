@@ -116,6 +116,12 @@ cannot be reconstructed from this feature. No demonstration data is shipped.
 - CSV export contains aggregate counts only, with quoted cells and spreadsheet
   formula protection. No visitor identifiers are returned to the dashboard.
 
+## Where next? mobile timings
+
+The owner dashboard shows counts and the nearest-rank p75 for each stage over a selected period of up to 31 Belgrade dates. Venue time ends when the first suggested venue is rendered. Programme time ends when the complete programme is available. Both start when a location fix is available, excluding the permission prompt. The comparison title and complete ranked results use the start of a direct navigation or the in-app comparison link. Browser measurements observe a foreground React commit. A retry counts a visitor retry after a failed attempt. Retrying a comparison starts a new navigation and measures its visible stages again.
+
+The collector uses the existing same-origin, bot, DNT and GPC checks. Travel measurements omit credentials, referrer, visitor/session/event IDs and location. Convex stores one daily histogram per stage and separate error/retry counters. Durations are rounded up to 250 ms with an overflow bucket above 120 seconds. A blank p75 means no successful measurements. Mobile sample size and failures are shown beside each percentile. Raw timings and historical values from before deployment are unavailable. The owner-only JSON report is also available at `/api/admin/analytics?view=travel&start=YYYY-MM-DD&end=YYYY-MM-DD`.
+
 ## Verification
 
 `npm run qa:analytics` exercises the actual collector route and Convex handlers

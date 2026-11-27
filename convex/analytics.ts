@@ -1,12 +1,13 @@
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery, mutation } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireViewerIdentity } from "./authz";
-import { analyticsEventFields, analyticsGroup, analyticsReport } from "./analyticsValidators";
+import { analyticsEventFields, analyticsGroup, analyticsReport, travelStage, travelReportRow } from "./analyticsValidators";
 import { isAnalyticsOwner } from "../lib/analytics/access";
+import { addTravelTiming, isTravelMeasurement, summarizeTravelTimings } from "../lib/analytics/travel-metrics";
 import { buildAnalyticsReport } from "../lib/analytics/aggregate";
-import { ANALYTICS_RETENTION_DAYS, DAY_MS, getAnalyticsRange, isPublicAnalyticsPath, type AnalyticsEvent } from "../lib/analytics/model";
+import { ANALYTICS_RETENTION_DAYS, DAY_MS, getAnalyticsRange, localDay, shiftDay, isPublicAnalyticsPath, type AnalyticsEvent } from "../lib/analytics/model";
 
 // Collection is server-to-server only. No visitor can write to Convex directly.
 export const record = mutation({
@@ -80,7 +81,42 @@ export const cleanup = internalMutation({
     const expired = await ctx.db.query("analyticsEvents")
       .withIndex("by_at", (q) => q.lt("at", Date.now() - ANALYTICS_RETENTION_DAYS * DAY_MS)).take(500);
     for (const row of expired) await ctx.db.delete(row._id);
-    if (expired.length === 500) await ctx.scheduler.runAfter(0, internal.analytics.cleanup, {});
+    const oldDays = await ctx.db.query("travelDailyMetrics").withIndex("by_day_stage", q => q.lt("day", shiftDay(localDay(Date.now()), -ANALYTICS_RETENTION_DAYS + 1))).take(100);
+    for (const row of oldDays) await ctx.db.delete(row._id);
+    if (expired.length === 500 || oldDays.length === 100) await ctx.scheduler.runAfter(0, internal.analytics.cleanup, {});
     return null;
+  },
+});
+
+// Mobile timings are anonymous aggregates. No raw sample, event, device or visitor ID is persisted.
+export const recordTravel = mutation({
+  args: { serviceSecret: v.string(), stage: travelStage, outcome: v.union(v.literal("ready"), v.literal("error"), v.literal("retry")), ms: v.optional(v.number()) },
+  returns: v.null(),
+  handler: async (ctx, { serviceSecret, ...sample }) => {
+    const expected = process.env.CRON_SECRET?.trim();
+    if (!expected || expected !== serviceSecret) throw new Error("Analytics collection is not authorized.");
+    const measurement = { kind: "travel", ...sample };
+    if (!isTravelMeasurement(measurement)) throw new Error("Invalid travel measurement.");
+    const day = localDay(Date.now());
+    const row = await ctx.db.query("travelDailyMetrics").withIndex("by_day_stage", q => q.eq("day", day).eq("stage", sample.stage)).unique();
+    const counts = { errors: row?.errors ?? 0, retries: row?.retries ?? 0, buckets: row?.buckets ?? [] };
+    if (measurement.outcome === "ready") counts.buckets = addTravelTiming(counts.buckets, measurement.ms);
+    else if (measurement.outcome === "error") counts.errors++;
+    else counts.retries++;
+    if (row) await ctx.db.patch(row._id, counts);
+    else await ctx.db.insert("travelDailyMetrics", { day, stage: sample.stage, ...counts });
+    return null;
+  },
+});
+
+export const travelReport = query({
+  args: { start: v.string(), end: v.string() },
+  returns: v.array(travelReportRow),
+  handler: async (ctx, { start, end }) => {
+    const identity = await requireViewerIdentity(ctx);
+    if (!isAnalyticsOwner(identity.subject, process.env)) throw new Error("Analytics owner access required.");
+    if (getAnalyticsRange(start, end, "day").days > 31) throw new Error("Choose at most 31 days.");
+    const rows = await ctx.db.query("travelDailyMetrics").withIndex("by_day_stage", q => q.gte("day", start).lte("day", end)).take(31 * 4);
+    return summarizeTravelTimings(rows);
   },
 });

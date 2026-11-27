@@ -42,6 +42,15 @@ const previousFetch = globalThis.fetch;
 try {
   for (const key of discoveryEnv) delete process.env[key];
   const calls = [];
+  let accountSweeps = 0;
+  const discoveryContext = {
+    async runMutation(ref, args) {
+      assert.equal(getFunctionName(ref), "performerAccountResearch:prepare");
+      assert.deepEqual(args, {});
+      accountSweeps++;
+      return null;
+    }
+  };
   globalThis.fetch = async (url, options) => {
     calls.push(url.origin);
     assert.equal(url.pathname, "/api/cron/event-discovery");
@@ -50,14 +59,15 @@ try {
     assert.equal(options.redirect, "error");
     return new Response(null, { status: 200 });
   };
-  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: false, reason: "executor_not_configured" });
+  assert.deepEqual(await advanceEventDiscovery._handler(discoveryContext, {}), { invoked: false, reason: "executor_not_configured" });
   process.env.CRON_SECRET = "fixture-cron-secret";
   process.env.AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN = "https://existing-origin.invalid";
-  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: true, reason: "executor_advanced" });
+  assert.deepEqual(await advanceEventDiscovery._handler(discoveryContext, {}), { invoked: true, reason: "executor_advanced" });
   process.env.EVENT_DISCOVERY_EXECUTOR_ORIGIN = "https://discovery-origin.invalid";
-  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: true, reason: "executor_advanced" });
+  assert.deepEqual(await advanceEventDiscovery._handler(discoveryContext, {}), { invoked: true, reason: "executor_advanced" });
   process.env.EVENT_DISCOVERY_EXECUTOR_ORIGIN += "/some-path";
-  assert.deepEqual(await advanceEventDiscovery._handler({}, {}), { invoked: false, reason: "invalid_executor_origin" });
+  assert.deepEqual(await advanceEventDiscovery._handler(discoveryContext, {}), { invoked: false, reason: "invalid_executor_origin" });
+  assert.equal(accountSweeps, 4);
   assert.deepEqual(calls, ["https://existing-origin.invalid", "https://discovery-origin.invalid"]);
 } finally {
   globalThis.fetch = previousFetch;

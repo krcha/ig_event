@@ -10,6 +10,7 @@ import { localizeHref } from "@/i18n/config";
 import { MUSIC_GENRES } from "@/lib/taxonomy/event-discovery";
 import { compassCandidates, getCompassGenres, getCompassMusicBasis, getCompassSourceAt, getCompassSourceProgrammes, type CompassMusicProfile, type CompassPlace } from "@/lib/travel/compass";
 import { compassVenueTypeText, travelText } from "@/lib/travel/copy";
+import { getCompassView, type ProgrammeStatus } from "@/lib/travel/outing-request";
 import { formatTravelDuration } from "@/lib/travel/duration";
 import { bearingDegrees, estimateTravel, haversineMeters, type Coordinates } from "@/lib/travel/location";
 import { CompassMatchSpectrum } from "./compass-match-spectrum";
@@ -52,7 +53,10 @@ function readSourceMusicContext(value: unknown): SourceMusicContext {
   return { musicProfile: profile, ...(event ? { event } : {}) };
 }
 
-export function CompassFlow({ places, programmesStatus, onRefresh }: { places: CompassPlace[]; programmesStatus: "loading" | "ready" | "error"; onRefresh: () => void }) {
+export function CompassFlow({ places, programmesStatus, onRetryDirectory, onRetryProgrammes, onFirstPlace }: {
+  places: CompassPlace[]; programmesStatus: ProgrammeStatus;
+  onRetryDirectory: () => void; onRetryProgrammes: () => void; onFirstPlace: (part: "places") => void;
+}) {
   const locale = useLocale();
   const t = (key: Parameters<typeof travelText>[1]) => travelText(locale, key);
   const { position } = useUserLocation();
@@ -98,6 +102,8 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
   const venueOptions = useMemo(() => [...places].sort((a, b) => a.name.localeCompare(b.name, locale)), [places, locale]);
   const confirmation = (manualVenueId ? places.find(place => place.id === manualVenueId) : undefined)
     ?? nearest.find(place => !rejectedIds.includes(place.id));
+  const hasFirstPlace = phase === "confirm" && Boolean(position && confirmation);
+  useEffect(() => { if (hasFirstPlace) onFirstPlace("places"); }, [hasFirstPlace, onFirstPlace]);
   const sourcePlace = confirmedPlace && (places.find(place => place.id === confirmedPlace.id) ?? confirmedPlace);
   const sourceProgrammes = useMemo(() => sourcePlace ? getCompassSourceProgrammes(sourcePlace, now) : [], [sourcePlace, now]);
   const currentReference = sourceReference === "venue" || sourceProgrammes.some(event => event.id === sourceReference) ? sourceReference : "";
@@ -137,16 +143,17 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
     return context.event && context.event.id === resolvedSource.event?.id
       ? { ...resolvedSource, musicProfile: context.musicProfile } : resolvedSource;
   }, [lookup, now, resolvedSource, sourcePlace]);
-  const candidates = useMemo(() => phase === "results" && programmesStatus === "ready" && source && position ? compassCandidates(places, source, position, vibe, now) : [], [phase, programmesStatus, places, source, position, vibe, now]);
+  const sourceGenres = source ? getCompassGenres(source) : [];
+  const sourceVenueType = source?.venueType && compassVenueTypeText(locale, source.venueType);
+  const sourceHasCategory = source?.event?.taxonomy.categories.some(category => category !== "other") ?? false;
+  const sourceContextUsable = Boolean(source?.venueType || sourceGenres.length || sourceHasCategory);
+  const view = getCompassView(phase, programmesStatus, vibe !== "nearby" && sourceLookupLoading && !sourceContextUsable);
+  const candidates = useMemo(() => view === "results" && source && position ? compassCandidates(places, source, position, vibe, now) : [], [view, places, source, position, vibe, now]);
   useEffect(() => { setIndex((current) => Math.min(current, Math.max(0, candidates.length - 1))); }, [candidates.length]);
   const destination = candidates[Math.min(index, Math.max(0, candidates.length - 1))];
   const destinationEvent = destination?.recommendation.basis === "venue" ? undefined : destination?.event;
   const destinationGenres = destinationEvent && destination ? getCompassGenres(destination) : [];
   const destinationVenueType = destination?.venueType && compassVenueTypeText(locale, destination.venueType);
-  const sourceGenres = source ? getCompassGenres(source) : [];
-  const sourceVenueType = source?.venueType && compassVenueTypeText(locale, source.venueType);
-  const sourceHasCategory = source?.event?.taxonomy.categories.some(category => category !== "other") ?? false;
-  const sourceContextUsable = Boolean(source?.venueType || sourceGenres.length || sourceHasCategory);
   const genreLabel = (genres: ReturnType<typeof getCompassGenres>) => genres.map(key => MUSIC_GENRES.find(genre => genre.key === key)?.label).join(" · ");
   const musicBasisLabel = (place: CompassPlace) => t(getCompassMusicBasis(place) === "recent" ? "musicRecent"
     : place.musicProfile?.evidence === "estimate" ? "musicEstimated"
@@ -257,19 +264,24 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
       setRoute({ distance: result.distance, coordinates: result.coordinates, origin: position, mode }); setRouteVisible(true); setRouteStatus("idle");
     } catch { if (!controller.signal.aborted) { setRouteStatus("error"); setRouteVisible(false); } }
   }
+  const programmeStatus = programmesStatus !== "ready" ? <div role="status">
+    {programmesStatus === "error" ? <><p className={styles.error}>{t("programmeLoadError")}</p>
+      <button className={styles.secondary} type="button" onClick={onRetryProgrammes}>{t("refresh")}</button></>
+      : <p><LoaderCircle size={20} className="inline motion-safe:animate-spin" aria-hidden="true" /> {t("loadingProgrammes")}</p>}
+  </div> : null;
   return <main className={styles.page} data-compass-phase={!position ? "locate" : phase}>
     <div className={styles.headingRow}>
       <div><h1 className={styles.heading}>{t("next")}</h1>{position && phase === "results" ? <p className={styles.modeLabel}>{t(vibe === "same" ? "same" : vibe === "different" ? "different" : "nearby")}<small>{vibe === "nearby" ? t("nearest") : source?.event?.title ?? source?.name}</small></p> : null}</div>
       {position && phase === "results" ? <button type="button" className={styles.textButton} onClick={() => { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("vibe"); }}>{t("change")}</button> : position && phase === "vibe" ? <button className={styles.resetButton} type="button" onClick={reset} aria-label={t("reset")} title={t("reset")}><LocateFixed size={18} aria-hidden="true" /></button> : null}
     </div>
-    {!position ? <CompassLocationStep /> : phase === "confirm" ? <section className={`${styles.step} ${styles.confirm}`} key="confirm">
+    {!position ? <CompassLocationStep /> : view === "confirm" ? <section className={`${styles.step} ${styles.confirm}`} key="confirm">
       <h2 className={styles.title}>{t("here")}</h2>
       {!manualVenueId ? <p className={styles.muted}>{t("nearest")}</p> : null}
       {confirmation ? <>
         <div className={styles.place} key={confirmation.id}><MapPin size={24} className="text-primary" aria-hidden="true" /><h3 className={styles.name}>{confirmation.name}</h3><p className={styles.address}>{confirmation.address}</p>
           <p className={styles.muted}>≈ {formatTravelDuration(estimateTravel(position, confirmation).walkMinutes, locale)} {t("walk")}</p></div>
         <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => { setManualVenueId(""); setRejectedIds(ids => [...ids, confirmation.id]); }}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); setNow(Date.now()); setConfirmedPlace(confirmation); setPhase("vibe"); }}><Check size={18} aria-hidden="true" />{t("yes")}</button></div>
-      </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); onRefresh(); }}>{t("refresh")}</button></>}
+      </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); onRetryDirectory(); }}>{t("refresh")}</button></>}
       {venueOptions.length ? <details className={styles.manualVenue}>
         <summary className={styles.textButton}>{t("chooseAnotherVenue")}</summary>
         <label className={styles.sourceReference}>
@@ -280,12 +292,10 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
           </select>
         </label>
       </details> : null}
-    </section> : programmesStatus !== "ready" ? <section className={styles.step} role="status">
-      {programmesStatus === "error" ? <><p className={styles.error}>{t("loadError")}</p><button className={styles.secondary} type="button" onClick={onRefresh}>{t("refresh")}</button></>
-        : <><LoaderCircle size={20} className="motion-safe:animate-spin" aria-hidden="true" />{t("loadingProgrammes")}</>}
-    </section> : phase === "vibe" ? <section className={`${styles.step} ${styles.vibe}`} key="vibe">
+    </section> : view === "vibe" ? <section className={`${styles.step} ${styles.vibe}`} key="vibe">
+      {programmeStatus}
       <p className={styles.muted}>{source?.name}{sourceVenueType ? ` · ${sourceVenueType}` : null}</p>
-      {sourceProgrammes.length ? <label className={styles.sourceReference}>
+      {programmesStatus === "ready" && sourceProgrammes.length ? <label className={styles.sourceReference}>
         <span>{t("sourceReference")}</span>
         <select value={currentReference} onChange={event => setSourceReference(event.target.value)}>
           <option value="">{t("sourceAutomatic")}</option>
@@ -300,13 +310,15 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
       <button type="button" className={styles.choice} disabled={sourceLookupLoading && !sourceContextUsable} onClick={() => chooseVibe("same")}><Music2 size={27} aria-hidden="true" /><span><strong>{t("same")}</strong><small>{t("sameHint")}</small></span></button>
       <button type="button" className={styles.choice} disabled={sourceLookupLoading && !sourceContextUsable} onClick={() => chooseVibe("different")}><Shuffle size={27} aria-hidden="true" /><span><strong>{t("different")}</strong><small>{t("differentHint")}</small></span></button>
       {sourceLookupFailed ? <p className={`${styles.muted} ${styles.vibeNote}`} role="status">{t("musicLookupFailed")}</p>
-        : !sourceLookupLoading && !sourceContextUsable ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("unknownVibe")}</p>
+        : programmesStatus === "ready" && !sourceLookupLoading && !sourceContextUsable ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("unknownVibe")}</p>
           : !sourceLookupLoading && source?.event && !sourceGenres.length ? <p className={`${styles.muted} ${styles.vibeNote}`}>{t("musicUnknown")}</p> : null}
       <div className={styles.lookupActions}>
         <button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} aria-hidden="true" /></button>
         {sourceLookupFailed ? <button type="button" className={styles.textButton} onClick={() => setSourceLookupAttempt(attempt => attempt + 1)}>{t("refresh")}</button> : null}
       </div>
-    </section> : <section className={`${styles.step} ${styles.results}`} key="results">
+    </section> : view === "programme-status" ? <section className={styles.step}>{programmeStatus}</section>
+      : view === "music-status" ? <section className={styles.step} role="status">{t("musicLookup")}</section>
+      : <section className={`${styles.step} ${styles.results}`} key="results">
       <div className={styles.footer}>
         {destination ? <Link href={localizeHref(destinationEvent ? `/events/${destinationEvent.id}` : `/venues/${destination.id}`, locale)} className={styles.eventLink}>{t(destinationEvent ? "details" : "venueDetails")}<ArrowRight size={13} aria-hidden="true" /></Link> : <span />}
         <button type="button" className={styles.textButton} onClick={reset}>{t("reset")}</button>
@@ -343,7 +355,7 @@ export function CompassFlow({ places, programmesStatus, onRefresh }: { places: C
         </div>
         <div className={`${styles.actions} ${styles.routeActions}`}><button className={styles.primary} type="button" disabled={routeStatus === "loading"} onClick={showRoute} onFocus={warmRouteMap} onPointerEnter={warmRouteMap} onPointerDown={warmRouteMap} ref={routeButton} aria-controls="where-next-direction" aria-expanded={routeVisible}><Route size={17} aria-hidden="true" />{t(routeStatus === "loading" ? "routeLoading" : "route")}</button><YandexTaxiButton latitude={destination.latitude} longitude={destination.longitude} venueName={destination.name} /></div>
         <div className={styles.pagination}><button type="button" className={styles.secondary} disabled={index === 0} onClick={() => { void enableCompass(true); setIndex((value) => value - 1); }} aria-label={t("previous")}><ArrowLeft size={17} aria-hidden="true" /></button><button type="button" className={styles.secondary} disabled={index >= candidates.length - 1} onClick={() => { void enableCompass(true); setIndex((value) => value + 1); }}>{t("nextPlace")}<ArrowRight size={17} aria-hidden="true" /></button><span className={styles.muted}>{Math.min(index + 1, candidates.length)} / {candidates.length}</span></div>
-      </> : <><h2 className={styles.title}>{t("empty")}</h2><p className={styles.intro}>{t("emptyHint")}</p><button className={styles.secondary} type="button" onClick={() => { setNow(Date.now()); onRefresh(); }}>{t("refresh")}</button>{vibe !== "nearby" ? <div><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></div> : null}</>}
+      </> : <><h2 className={styles.title}>{t("empty")}</h2><p className={styles.intro}>{t("emptyHint")}</p><button className={styles.secondary} type="button" onClick={() => { setNow(Date.now()); onRetryProgrammes(); }}>{t("refresh")}</button>{vibe !== "nearby" ? <div><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></div> : null}</>}
     </section>}
   </main>;
 }

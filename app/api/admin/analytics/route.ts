@@ -19,14 +19,17 @@ export async function GET(request: NextRequest) {
   const start = request.nextUrl.searchParams.get("start") ?? "";
   const end = request.nextUrl.searchParams.get("end") ?? "";
   const group = request.nextUrl.searchParams.get("group") as AnalyticsGroup;
+  const travel = request.nextUrl.searchParams.get("view") === "travel";
   try {
-    if (!["hour", "day", "month"].includes(group)) throw new Error("Choose hourly, daily, or monthly grouping.");
-    getAnalyticsRange(start, end, group);
+    if (!travel && !["hour", "day", "month"].includes(group)) throw new Error("Choose hourly, daily, or monthly grouping.");
+    const range = getAnalyticsRange(start, end, travel ? "day" : group);
+    if (travel && range.days > 31) throw new Error("Choose at most 31 days.");
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid date range." }, { status: 400, headers });
   }
   try {
     const client = await createAuthenticatedConvexHttpClient();
+    if (travel) return NextResponse.json(await client.query(api.analytics.travelReport, { start, end }), { headers });
     const report = await client.action(api.analytics.report, { start, end, group });
     return NextResponse.json(report, { headers });
   } catch (error) {

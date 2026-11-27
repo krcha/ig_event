@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import * as accountResearch from "../convex/performerAccountResearch.ts";
+import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
 import { getFunctionName } from "convex/server";
 import { listDailyInputs } from "../convex/eventDiscovery.ts";
 import {
@@ -68,16 +70,20 @@ function memory() {
         writes.push(["delete", id]);
       },
       query(name) {
+        let selectedIndex;
         let predicates = [],
           desc = false;
         const rows = () => {
           const out = [...table(name).values()].filter((r) =>
             predicates.every((f) => f(r)),
           );
+          if (selectedIndex === "by_account_priority") out.sort((a,b)=>a.accountRank.tier-b.accountRank.tier || a.accountRank.order-b.accountRank.order);
+          if (selectedIndex === "by_profile_date_event") out.sort((a,b)=>a.date.localeCompare(b.date) || a.eventId.localeCompare(b.eventId));
           return desc ? out.reverse() : out;
         };
         return {
           withIndex(index, cb) {
+            selectedIndex = index;
             const b = {};
             for (const [k, fn] of Object.entries({
               eq: (a, b) => a === b,
@@ -947,6 +953,137 @@ try {
   console.log(
     "Performer registry QA passed: external identity and source scope, dominant genres, multi-act abstention, retraction, bounded wake and resumable backfill.",
   );
+  // Real account/role and explicit cross-directory identity controls.
+  const vk = "vukashii", dj = "https://djs.rs/vukashi", self = "https://www.instagram.com/vukashii/";
+  const source = {genre:"drum-and-bass",url:dj,quote:`"knowsAbout":["Dubstep","Bass House","Drum'n'bass"]`};
+  const project = (genre, identityLink) => validateAccountEvidence({handle:vk, genres:[genre],identityLink},vk,"Vukashi").genres;
+  assert.equal(project(source,{url:dj,quote:self}).length,1);
+  assert.equal(project(source,{url:dj,quote:self+"guest/"}).length,0);
+  assert.equal(project({...source,url:"https://djs.rs/another-dj"},{url:dj,quote:self}).length,0);
+  const apple="https://music.apple.com/rs/artist/vukashi/1234";
+  const mb="https://musicbrainz.org/artist/e25d9d2a-4a90-4471-ac92-3ef5e19b72ca/url";
+  const structured={genre:"house",url:apple,quote:"Genre: House"};
+  assert.equal(project(structured,{url:mb,quote:JSON.stringify([self,apple])}).length,1);
+  const catalog = {genre:"folk",url:"https://itunes.apple.com/lookup?id=1234",quote:'"primaryGenreName":"Folk"'};
+  assert.equal(project(catalog,{url:mb,quote:JSON.stringify([self,"https://music.apple.com/ca/artist/1234"])}).length,1);
+  assert.equal(project(catalog,{url:mb,quote:JSON.stringify([self,"https://itunes.apple.com/artist/id12345"])}).length,0);
+  assert.equal(project(structured,{url:mb,quote:JSON.stringify([self,apple+"5"])}).length,0);
+  for (const quote of ["I am not a techno DJ","Tonight: a guest techno DJ","Favourite techno playlist","My sister is a techno DJ"]) {
+    assert.equal(project({genre:"techno",url:self,quote}).length,0,quote);
+  }
+
+  const selfIdentity={url:self,quote:"#musician #singer #northband"};
+  const precise={handle:vk,displayName:{value:"Kaja Vala",url:self,quote:"Kaja Vala (@vukashii) • Instagram photos and videos"},identityLink:selfIdentity};
+  const report={genre:"pop",url:"https://live-music.org/interviews/kaja",quote:'Kaja Vala, mlada pop pjevačica iz Zagreba, koja je sa svojim bendom "North bend" nastupala.'};
+  assert.equal(validateAccountEvidence({...precise,genres:[report]},vk).genres.length,1);
+  for (const fault of [{...report,quote:report.quote.replace("Kaja Vala","Maja Vala")},{...report,quote:report.quote.replace("North bend","South bend")},
+    {...report,quote:report.quote.replace("pop pjevačica","pevačica").replace("North bend","North pop bend")}]) {
+    assert.equal(validateAccountEvidence({...precise,genres:[fault]},vk).genres.length,0);
+  }
+  assert.equal(validateAccountEvidence({...precise,identityLink:{url:self,quote:"my friend's #northband #singer"},genres:[report]},vk).genres.length,0);
+
+  const q=memory();
+  q.put("venues",{_id:"venue-a",publicStatus:"published"});
+  let time=Date.parse("2026-11-27T19:00:00+01:00");
+  Date.now=()=>time;
+  const owner="12345678-1234-4234-9234-123456789abc";
+  const serviceSecret="qa-account-local-profiles";
+  const envSecret=process.env.CRON_SECRET;
+  process.env.CRON_SECRET=serviceSecret;
+  try {
+    async function booking(id,handle,date,at) {
+      const artists=["@"+handle];
+      const e=pub(id,artists,{date,title:"DJ "+artists[0],time:at,timeStatus:"confirmed",sourceCaption:"DJ "+artists[0],
+        normalizedFieldsJson:JSON.stringify({identityEvidenceVerified:true,sourceGroundingArtistsVerified:true,artists})});
+      q.put("events",e);
+      await syncPerformerRegistryForEvent(q.ctx,id);
+      return e;
+    }
+    await booking("previous-account","pastaccount","2026-11-01","18:00");
+    for(let i=0;i<15;i++) await booking("later-account-"+i,"busyaccount","2026-12-08","18:00");
+    await booking("beyond-48h","boundaryaccount","2026-11-29","19:00");
+    const near=await booking("imminent-account","nearaccount","2026-11-29","18:59");
+    async function drainRanks() {
+      while (q.jobs.length) {
+        const job=q.jobs.shift();
+        if (job.name==="performerAccountResearch:advanceRank") await accountResearch.advanceRank._handler(q.ctx,job.args);
+      }
+    }
+    const rpc={serviceSecret,owner};
+    const claim=phase=>accountResearch.claim._handler(q.ctx,{...rpc,phase});
+    assert.equal(await claim("instagram"),null,"Complete ranking across all pages before selection");
+    await drainRanks();
+    const nearProfile=[...q.table("performerRegistryProfiles").values()].find(p=>p.instagramHandle==="nearaccount");
+    assert.equal(nearProfile.accountRank.tier,0);
+    assert.equal([...q.table("performerRegistryProfiles").values()].find(p=>p.instagramHandle==="busyaccount").accountRank.order,-15);
+    assert.equal([...q.table("performerRegistryProfiles").values()].find(p=>p.instagramHandle==="boundaryaccount").accountRank.tier,1);
+    assert(q.pages.some(p=>p.table==="performerRegistryAppearances" && p.numItems===12));
+    const historical=[...q.table("performerRegistryProfiles").values()].find(p=>p.instagramHandle==="pastaccount");
+    const priorRank=historical.accountRank;
+    historical.accountRank={...priorRank,ready:false};
+    const due=await claim("instagram");
+    historical.accountRank=priorRank;
+    assert.equal(due.handle,"nearaccount");
+    const args={...rpc,handle:due.handle,profileId:due.profileId};
+    const proof={handle:due.handle,displayName:{value:"Near Account",url:"https://www.instagram.com/nearaccount/",quote:"Near Account (@nearaccount) • Instagram photos and videos"},genres:[]};
+    await accountResearch.complete._handler(q.ctx,{...args,evidence:proof,outcome:"success"});
+    assert.equal(q.table("eventDiscoveryEnrichmentState").size,0,"Free IG cannot charge the model");
+    const paid=await claim("web");
+    assert.equal(paid.handle,due.handle);
+    assert.equal(await accountResearch.reserveSearch._handler(q.ctx,args),true);
+    assert.equal(await accountResearch.reserveSearch._handler(q.ctx,args),false);
+    const budget=[...q.table("eventDiscoveryEnrichmentState").values()][0];
+    assert.equal(budget.attempted,1);
+    const style={genre:"house",url:proof.displayName.url,quote:"I am primarily a house DJ.",dominant:true};
+    const result=await accountResearch.complete._handler(q.ctx,{...args,outcome:"success",evidence:{...proof,genres:[style]}});
+    assert.equal(result.status,"written");
+    assert.equal((await accountResearch.complete._handler(q.ctx,{...args,outcome:"success",evidence:proof})).status,"stale");
+    assert.equal((await accountResearch.recordReviewedEvidence._handler(q.ctx,{evidence:{...proof,genres:[style]},apply:true})).status,"unchanged");
+    assert.equal((await readProfile._handler(q.ctx,{profileId:nearProfile._id})).primaryGenre,"house");
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,near)).matches[0].genre,"house");
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,near)).category,undefined);
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,{...near,title:"Special tribute set by @nearaccount"})).matches.length,0);
+    const next=await claim("instagram");
+    assert.equal(next.handle,"busyaccount","Future appearance count precedes later single bookings and historical-only handles");
+    const busyArgs={...rpc,handle:next.handle,profileId:next.profileId};
+    await accountResearch.complete._handler(q.ctx,{...busyArgs,outcome:"success"});
+    budget.attempted=96;
+    assert.equal(await claim("web"),null);
+    assert.equal((await claim("instagram")).handle,"boundaryaccount","Exhausted paid budget permits free account reads");
+    assert.equal(budget.attempted,96);
+    budget.attempted=95;
+    assert.equal((await claim("web")).handle,"busyaccount");
+    assert.equal(await accountResearch.reserveSearch._handler(q.ctx,busyArgs),true);
+    await accountResearch.complete._handler(q.ctx,{...busyArgs,outcome:"success"});
+    assert.equal(budget.attempted,96);
+    assert.equal(await claim("web"),null);
+    assert.equal((await q.ctx.db.get(next.profileId)).accountWork.stage,"waiting");
+    assert.equal((await q.ctx.db.get(next.profileId)).accountWork.retryAt,time+14*86400000);
+    function billedAlias(id,name,handle) {
+      const artists=[name+" (@"+handle+")"];
+      return pub(id,artists,{title:"Live: "+name,sourceCaption:"Live: "+artists[0],
+        normalizedFieldsJson:JSON.stringify({artists,identityEvidenceVerified:true,sourceGroundingArtistsVerified:true})});
+    }
+    const origin=billedAlias("alias-original","DOO","nearaccount");
+    q.put("events",origin);
+    q.put("performerRegistryAppearances",{_id:"alias-old",eventId:origin._id,eventUpdatedAt:origin.updatedAt,
+      profileId:nearProfile._id,handle:"nearaccount",name:"DOO",nameKey:"doo",confirmedBilling:true,date:origin.date,
+      independent:false,status:"announced",venue:origin.venue,venueId:origin.venueId});
+    const same=billedAlias("alias-next","DOO","nearaccount");
+    q.put("events",same);
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,same)).matches[0]?.genre,"house","Verified earlier alias survives the exact account's public display-name update");
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,billedAlias("same-first","Unrelated Guest","nearaccount"))).matches.length,0);
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,billedAlias("other-account","DOO","differentaccount"))).matches.length,0);
+    const s=await q.ctx.db.get(origin._id);s.status="pending";
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,same)).matches.length,0,"A withdrawn billing cannot corroborate an alias");
+    s.status="approved";
+    await syncPerformerRegistryForEvent(q.ctx,same._id);
+    assert.equal([...q.table("performerRegistryAppearances").values()].find(a=>a.eventId===same._id)?.profileId,nearProfile._id);
+    assert.equal((await lookupPerformerRegistryProgramme(q.ctx,billedAlias("styled","N e a r A c c o u n t","nearaccount"))).matches[0]?.genre,"house");
+  } finally {
+    if (envSecret===undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET=envSecret;
+  }
+
 } finally {
   Date.now = now;
 }

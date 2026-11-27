@@ -620,7 +620,7 @@ console.log("Calendar navigation QA passed: one responsive tree, compact metadat
       calls.push(args);
       if (fail) throw new Error("unavailable");
       return args.cursor === null ? { page: [], isDone: false, continueCursor: "page2" }
-        : { page: [{ _id: args.fromDate }], isDone: true, continueCursor: "" };
+        : { page: calendarWindows.buildPublicCalendarDateWindows(args.fromDate, args.beforeDate, 1).map(day => ({ _id: day.fromDate, date: day.fromDate })), isDone: true, continueCursor: "" };
     } finally { active--; }
   } };
   const window = { fromDate: "2026-11-27", beforeDate: "2026-12-11" };
@@ -628,11 +628,11 @@ console.log("Calendar navigation QA passed: one responsive tree, compact metadat
   assert.equal(first.events.length, 14);
   assert.deepEqual(concurrent, first);
   assert.equal(peak, 2);
-  assert.equal(calls.length, 28, "Two references share all reads, including continuations after an empty page.");
+  assert.equal(calls.length, 10, "Two references share all reads, including continuations after an empty page.");
   assert.deepEqual(await loadRecommendationWindow(client, window), first);
-  assert.equal(calls.length, 28);
+  assert.equal(calls.length, 10);
   const overlap = await loadRecommendationWindow(client, { fromDate: "2026-11-28", beforeDate: "2026-12-12" });
-  assert.equal(calls.length, 30, "Changing the reference day reloads only the new day.");
+  assert.equal(calls.length, 12, "Changing the reference day reloads only the new day.");
   assert.equal(overlap.events[0]._id, "2026-11-28");
   const isolated = { ...client, url: "https://other.example" };
   fail = true;

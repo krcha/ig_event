@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { invalidateAccountRank } from "./performerAccountQueue";
 import { loadScopedPerformerHandles } from "./occurrencePerformerCredits";
 import type { PerformerHandleCredit } from "../lib/taxonomy/performer-genre-research";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -12,6 +13,7 @@ import { internal } from "./_generated/api";
 import { schedulePublishedDiscovery } from "./internal/schedulePublishedDiscovery";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
 import {
+  accountEvidence,
   performerBackfillPhase,
   performerEvidence,
 } from "./performerRegistryValues";
@@ -115,15 +117,32 @@ function namedProfiles(ctx: ReadCtx, nameKey: string, limit: number) {
   return ctx.db.query("performerRegistryProfiles").withIndex("by_name", q =>
     q.eq("nameKey", nameKey).gt("independentAppearances", 0)).take(limit);
 }
-async function currentBilling(ctx: ReadCtx, a: Appearance, handle: string): Promise<boolean> {
+async function currentBilling(ctx: ReadCtx, a: Appearance, handle: string, loaded?: Event): Promise<boolean> {
   if (a.handle !== handle) return false;
-  const event = await ctx.db.get(a.eventId);
+  const event = loaded ?? await ctx.db.get(a.eventId);
   if (!event || event.updatedAt !== a.eventUpdatedAt || !(await eligible(ctx, event))) return false;
   const { label } = await evidenceInputs(ctx, event._id);
   if (!musicCompatible(event, label)) return false;
   const scoped = await loadScopedPerformerHandles(ctx, event);
   const credit = registryCredits(registryBilledArtists(event), scoped).find(c => c.key === a.nameKey && c.handle === handle);
   return !!credit && confirmsBillingHandle(event, credit, scoped);
+}
+/** Scoped billing can reuse an artist's documented name or their confirmed billing alias on the very same account. */
+async function matchesAccountName(ctx:ReadCtx, profile:Profile, credit:Credit, handle:string, verified:boolean) {
+  if (credit.key===profile.nameKey || credit.name.toLowerCase()==="@"+handle || profile.name.toLowerCase()==="@"+handle) return true;
+  if (!verified || profile.instagramHandle!==handle) return false;
+  const display=profile.accountEvidence?.handle===handle ? profile.accountEvidence.displayName?.value : undefined;
+  const compact=(v:string)=>normalizeTaxonomyText(v.normalize("NFKC")).replaceAll(" ","");
+  if (display && (credit.key===normalizeTaxonomyText(display) || (compact(credit.name).length>=4 && compact(credit.name)===compact(display)))) return true;
+  const aliases=await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing_name",q=>
+    q.eq("profileId",profile._id).eq("handle",handle).eq("nameKey",credit.key).eq("confirmedBilling",true)).order("desc").take(MAX_SOURCES);
+  for (const a of aliases) if (await currentBilling(ctx,a,handle)) return true;
+  return false;
+}
+
+export async function currentAccountAppearance(ctx:ReadCtx,a:Appearance,handle:string,event?:Event) {
+  if (a.confirmedBilling && await currentBilling(ctx,a,handle,event)) return true;
+  return a.evidence?.verifiedHandle===handle && (await liveEvidence(ctx,a,new Map()))?.verifiedHandle===handle;
 }
 function profileSources(
   ctx: ReadCtx,
@@ -146,10 +165,11 @@ function profileSources(
         .order("desc")
         .take(MAX_SOURCES);
 }
-async function visibleInstagramHandle(ctx: ReadCtx, profile: Profile, sources: RegistryEvidence[]): Promise<string | null> {
+export async function visibleInstagramHandle(ctx: ReadCtx, profile: Profile, sources: RegistryEvidence[]): Promise<string | null> {
   const handle = profile.instagramHandle ?? (profile.identityKey.startsWith("handle:") ? registryInstagramHandle(profile.identityKey.slice(7)) : undefined);
   if (!handle) return null;
-  if (sources.some(s => s.verifiedHandle === handle)) return handle;
+  if (sources.some(s => s.verifiedHandle === handle) || (profile.accountEvidence?.handle===handle &&
+      (profile.accountEvidence.displayName || profile.accountEvidence.genres.length))) return handle;
   const bills = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing", q =>
     q.eq("profileId", profile._id).eq("handle", handle).eq("confirmedBilling", true)).order("desc").take(MAX_SOURCES);
   for (const a of bills) if (await currentBilling(ctx, a, handle)) return handle;
@@ -255,8 +275,7 @@ async function resolveCredit(
   if (profiles.length !== 1) return;
   const p = profiles[0];
   if (credit.handle && p.instagramHandle && credit.handle !== p.instagramHandle) return;
-  if (credit.handle && credit.key !== p.nameKey && credit.name.toLowerCase() !== "@" + credit.handle &&
-      p.name.toLowerCase() !== "@" + credit.handle) return;
+  if (credit.handle && !await matchesAccountName(ctx,p,credit,credit.handle,targetBilling)) return;
   const context = getEventDiscoveryTaxonomy(event);
   const mayRepeat =
     !credit.handle &&
@@ -301,6 +320,14 @@ async function resolveCredit(
       independentSources(proof) &&
       proof.role?.category === context.primaryCategory;
     if (handle || linked || recurring) supported.push(proof);
+  }
+  const account = p.accountEvidence;
+  const specialProgramme = /\b(?:tribute|homm?age|listening (?:party|session)|cover (?:night|set)|album playback|filmsk[aoi] projekcij\w*|vece posveceno)\b/u.test(
+    normalizeTaxonomyText([event.title,event.description].filter(Boolean).join(" ")));
+  if (!specialProgramme && targetBilling && credit.handle && account?.handle === credit.handle && account.genres.length) {
+    supported.push({kind:"web",verifiedHandle:credit.handle,profileUrl:"https://www.instagram.com/"+credit.handle+"/",
+      identity:account.displayName ? {url:account.displayName.url,quote:account.displayName.quote} : {url:"https://www.instagram.com/"+credit.handle+"/",quote:"@"+credit.handle},
+      genres:account.genres.map(g=>({genre:g.genre,url:g.url,quote:g.quote,dominant:g.dominant===true}))});
   }
   if (supported.length)
     return { profileId: p._id, supported, primaryGenre: p.primaryGenre };
@@ -438,6 +465,11 @@ export async function lookupPerformerRegistrySearchHints(
   return hints;
 }
 
+export function primaryGenreForProfile(support: Profile["support"], sources: NonNullable<Profile["accountEvidence"]>["genres"]) {
+  const styles = new Set([...support.filter(s=>s.dominant>0).map(s=>s.genre),...sources.filter(s=>s.dominant).map(s=>s.genre)]);
+  return styles.size === 1 ? [...styles][0] : undefined;
+}
+
 async function updateSupport(
   ctx: MutationCtx,
   profileId: Profile["_id"],
@@ -466,21 +498,21 @@ async function updateSupport(
   const independentAppearances =
     profile.independentAppearances + (newProof ? 1 : 0) - (oldProof ? 1 : 0);
   const support = MUSIC_GENRES.flatMap(({ key }) => counts.get(key) ?? []);
-  const primary = support.filter((s) => s.dominant > 0);
+
   await ctx.db.patch(profileId, {
     support,
     independentAppearances,
-    primaryGenre: primary.length === 1 ? primary[0].genre : undefined,
+    primaryGenre: primaryGenreForProfile(support,profile.accountEvidence?.genres ?? []),
   });
 }
 type RegistryChanges = { profilesCreated: number; handlesAdded: number; handlesCleared: number; billingLinksWritten: number };
 const emptyChanges = (): RegistryChanges => ({ profilesCreated: 0, handlesAdded: 0, handlesCleared: 0, billingLinksWritten: 0 });
-async function attachProfileHandle(ctx: MutationCtx, profile: Profile, credit: Credit, changes: RegistryChanges, handle?: string) {
+async function attachProfileHandle(ctx: MutationCtx, profile: Profile, credit: Credit, changes: RegistryChanges, handle?: string, verified=false) {
   if (handle && profile.instagramHandle && handle !== profile.instagramHandle) return;
   if (handle && profile.identityKey.startsWith("handle:") && profile.identityKey !== "handle:" + handle) return;
   const sameName = credit.key === profile.nameKey || credit.name.toLowerCase() === "@" + handle;
   const upgradeName = !!handle && profile.name.toLowerCase() === "@" + handle && !credit.name.startsWith("@");
-  if (handle && !sameName && !upgradeName) return;
+  if (handle && !sameName && !upgradeName && !await matchesAccountName(ctx,profile,credit,handle,verified)) return;
   if (upgradeName || (handle && profile.instagramHandle !== handle)) {
     if (handle && !profile.instagramHandle) changes.handlesAdded++;
     await ctx.db.patch(profile._id, { ...(handle ? { instagramHandle: handle } : {}),
@@ -508,7 +540,7 @@ async function ensureProfile(
   const exact = new Map([byAccount[0], byUrl, byOriginalKey].filter((p): p is Profile => !!p).map(p => [p._id, p]));
   if (exact.size > 1) return;
   const stored = [...exact.values()][0];
-  if (stored) return attachProfileHandle(ctx, stored, namedCredit, changes, handle);
+  if (stored) return attachProfileHandle(ctx, stored, namedCredit, changes, handle, billed || proof?.verifiedHandle===handle);
 
   // A common display name is never sufficient to attach a social account or carry a style.
   const named = await namedProfiles(ctx, credit.key, 4);
@@ -527,7 +559,7 @@ async function ensureProfile(
     }
   }
   if (candidates.length > 1) return;
-  if (candidates.length) return attachProfileHandle(ctx, candidates[0], namedCredit, changes, handle);
+  if (candidates.length) return attachProfileHandle(ctx, candidates[0], namedCredit, changes, handle, billed || proof?.verifiedHandle===handle);
   if (!proof && named.some(p => !p.instagramHandle)) return;
   changes.profilesCreated++;
   if (handle) changes.handlesAdded++;
@@ -539,7 +571,7 @@ async function ensureProfile(
 
 async function clearWithdrawnHandle(ctx: MutationCtx, profileId: Profile["_id"], changes: RegistryChanges) {
   const p = await ctx.db.get(profileId);
-  if (!p?.instagramHandle) return;
+  if (!p?.instagramHandle || p.accountEvidence?.handle===p.instagramHandle) return;
   const handle = p.instagramHandle;
   const billed = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing", q =>
     q.eq("profileId", profileId).eq("handle", handle).eq("confirmedBilling", true)).take(1);
@@ -585,6 +617,7 @@ export async function syncPerformerRegistryForEvent(
   let linkedDuringBackfill = false;
   const wakes = new Map<string, WakeKey>();
   const previousProfileIds = new Set<Profile["_id"]>();
+  const changedBillings = new Set<Profile["_id"]>();
   const pending = new Map(
     previous.map((a) => [JSON.stringify([a.nameKey, a.handle ?? null]), a]),
   );
@@ -638,6 +671,8 @@ export async function syncPerformerRegistryForEvent(
         if (old.profileId) previousProfileIds.add(old.profileId);
         await ctx.db.replace(_id, data);
       } else await ctx.db.insert("performerRegistryAppearances", data);
+      if (profileId && (data.confirmedBilling || proof?.verifiedHandle)) changedBillings.add(profileId);
+      if (old?.profileId && (old.confirmedBilling || old.evidence?.verifiedHandle)) changedBillings.add(old.profileId);
       if (
         wakeBackfilledLink &&
         !proof &&
@@ -676,11 +711,13 @@ export async function syncPerformerRegistryForEvent(
     wakeKeys(wakes, old.nameKey, old.evidence);
     if (old.confirmedBilling && old.handle && old.evidence) wakes.set("handle:" + old.handle, { kind: "handle", value: old.handle });
     if (old.profileId) previousProfileIds.add(old.profileId);
+    if (old.profileId && (old.confirmedBilling || old.evidence?.verifiedHandle)) changedBillings.add(old.profileId);
     await ctx.db.delete(old._id);
     if (old.profileId && old.evidence)
       await updateSupport(ctx, old.profileId, old.evidence);
   }
   for (const id of previousProfileIds) await clearWithdrawnHandle(ctx, id, changes);
+  for (const id of changedBillings) await invalidateAccountRank(ctx,id);
   if (linkedDuringBackfill) await schedulePublishedDiscovery(ctx, eventId);
   for (const key of wakes.values()) {
     await ctx.scheduler.runAfter(
@@ -936,6 +973,7 @@ export const readProfile = internalQuery({
       name: v.string(),
       instagramHandle: v.optional(v.union(v.string(), v.null())),
       genres: v.array(musicGenre),
+      accountEvidence: v.optional(accountEvidence),
       primaryGenre: v.union(musicGenre, v.null()),
       sources: v.array(
         v.object({
@@ -970,17 +1008,21 @@ export const readProfile = internalQuery({
           evidence,
         });
     }
+    const instagramHandle = await visibleInstagramHandle(ctx, p, sources.map(s=>s.evidence));
+    const account = instagramHandle && p.accountEvidence?.handle === instagramHandle ? p.accountEvidence : undefined;
     const genres = [
-      ...new Set(sources.flatMap((s) => s.evidence.genres.map((g) => g.genre))),
+      ...new Set([...sources.flatMap((s) => s.evidence.genres.map((g) => g.genre)),...(account?.genres.map(g=>g.genre) ?? [])]),
     ];
     const dominant = new Set(
       sources.flatMap((s) =>
         s.evidence.genres.filter((g) => g.dominant).map((g) => g.genre),
       ),
     );
+    for (const g of account?.genres ?? []) if (g.dominant) dominant.add(g.genre);
     return {
       name: p.name,
-      instagramHandle: await visibleInstagramHandle(ctx, p, sources.map(s => s.evidence)),
+      instagramHandle,
+      ...(account ? {accountEvidence:account} : {}),
       genres,
       primaryGenre:
         p.primaryGenre && dominant.has(p.primaryGenre) && dominant.size === 1
@@ -1052,7 +1094,7 @@ export const wakeAffectedAppearances = internalMutation({
   args: {
     kind: v.union(v.literal("name"), v.literal("handle")),
     value: v.string(),
-    sourceEventId: v.id("events"),
+    sourceEventId: v.optional(v.id("events")),
     fromDate: v.string(),
     cursor: v.union(v.string(), v.null()),
   },

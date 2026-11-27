@@ -1,8 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { acquisitionIssue, apifyAcquisitionReceipt } from "./internal/durableAcquisitionValues";
-import { analyticsEventFields } from "./analyticsValidators";
-import { performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
+import { analyticsEventFields, travelCounts } from "./analyticsValidators";
+import { accountEvidence, accountRank, accountWork, performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 
 const eventStatus = v.union(
@@ -114,6 +114,7 @@ const reconciliationVerifiedOperationKind = v.union(
 );
 
 export default defineSchema({
+  travelDailyMetrics: defineTable({ day: v.string(), ...travelCounts }).index("by_day_stage", ["day", "stage"]),
   analyticsEvents: defineTable(analyticsEventFields)
     .index("by_at", ["at"])
     .index("by_eventId", ["eventId"])
@@ -411,10 +412,15 @@ export default defineSchema({
   performerRegistryProfiles: defineTable({
     identityKey: v.string(), name: v.string(), nameKey: v.string(),
     instagramHandle: v.optional(v.string()),
+    accountEvidence: v.optional(accountEvidence), accountRank: v.optional(accountRank), accountWork: v.optional(accountWork),
     support: v.array(performerSupport), primaryGenre: v.optional(musicGenre),
     independentAppearances: v.number(),
   }).index("by_identity", ["identityKey"]).index("by_name", ["nameKey", "independentAppearances"])
-    .index("by_instagram_handle", ["instagramHandle"]),
+    .index("by_instagram_handle", ["instagramHandle"])
+    .index("by_account_pending", ["accountRank.ready"])
+    .index("by_account_refresh", ["accountRank.refreshAt"])
+    .index("by_account_retry", ["accountWork.retryAt"])
+    .index("by_account_priority", ["accountRank.ready", "accountWork.stage", "accountRank.tier", "accountRank.order"]),
   performerRegistryAppearances: defineTable({
     eventId: v.id("events"), eventUpdatedAt: v.number(), name: v.string(), nameKey: v.string(),
     handle: v.optional(v.string()), confirmedBilling: v.optional(v.literal(true)), profileId: v.optional(v.id("performerRegistryProfiles")),
@@ -426,6 +432,8 @@ export default defineSchema({
     .index("by_profile_evidence", ["profileId", "independent", "date"])
     .index("by_profile_verified_handle", ["profileId", "evidence.verifiedHandle"])
     .index("by_profile_billing", ["profileId", "handle", "confirmedBilling"])
+    .index("by_profile_billing_name", ["profileId", "handle", "nameKey", "confirmedBilling"])
+    .index("by_profile_date_event", ["profileId", "date", "eventId"])
     .index("by_profile_venue_evidence", ["profileId", "venueId", "independent", "date"])
     .index("by_name_date", ["nameKey", "date"]).index("by_handle_date", ["handle", "date"]),
   performerRegistryBackfill: defineTable({
