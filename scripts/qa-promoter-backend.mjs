@@ -15,6 +15,7 @@ import { syncVenueRecordIdentities } from "../convex/venueIdentities.ts";
 import {
   getPublicVenuePage,
   listPublicVenueDirectory,
+  listPublicCompassVenues,
   listPublicVenueFields,
   listPublicVenueFieldsByIds,
   listScrapeActiveVenues,
@@ -317,7 +318,7 @@ try {
   }
 
   const publicFixture = fixture({ venues });
-  for (const query of [listPublicVenueFields, listPublicVenueDirectory]) {
+  for (const query of [listPublicVenueFields, listPublicVenueDirectory, listPublicCompassVenues]) {
     const rows = await query._handler(publicFixture.ctx, { today: "2026-10-18" });
     assert.deepEqual(rows.map((row) => row._id), [physical._id]);
   }
@@ -476,6 +477,8 @@ try {
       const time = getDisplayEventTime(row.time);
       return {
         _id: row._id, title: row.title, venue, date: row.date, ...(time ? { time } : {}),
+        ...(row.venueId ? { venueId: row.venueId } : {}),
+        ...(row.performerGenreResearch?.sources.length ? { genreResearched: true } : {}),
         timeStatus: resolveEventTimeProvenance(row).status, status: row.status,
         eventTaxonomy: getEventDiscoveryTaxonomy({ ...row, venue }), genreEstimated: Boolean(row.performerGenreResearch?.estimated),
       };

@@ -1,6 +1,8 @@
-import { ConvexHttpClient } from "convex/browser";
 import { ArrowLeft, ArrowUpRight, MapPin } from "lucide-react";
 import type { Metadata } from "next";
+import { Suspense } from "react";
+import type { Locale } from "@/i18n/config";
+import type { ConvexHttpClient } from "convex/browser";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -9,7 +11,7 @@ import { CompassMatchSpectrum } from "@/components/travel/compass-match-spectrum
 import { localizeHref } from "@/i18n/config";
 import { getLocale } from "@/i18n/server";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
-import { getCalendarConvexUrl } from "@/lib/events/calendar-convex-url";
+import { getTravelReadClient } from "@/lib/travel/public-read-client";
 import { getDisplayEventTime } from "@/lib/events/event-time";
 import { addDaysToDateKey } from "@/lib/events/nightlife-date";
 import type { PublicEvent } from "@/lib/events/public-events";
@@ -33,9 +35,7 @@ export default async function CompareEventPage({ params }: PageProps) {
   const [{ eventId }, locale] = await Promise.all([params, getLocale()]);
   if (!isPlausibleConvexPublicId(eventId)) notFound();
 
-  const convexUrl = getCalendarConvexUrl();
-  if (!convexUrl) throw new Error("Convex is not configured yet.");
-  const client = new ConvexHttpClient(convexUrl);
+  const client = getTravelReadClient(AbortSignal.timeout(35_000));
   const reference = await client.query(
     api.events.getPublicApprovedEvent,
     { id: eventId, includeEventTaxonomy: true },
@@ -44,8 +44,6 @@ export default async function CompareEventPage({ params }: PageProps) {
 
   const now = Date.now();
   const window = getEventRecommendationWindow(reference.date, now);
-  const { events, error } = await loadRecommendationWindow(client, window);
-  const results = rankEventRecommendations(reference, events, now);
   const t = (key: Parameters<typeof travelText>[1]) => travelText(locale, key);
   const dateLabel = (date: string) => formatPublicDate(locale, date, { day: "numeric", month: "short" });
 
@@ -70,33 +68,46 @@ export default async function CompareEventPage({ params }: PageProps) {
         <p className="text-xs text-muted-foreground">{t("comparePeriod")} · {dateLabel(window.fromDate)} – {dateLabel(addDaysToDateKey(window.beforeDate, -1))}</p>
       </header>
 
-      {error ? <p role="status">{t("loadError")}</p> : (
-        <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-2">
-          {(["same", "different"] as const).map((mode) => (
-            <section key={mode} className="grid min-w-0 gap-3" aria-labelledby={`compare-${mode}`}>
-              <h2 className="text-xl font-semibold" id={`compare-${mode}`}>{t(mode)}</h2>
-              {results[mode].length ? (
-                <ul className="grid gap-2">
-                  {results[mode].map(({ event, match }) => {
-                    const time = event.timeStatus === "unknown" ? undefined : getDisplayEventTime(event.time);
-                    return (
-                      <li key={event._id} className="grid gap-3 rounded-xl border border-border bg-card p-3 sm:p-4">
-                        <Link className="group flex items-start justify-between gap-2 font-semibold hover:text-primary focus-visible:text-primary" href={localizeHref(`/events/${event._id}`, locale)} prefetch={false}>
-                          <span className="break-words">{event.title}</span><ArrowUpRight aria-hidden="true" size={18} className="shrink-0 text-muted-foreground group-hover:text-primary" />
-                        </Link>
-                        <p className="text-sm text-muted-foreground">
-                          {event.venue} · {dateLabel(event.date)}{time ? ` · ${time}` : ""}
-                        </p>
-                        <CompassMatchSpectrum score={match.score} reason={match.reason} locale={locale} />
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : <p className="text-sm text-muted-foreground">{t("noEventMatches")}</p>}
-            </section>
-          ))}
-        </div>
-      )}
+      <Suspense fallback={<p role="status">{t("loadingProgrammes")}</p>}>
+        <RecommendationResults client={client} reference={reference} window={window} now={now} locale={locale} />
+      </Suspense>
     </main>
+  );
+}
+
+async function RecommendationResults({ client, reference, window, now, locale }: {
+  client: ConvexHttpClient; reference: PublicEvent; window: ReturnType<typeof getEventRecommendationWindow>; now: number; locale: Locale;
+}) {
+  const { events, error } = await loadRecommendationWindow(client, window);
+  const t = (key: Parameters<typeof travelText>[1]) => travelText(locale, key);
+  if (error) return <p role="status">{t("loadError")}</p>;
+  const results = rankEventRecommendations(reference, events, now);
+  const dateLabel = (date: string) => formatPublicDate(locale, date, { day: "numeric", month: "short" });
+  return (
+    <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-2">
+      {(["same", "different"] as const).map((mode) => (
+        <section key={mode} className="grid min-w-0 gap-3" aria-labelledby={`compare-${mode}`}>
+          <h2 className="text-xl font-semibold" id={`compare-${mode}`}>{t(mode)}</h2>
+          {results[mode].length ? (
+            <ul className="grid gap-2">
+              {results[mode].map(({ event, match }) => {
+                const time = event.timeStatus === "unknown" ? undefined : getDisplayEventTime(event.time);
+                return (
+                  <li key={event._id} className="grid gap-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+                    <Link className="group flex items-start justify-between gap-2 font-semibold hover:text-primary focus-visible:text-primary" href={localizeHref(`/events/${event._id}`, locale)} prefetch={false}>
+                      <span className="break-words">{event.title}</span><ArrowUpRight aria-hidden="true" size={18} className="shrink-0 text-muted-foreground group-hover:text-primary" />
+                    </Link>
+                    <p className="text-sm text-muted-foreground">
+                      {event.venue} · {dateLabel(event.date)}{time ? ` · ${time}` : ""}
+                    </p>
+                    <CompassMatchSpectrum score={match.score} reason={match.reason} locale={locale} />
+                  </li>
+                );
+              })}
+            </ul>
+          ) : <p className="text-sm text-muted-foreground">{t("noEventMatches")}</p>}
+        </section>
+      ))}
+    </div>
   );
 }

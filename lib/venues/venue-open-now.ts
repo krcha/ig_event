@@ -188,8 +188,8 @@ export function getVenueClosingForEventStart(options: {
   date: string;
   startTime: string;
   venueHours?: VenueHoursCacheFields | null;
-}): { date: string; time: string } | null {
-  const closingMinutes = resolveVenueClosingMinutes(options, createBelgradeInstantResolver());
+}, resolveInstant = createBelgradeInstantResolver()): { date: string; time: string } | null {
+  const closingMinutes = resolveVenueClosingMinutes(options, resolveInstant);
   if (closingMinutes === null) {
     return null;
   }
@@ -255,6 +255,7 @@ function hasKnownHoursForDate(
 function getOpeningState(
   venueHours: VenueHoursCacheFields | null | undefined,
   now: Date | number,
+  resolveInstant = createBelgradeInstantResolver(),
 ): {
   current: BelgradeNow;
   open: boolean;
@@ -270,7 +271,6 @@ function getOpeningState(
     return { current, open: false, operatingStatus };
   }
   const nowTimestamp = now instanceof Date ? now.getTime() : now;
-  const resolveInstant = createBelgradeInstantResolver();
   const activeOpening = getOpeningIntervals(venueHours, current.date).find((interval) => {
     const start = resolveInstant(interval.start, "start");
     const end = resolveInstant(interval.end, "end");
@@ -284,8 +284,9 @@ function getOpeningState(
 export function isVenueOpenNow(
   venueHours: VenueHoursCacheFields | null | undefined,
   now: Date | number = Date.now(),
+  resolveInstant = createBelgradeInstantResolver(),
 ): boolean {
-  return getOpeningState(venueHours, now)?.open ?? false;
+  return getOpeningState(venueHours, now, resolveInstant)?.open ?? false;
 }
 
 export type OpenNowEventState = "active" | "possible" | "inactive";

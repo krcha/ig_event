@@ -15,5 +15,5 @@ export function getMobileNavigationHref(href: string, date: string | null): stri
 // shared toolbar's route cache. Only a deliberate public-tab intent prefetches.
 export function canPrefetchMobileNavigation(href: string): boolean {
   const path = href.split("?")[0].replace(/^\/(en|ru)(?=\/|$)/, "") || "/";
-  return ["/", "/discover", "/map"].includes(path);
+  return ["/", "/discover", "/map", "/next"].includes(path);
 }

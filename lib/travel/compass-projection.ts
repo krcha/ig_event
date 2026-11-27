@@ -1,4 +1,5 @@
 import type { PublicEvent } from "../events/public-events";
+import type { RecommendationCandidate } from "./event-recommendations";
 import { getEventDiscoveryTaxonomy, type MusicGenre } from "../taxonomy/event-discovery";
 import { compareMusicGenres } from "../taxonomy/music-genre-relations";
 import { getNightlifeDefaultDateKey, addDaysToDateKey } from "../events/nightlife-date";
@@ -13,20 +14,27 @@ export const COMPASS_HISTORY_DAYS = 30;
 const MAX_VENUE_PROGRAMMES = 12;
 const musical = (event: PublicEvent) => getEventDiscoveryTaxonomy(event).categories.some(category => category === "party" || category === "live");
 
-function programmeProfile(event: PublicEvent): CompassMusicProfile {
-  const genres = [...getEventDiscoveryTaxonomy(event).genres];
+type ProgrammeInput = PublicEvent | RecommendationCandidate;
+
+function evidenceFor(event: ProgrammeInput) {
+  if ("genreEstimated" in event) return event.genreEstimated ? "estimate" : event.genreResearched ? "research" : "announcement";
+  return event.performerGenreResearch?.estimated ? "estimate" : event.performerGenreResearch?.sources.length ? "research" : "announcement";
+}
+
+function programmeProfile(event: ProgrammeInput, taxonomy: ReturnType<typeof getEventDiscoveryTaxonomy>): CompassMusicProfile {
+  const genres = [...taxonomy.genres];
   return {
     genres, basis: "programme", eventCount: 1,
-    evidence: !genres.length ? "unknown" : event.performerGenreResearch?.estimated ? "estimate" : event.performerGenreResearch?.sources.length ? "research" : "announcement",
+    evidence: genres.length ? evidenceFor(event) : "unknown",
     fromDate: event.date, toDate: event.date, sources: [{ eventId: event._id, date: event.date }],
   };
 }
 
-export function projectCompassEvent(event: PublicEvent): CompassProgramme {
-  const taxonomy = getEventDiscoveryTaxonomy(event);
+export function projectCompassEvent(event: ProgrammeInput): CompassProgramme {
+  const taxonomy = "genreEstimated" in event ? event.eventTaxonomy : getEventDiscoveryTaxonomy(event);
   const time = event.timeStatus === "unknown" ? undefined : event.time;
   return { id: event._id, title: event.title, date: event.date, ...(time ? { time } : {}),
-    taxonomy, musicProfile: programmeProfile(event) };
+    taxonomy, musicProfile: programmeProfile(event, taxonomy) };
 }
 
 /** Historical context is never a claim about the music playing tonight. */
@@ -85,7 +93,7 @@ export function projectCompassMusicContext(rows: readonly PublicEvent[], now: nu
   return { musicProfile, ...(event ? { event } : {}) };
 }
 
-function projectCompassProgrammes(rows: readonly PublicEvent[], now: number): CompassProgramme[] {
+function projectCompassProgrammes(rows: readonly ProgrammeInput[], now: number): CompassProgramme[] {
   const { fromDate, beforeDate } = getOpenNowEventWindow(now);
   const end = addDaysToDateKey(beforeDate, 1);
   const today = getBelgradeNow(now).date;
@@ -102,26 +110,46 @@ function projectCompassProgrammes(rows: readonly PublicEvent[], now: number): Co
     .slice(0, MAX_VENUE_PROGRAMMES).map(({ event }) => event);
 }
 
-export function projectCompassPlaces(venues: readonly PublicVenue[], events: readonly PublicEvent[], now: number): CompassPlace[] {
-  const current = getBelgradeNow(now);
-  const byVenue = new Map<string, PublicEvent[]>();
+function groupByVenue<T extends ProgrammeInput>(events: readonly T[]) {
+  const byVenue = new Map<string, T[]>();
   for (const event of events) {
     if (!event.venueId) continue;
     const rows = byVenue.get(event.venueId) ?? [];
     rows.push(event); byVenue.set(event.venueId, rows);
   }
+  return byVenue;
+}
+
+export function projectOutingDirectory(venues: readonly PublicVenue[]): CompassPlace[] {
   return venues.flatMap(venue => {
     const point = { latitude: venue.latitude!, longitude: venue.longitude! };
     if (!isCoordinates(point)) return [];
-    const rows = byVenue.get(venue._id) ?? [];
-    const context = projectCompassMusicContext(rows, now);
     const venueType = getCompassVenueType(venue);
-    const closing = getVenueClosingForEventStart({ date: current.date, startTime: current.time, venueHours: venue });
     return [{ ...point, id: venue._id, name: venue.name,
       ...(venue.location ? { address: venue.location } : {}),
       hours: { hoursJson: venue.hoursJson, hoursSource: venue.hoursSource, hoursTimezone: venue.hoursTimezone, hoursExpiresAt: venue.hoursExpiresAt },
-      ...(closing ? { hoursLabel: closing.time } : {}), ...(venueType ? { venueType } : {}),
-      ...context, programmes: projectCompassProgrammes(rows, now),
+      ...(venueType ? { venueType } : {}),
     }];
   });
+}
+
+export function projectCompassPlaces(venues: readonly PublicVenue[], events: readonly PublicEvent[], now: number): CompassPlace[] {
+  const current = getBelgradeNow(now);
+  const byVenue = groupByVenue(events);
+  return projectOutingDirectory(venues).map(place => {
+    const rows = byVenue.get(place.id) ?? [];
+    const closing = getVenueClosingForEventStart({ date: current.date, startTime: current.time, venueHours: place.hours });
+    return { ...place, ...projectCompassMusicContext(rows, now), ...(closing ? { hoursLabel: closing.time } : {}),
+      programmes: projectCompassProgrammes(rows, now) };
+  });
+}
+
+/** At most one past nightlife date is in the three-day outing. Source history is fetched for the chosen venue. */
+export function projectOutingProgrammes(events: readonly RecommendationCandidate[], now: number) {
+  const groups = [];
+  for (const [venueId, rows] of groupByVenue(events)) {
+    const programmes = projectCompassProgrammes(rows, now);
+    if (programmes.length) groups.push({ venueId, programmes });
+  }
+  return groups;
 }

@@ -497,6 +497,23 @@ reused.
 
 For an existing deployment, initialize the registry with the internal mutation
 `performerRegistry:kickBackfill {}` and inspect `performerRegistry:getBackfillStatus {}`.
+Each artist profile stores its display name, independently supported
+`primaryGenre` and confirmed `instagramHandle` (lowercase, without `@`).
+A verified appearance can supply a contact even before research establishes
+a genre. The appearance retains its published source and event revision.
+Check an account with `performerRegistry:findProfiles {"name":"@artist"}`
+or an Instagram profile URL. Pass its ID to `performerRegistry:readProfile`
+to inspect the current handle, dominant genre and independent citations.
+
+To populate existing rows, call `performerRegistry:backfillInstagramHandles`
+with `{"phase":"billing","cursor":null}`. Pass the returned cursor for that
+phase until `isDone` is true. Repeat with phase `research` and a fresh null
+cursor. Each call reconciles at most six source rows locally. Sum
+`profilesCreated`, `handlesAdded`, `handlesCleared` and `billingLinksWritten`
+across pages. With unchanged input, a second pass returns zero for those
+counters. Recheck exact accounts and the source citations before attributing
+genre coverage to this migration.
+
 For a bounded date range, invoke `eventDiscovery:backfillPublishedDiscovery`
 with `fromDate`, `throughDate` and `cursor: null`, then pass each returned cursor
 until it is null. Run the nearest dates first. The same transaction and evidence

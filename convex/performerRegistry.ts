@@ -18,9 +18,12 @@ import {
 import { musicGenre } from "./eventDiscoveryValues";
 import {
   canonicalProfile,
+  confirmsBillingHandle,
   evidenceForCredits,
   profileKey,
   registryCredits,
+  registryBilledArtists,
+  registryInstagramHandle,
   type Credit,
   type RegistryEvidence,
 } from "./performerRegistryEvidence";
@@ -101,6 +104,27 @@ function profileByKey(ctx: ReadCtx, key: string) {
     .withIndex("by_identity", (q) => q.eq("identityKey", key))
     .unique();
 }
+async function profilesByInstagram(ctx: ReadCtx, handle: string): Promise<Profile[]> {
+  const [indexed, legacy] = await Promise.all([
+    ctx.db.query("performerRegistryProfiles").withIndex("by_instagram_handle", q => q.eq("instagramHandle", handle)).take(2),
+    profileByKey(ctx, "handle:" + handle),
+  ]);
+  return [...new Map([...indexed, ...(legacy ? [legacy] : [])].map(row => [row._id, row])).values()];
+}
+function namedProfiles(ctx: ReadCtx, nameKey: string, limit: number) {
+  return ctx.db.query("performerRegistryProfiles").withIndex("by_name", q =>
+    q.eq("nameKey", nameKey).gt("independentAppearances", 0)).take(limit);
+}
+async function currentBilling(ctx: ReadCtx, a: Appearance, handle: string): Promise<boolean> {
+  if (a.handle !== handle) return false;
+  const event = await ctx.db.get(a.eventId);
+  if (!event || event.updatedAt !== a.eventUpdatedAt || !(await eligible(ctx, event))) return false;
+  const { label } = await evidenceInputs(ctx, event._id);
+  if (!musicCompatible(event, label)) return false;
+  const scoped = await loadScopedPerformerHandles(ctx, event);
+  const credit = registryCredits(registryBilledArtists(event), scoped).find(c => c.key === a.nameKey && c.handle === handle);
+  return !!credit && confirmsBillingHandle(event, credit, scoped);
+}
 function profileSources(
   ctx: ReadCtx,
   id: Id<"performerRegistryProfiles">,
@@ -121,6 +145,15 @@ function profileSources(
         )
         .order("desc")
         .take(MAX_SOURCES);
+}
+async function visibleInstagramHandle(ctx: ReadCtx, profile: Profile, sources: RegistryEvidence[]): Promise<string | null> {
+  const handle = profile.instagramHandle ?? (profile.identityKey.startsWith("handle:") ? registryInstagramHandle(profile.identityKey.slice(7)) : undefined);
+  if (!handle) return null;
+  if (sources.some(s => s.verifiedHandle === handle)) return handle;
+  const bills = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing", q =>
+    q.eq("profileId", profile._id).eq("handle", handle).eq("confirmedBilling", true)).order("desc").take(MAX_SOURCES);
+  for (const a of bills) if (await currentBilling(ctx, a, handle)) return handle;
+  return null;
 }
 type SourceCache = Map<
   Id<"events">,
@@ -213,22 +246,17 @@ async function resolveCredit(
   event: Event,
   credit: Credit,
   cache: SourceCache,
+  targetBilling = false,
 ) {
   const urls = urlsInSummary(event);
   if (!credit.handle && !urls.size && !localName(credit)) return;
-  const byHandle = credit.handle
-    ? await profileByKey(ctx, "handle:" + credit.handle)
-    : null;
-  const profiles = byHandle
-    ? [byHandle]
-    : await ctx.db
-        .query("performerRegistryProfiles")
-        .withIndex("by_name", (q) =>
-          q.eq("nameKey", credit.key).gt("independentAppearances", 0),
-        )
-        .take(2);
+  const byHandle = credit.handle ? await profilesByInstagram(ctx, credit.handle) : [];
+  const profiles = byHandle.length ? byHandle : await namedProfiles(ctx, credit.key, 2);
   if (profiles.length !== 1) return;
   const p = profiles[0];
+  if (credit.handle && p.instagramHandle && credit.handle !== p.instagramHandle) return;
+  if (credit.handle && credit.key !== p.nameKey && credit.name.toLowerCase() !== "@" + credit.handle &&
+      p.name.toLowerCase() !== "@" + credit.handle) return;
   const context = getEventDiscoveryTaxonomy(event);
   const mayRepeat =
     !credit.handle &&
@@ -243,9 +271,14 @@ async function resolveCredit(
     mayRepeat ? event.venueId : undefined,
   );
   const supported: RegistryEvidence[] = [];
+  const origins = [];
   for (const a of rows) {
-    if (a.eventId === event._id) continue;
-    const proof = await liveEvidence(ctx, a, cache);
+    if (a.eventId !== event._id) origins.push({ a, proof: await liveEvidence(ctx, a, cache),
+      billed: targetBilling && !!credit.handle && a.confirmedBilling === true && await currentBilling(ctx, a, credit.handle) });
+  }
+  const linkedAccounts = new Set(origins.flatMap(({ proof, billed }) =>
+    credit.handle && proof && (billed || proof.verifiedHandle === credit.handle) && proof.profileUrl ? [canonicalProfile(proof.profileUrl)] : []));
+  for (const { a, proof, billed } of origins) {
     if (
       !proof ||
       (credit.handle &&
@@ -253,7 +286,8 @@ async function resolveCredit(
         proof.verifiedHandle !== credit.handle)
     )
       continue;
-    const handle = credit.handle && proof.verifiedHandle === credit.handle;
+    const handle = credit.handle && (billed || proof.verifiedHandle === credit.handle ||
+      (proof.profileUrl && linkedAccounts.has(canonicalProfile(proof.profileUrl))));
     const linked =
       proof.profileUrl && urls.has(canonicalProfile(proof.profileUrl));
     const recurring =
@@ -288,11 +322,13 @@ export async function lookupPerformerRegistryProgramme(
     !(await eligible(ctx, event))
   )
     return empty;
+  const billedArtists = registryBilledArtists(event);
+  const verifiedBilling = scopedHandles ?? (await loadScopedPerformerHandles(ctx, event));
   const credits = registryCredits(
-    event.artists,
-    scopedHandles ?? (await loadScopedPerformerHandles(ctx, event)),
+    billedArtists,
+    verifiedBilling,
   );
-  if (credits.length !== event.artists.length || !credits.length) return empty;
+  if (credits.length !== billedArtists.length || !credits.length) return empty;
   const context = getEventDiscoveryTaxonomy(event);
   if (
     context.categories.some(
@@ -302,7 +338,7 @@ export async function lookupPerformerRegistryProgramme(
     return empty;
   const cache: SourceCache = new Map();
   const resolved = await Promise.all(
-    credits.map((credit) => resolveCredit(ctx, event, credit, cache)),
+    credits.map((credit) => resolveCredit(ctx, event, credit, cache, confirmsBillingHandle(event, credit, verifiedBilling))),
   );
   if (resolved.some((p) => !p)) return empty;
   const roles: ("party" | "live")[] = [];
@@ -367,15 +403,17 @@ export async function lookupPerformerRegistrySearchHints(
     !(await eligible(ctx, event))
   )
     return [];
+  const billedArtists = registryBilledArtists(event);
   const credits = registryCredits(
-    event.artists,
+    billedArtists,
     scopedHandles ?? (await loadScopedPerformerHandles(ctx, event)),
   );
-  if (credits.length !== event.artists.length) return [];
+  if (credits.length !== billedArtists.length) return [];
   const cache: SourceCache = new Map();
   const hints: { performer: string; profileUrl: string }[] = [];
   for (const credit of credits) {
-    const candidates = await ctx.db
+    const social = credit.handle ? await profilesByInstagram(ctx, credit.handle) : [];
+    const candidates = social.length ? social : await ctx.db
       .query("performerRegistryProfiles")
       .withIndex("by_name", (q) =>
         q.eq("nameKey", credit.key).gt("independentAppearances", 0),
@@ -435,24 +473,83 @@ async function updateSupport(
     primaryGenre: primary.length === 1 ? primary[0].genre : undefined,
   });
 }
+type RegistryChanges = { profilesCreated: number; handlesAdded: number; handlesCleared: number; billingLinksWritten: number };
+const emptyChanges = (): RegistryChanges => ({ profilesCreated: 0, handlesAdded: 0, handlesCleared: 0, billingLinksWritten: 0 });
+async function attachProfileHandle(ctx: MutationCtx, profile: Profile, credit: Credit, changes: RegistryChanges, handle?: string) {
+  if (handle && profile.instagramHandle && handle !== profile.instagramHandle) return;
+  if (handle && profile.identityKey.startsWith("handle:") && profile.identityKey !== "handle:" + handle) return;
+  const sameName = credit.key === profile.nameKey || credit.name.toLowerCase() === "@" + handle;
+  const upgradeName = !!handle && profile.name.toLowerCase() === "@" + handle && !credit.name.startsWith("@");
+  if (handle && !sameName && !upgradeName) return;
+  if (upgradeName || (handle && profile.instagramHandle !== handle)) {
+    if (handle && !profile.instagramHandle) changes.handlesAdded++;
+    await ctx.db.patch(profile._id, { ...(handle ? { instagramHandle: handle } : {}),
+      ...(upgradeName ? { name: credit.name, nameKey: credit.key } : {}) });
+  }
+  return profile._id;
+}
+
 async function ensureProfile(
-  ctx: MutationCtx,
-  event: Event,
-  credit: Credit,
-  proof: RegistryEvidence,
+  ctx: MutationCtx, event: Event, credit: Credit, proof: RegistryEvidence | undefined, billed: boolean, changes: RegistryChanges,
 ) {
-  const identityKey = profileKey(event._id, credit, proof),
-    profile = await profileByKey(ctx, identityKey);
-  return (
-    profile?._id ??
-    ctx.db.insert("performerRegistryProfiles", {
-      identityKey,
-      name: credit.name,
-      nameKey: credit.key,
-      independentAppearances: 0,
-      support: [],
-    })
-  );
+  if (!proof && !billed) return;
+  const handle = proof?.verifiedHandle ?? (billed ? credit.handle : undefined);
+  const identityKey = proof ? profileKey(event._id, credit, proof) : "handle:" + handle;
+  // A profile definition can supply the artist's display name when the poster
+  // bills only an account, e.g. "Coolares Band is a rock group …".
+  const subject = proof?.identity.quote.match(/^([\p{L}\p{M}\d .'’-]{2,75}?)\s+(?:is|are|je|su)\s/iu)?.[1]?.trim();
+  const namedCredit = handle && subject && credit.name.toLowerCase() === "@" + handle &&
+    normalizeTaxonomyText(subject).replaceAll(" ", "") === normalizeTaxonomyText(handle).replaceAll(" ", "")
+    ? { ...credit, name: subject, key: normalizeTaxonomyText(subject) } : credit;
+  const byAccount = handle ? await profilesByInstagram(ctx, handle) : [];
+  if (byAccount.length > 1) return;
+  const byOriginalKey = await profileByKey(ctx, identityKey);
+  const byUrl = proof?.profileUrl && proof.verifiedHandle ? await profileByKey(ctx, profileKey(event._id, credit, { ...proof, verifiedHandle: undefined })) : null;
+  const exact = new Map([byAccount[0], byUrl, byOriginalKey].filter((p): p is Profile => !!p).map(p => [p._id, p]));
+  if (exact.size > 1) return;
+  const stored = [...exact.values()][0];
+  if (stored) return attachProfileHandle(ctx, stored, namedCredit, changes, handle);
+
+  // A common display name is never sufficient to attach a social account or carry a style.
+  const named = await namedProfiles(ctx, credit.key, 4);
+  if (named.length >= 4) return;
+  const candidates = [];
+  const cache: SourceCache = new Map();
+  for (const p of named) {
+    for (const a of await profileSources(ctx, p._id)) {
+      const prior = await liveEvidence(ctx, a, cache);
+      const sharedUrl = proof?.profileUrl && prior?.profileUrl &&
+        canonicalProfile(prior.profileUrl) === canonicalProfile(proof.profileUrl);
+      if (sharedUrl || (handle && a.handle === handle && await currentBilling(ctx, a, handle))) {
+        candidates.push(p);
+        break;
+      }
+    }
+  }
+  if (candidates.length > 1) return;
+  if (candidates.length) return attachProfileHandle(ctx, candidates[0], namedCredit, changes, handle);
+  if (!proof && named.some(p => !p.instagramHandle)) return;
+  changes.profilesCreated++;
+  if (handle) changes.handlesAdded++;
+  return ctx.db.insert("performerRegistryProfiles", {
+    identityKey: handle ? "handle:" + handle : identityKey, name: namedCredit.name, nameKey: namedCredit.key,
+    ...(handle ? { instagramHandle: handle } : {}), independentAppearances: 0, support: [],
+  });
+}
+
+async function clearWithdrawnHandle(ctx: MutationCtx, profileId: Profile["_id"], changes: RegistryChanges) {
+  const p = await ctx.db.get(profileId);
+  if (!p?.instagramHandle) return;
+  const handle = p.instagramHandle;
+  const billed = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_billing", q =>
+    q.eq("profileId", profileId).eq("handle", handle).eq("confirmedBilling", true)).take(1);
+  if (billed.length) return;
+  const verified = await ctx.db.query("performerRegistryAppearances").withIndex("by_profile_verified_handle", q =>
+    q.eq("profileId", profileId).eq("evidence.verifiedHandle", handle)).take(1);
+  if (!verified.length) {
+    await ctx.db.patch(profileId, { instagramHandle: undefined });
+    changes.handlesCleared++;
+  }
 }
 
 type WakeKey = { kind: "name" | "handle"; value: string };
@@ -474,7 +571,8 @@ export async function syncPerformerRegistryForEvent(
   ctx: MutationCtx,
   eventId: Id<"events">,
   wakeBackfilledLink = false,
-): Promise<void> {
+): Promise<RegistryChanges> {
+  const changes = emptyChanges();
   const [event, previous] = await Promise.all([
     ctx.db.get(eventId),
     ctx.db
@@ -486,17 +584,19 @@ export async function syncPerformerRegistryForEvent(
     throw new Error("Too many performer records for one event.");
   let linkedDuringBackfill = false;
   const wakes = new Map<string, WakeKey>();
+  const previousProfileIds = new Set<Profile["_id"]>();
   const pending = new Map(
     previous.map((a) => [JSON.stringify([a.nameKey, a.handle ?? null]), a]),
   );
   if (event && event.artists.length && (await eligible(ctx, event))) {
     const { row, label } = await evidenceInputs(ctx, eventId);
+    const scoped = await loadScopedPerformerHandles(ctx, event);
     const entries = musicCompatible(event, label)
       ? evidenceForCredits(
           event,
           row,
           label,
-          await loadScopedPerformerHandles(ctx, event),
+          scoped,
         )
       : [];
     if (entries.length > MAX_CREDITS)
@@ -508,8 +608,9 @@ export async function syncPerformerRegistryForEvent(
       const key = JSON.stringify([credit.key, credit.handle ?? null]),
         old = pending.get(key);
       pending.delete(key);
-      const profileId = proof
-        ? await ensureProfile(ctx, event, credit, proof)
+      const billed = confirmsBillingHandle(event, credit, scoped);
+      const profileId = proof || billed
+        ? await ensureProfile(ctx, event, credit, proof, billed, changes)
         : (await resolveCredit(ctx, event, credit, cache))?.profileId;
       const data: AppearanceFields = {
         eventId,
@@ -518,6 +619,7 @@ export async function syncPerformerRegistryForEvent(
         nameKey: credit.key,
         ...(credit.handle ? { handle: credit.handle } : {}),
         ...(profileId ? { profileId } : {}),
+        ...(profileId && billed ? { confirmedBilling: true as const } : {}),
         venue: event.venue,
         ...(event.venueId ? { venueId: event.venueId } : {}),
         date: event.date,
@@ -528,10 +630,12 @@ export async function syncPerformerRegistryForEvent(
         independent: !!proof,
         ...(proof ? { evidence: proof } : {}),
       };
+      if (data.confirmedBilling && (!old?.confirmedBilling || old.profileId !== profileId || old.handle !== data.handle)) changes.billingLinksWritten++;
       if (old) {
         const { _id, _creationTime, ...fields } = old;
         void _creationTime;
         if (exactJsonValue(fields, data)) continue;
+        if (old.profileId) previousProfileIds.add(old.profileId);
         await ctx.db.replace(_id, data);
       } else await ctx.db.insert("performerRegistryAppearances", data);
       if (
@@ -540,7 +644,10 @@ export async function syncPerformerRegistryForEvent(
         old?.profileId !== profileId &&
         event.date >= getBelgradeDayKey()
       )
-        linkedDuringBackfill = true;
+        linkedDuringBackfill ||= !!profileId && !!(await ctx.db.get(profileId))?.independentAppearances;
+      if (profileId && credit.handle && data.confirmedBilling && proof && !old?.confirmedBilling) {
+        wakes.set("handle:" + credit.handle, { kind: "handle", value: credit.handle });
+      }
       if (
         !old ||
         old.venueId !== data.venueId ||
@@ -567,10 +674,13 @@ export async function syncPerformerRegistryForEvent(
   }
   for (const old of pending.values()) {
     wakeKeys(wakes, old.nameKey, old.evidence);
+    if (old.confirmedBilling && old.handle && old.evidence) wakes.set("handle:" + old.handle, { kind: "handle", value: old.handle });
+    if (old.profileId) previousProfileIds.add(old.profileId);
     await ctx.db.delete(old._id);
     if (old.profileId && old.evidence)
       await updateSupport(ctx, old.profileId, old.evidence);
   }
+  for (const id of previousProfileIds) await clearWithdrawnHandle(ctx, id, changes);
   if (linkedDuringBackfill) await schedulePublishedDiscovery(ctx, eventId);
   for (const key of wakes.values()) {
     await ctx.scheduler.runAfter(
@@ -584,6 +694,7 @@ export async function syncPerformerRegistryForEvent(
       },
     );
   }
+  return changes;
 }
 
 const phaseOrder = [
@@ -744,6 +855,29 @@ export const advanceBackfill = internalMutation({
   },
 });
 
+/** Reconcile confirmed Instagram identities in bounded local transactions. */
+export const backfillInstagramHandles = internalMutation({
+  args: { phase: v.union(v.literal("billing"), v.literal("research")), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ examined: v.number(), events: v.number(), isDone: v.boolean(), cursor: v.union(v.string(), v.null()),
+    profilesCreated: v.number(), handlesAdded: v.number(), handlesCleared: v.number(), billingLinksWritten: v.number() }),
+  handler: async (ctx, { phase, cursor }) => {
+    const options = { cursor, numItems: 6, maximumBytesRead: 400_000 };
+    const page = phase === "billing"
+      ? await ctx.db.query("performerRegistryAppearances").withIndex("by_handle_date", q => q.gt("handle", undefined)).paginate(options)
+      : await ctx.db.query("eventPerformerGenreResearch").paginate(options);
+    const ids = [...new Set(page.page.map(a => a.eventId))];
+    const changes = emptyChanges();
+    for (const id of ids) {
+      const result = await syncPerformerRegistryForEvent(ctx, id, true);
+      changes.profilesCreated += result.profilesCreated;
+      changes.handlesAdded += result.handlesAdded;
+      changes.handlesCleared += result.handlesCleared;
+      changes.billingLinksWritten += result.billingLinksWritten;
+    }
+    return { ...changes, examined: page.page.length, events: ids.length, isDone: page.isDone, cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
 export const findProfiles = internalQuery({
   args: { name: v.string() },
   returns: v.object({
@@ -751,24 +885,44 @@ export const findProfiles = internalQuery({
       v.object({
         profileId: v.id("performerRegistryProfiles"),
         name: v.string(),
+        instagramHandle: v.optional(v.union(v.string(), v.null())),
       }),
     ),
     more: v.boolean(),
   }),
   handler: async (ctx, { name }) => {
     if (!name.trim() || name.length > 100) return { profiles: [], more: false };
-    const rows = await ctx.db
+    const exact = /^@|^https?:\/\//iu.test(name.trim());
+    const handle = exact ? registryInstagramHandle(name) : undefined;
+    if (exact && !handle) return { profiles: [], more: false };
+    const rows = handle ? await profilesByInstagram(ctx, handle) : await ctx.db
       .query("performerRegistryProfiles")
       .withIndex("by_name", (q) =>
         q
-          .eq("nameKey", normalizeTaxonomyText(name))
-          .gt("independentAppearances", 0),
+          .eq("nameKey", normalizeTaxonomyText(name)),
       )
+      .order("desc")
       .take(9);
+    if (handle && rows.length !== 1) return { profiles: [], more: false };
+    const visible = [];
+    for (const p of rows) {
+      if (!p.independentAppearances && !p.instagramHandle) continue;
+      let instagramHandle: string | null = null;
+      if (handle || p.instagramHandle || p.identityKey.startsWith("handle:")) {
+        const sources = await profileSources(ctx, p._id);
+        const current = [];
+        const cache: SourceCache = new Map();
+        for (const a of sources) {
+          const proof = await liveEvidence(ctx, a, cache);
+          if (proof) current.push(proof);
+        }
+        instagramHandle = await visibleInstagramHandle(ctx, p, current);
+        if ((handle || !p.independentAppearances) && !instagramHandle) continue;
+      }
+      visible.push({ profileId: p._id, name: p.name, instagramHandle });
+    }
     return {
-      profiles: rows
-        .slice(0, 8)
-        .map((p) => ({ profileId: p._id, name: p.name })),
+      profiles: visible.slice(0, 8),
       more: rows.length > 8,
     };
   },
@@ -780,6 +934,7 @@ export const readProfile = internalQuery({
     v.null(),
     v.object({
       name: v.string(),
+      instagramHandle: v.optional(v.union(v.string(), v.null())),
       genres: v.array(musicGenre),
       primaryGenre: v.union(musicGenre, v.null()),
       sources: v.array(
@@ -825,6 +980,7 @@ export const readProfile = internalQuery({
     );
     return {
       name: p.name,
+      instagramHandle: await visibleInstagramHandle(ctx, p, sources.map(s => s.evidence)),
       genres,
       primaryGenre:
         p.primaryGenre && dominant.has(p.primaryGenre) && dominant.size === 1
@@ -865,7 +1021,7 @@ export const listAppearances = internalQuery({
       const e = await ctx.db.get(a.eventId);
       if (!e || e.updatedAt !== a.eventUpdatedAt || !(await eligible(ctx, e)))
         continue;
-      const verified = a.independent
+      const verified = a.confirmedBilling && a.handle && await currentBilling(ctx, a, a.handle) ? true : a.independent
         ? !!(await liveEvidence(ctx, a, cache))
         : (
             await resolveCredit(

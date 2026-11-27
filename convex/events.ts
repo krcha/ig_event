@@ -314,6 +314,7 @@ export const listPublicRecommendationWindowPaginated = query({
       _id: v.id("events"), title: v.string(), venue: v.string(), date: v.string(),
       time: v.optional(v.string()), timeStatus: eventTimeStatus, status: v.literal("approved"),
       eventTaxonomy: eventDiscoveryTaxonomy, genreEstimated: v.boolean(),
+      venueId: v.optional(v.id("venues")), genreResearched: v.optional(v.literal(true)),
     })),
   }),
   handler: listPublicRecommendationWindowPaginatedHandler,

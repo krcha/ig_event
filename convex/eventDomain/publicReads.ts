@@ -595,6 +595,8 @@ export async function listPublicRecommendationWindowPaginatedHandler(ctx: QueryC
     const time = getDisplayEventTime(event.time);
     return {
       _id: event._id, title: event.title, venue, date: event.date,
+      ...(event.venueId ? { venueId: event.venueId } : {}),
+      ...(research?.sources.length ? { genreResearched: true as const } : {}),
       ...(time ? { time } : {}),
       timeStatus: resolveEventTimeProvenance(event).status,
       status: "approved" as const,

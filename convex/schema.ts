@@ -410,18 +410,22 @@ export default defineSchema({
   }).index("by_eventId", ["eventId"]),
   performerRegistryProfiles: defineTable({
     identityKey: v.string(), name: v.string(), nameKey: v.string(),
+    instagramHandle: v.optional(v.string()),
     support: v.array(performerSupport), primaryGenre: v.optional(musicGenre),
     independentAppearances: v.number(),
-  }).index("by_identity", ["identityKey"]).index("by_name", ["nameKey", "independentAppearances"]),
+  }).index("by_identity", ["identityKey"]).index("by_name", ["nameKey", "independentAppearances"])
+    .index("by_instagram_handle", ["instagramHandle"]),
   performerRegistryAppearances: defineTable({
     eventId: v.id("events"), eventUpdatedAt: v.number(), name: v.string(), nameKey: v.string(),
-    handle: v.optional(v.string()), profileId: v.optional(v.id("performerRegistryProfiles")),
+    handle: v.optional(v.string()), confirmedBilling: v.optional(v.literal(true)), profileId: v.optional(v.id("performerRegistryProfiles")),
     venue: v.string(), venueId: v.optional(v.id("venues")), date: v.string(),
     // A published billing records an announcement, including after its date has passed.
     status: v.literal("announced"), listingUrl: v.optional(v.string()),
     independent: v.boolean(), evidence: v.optional(performerEvidence),
   }).index("by_event", ["eventId"]).index("by_profile_date", ["profileId", "date"])
     .index("by_profile_evidence", ["profileId", "independent", "date"])
+    .index("by_profile_verified_handle", ["profileId", "evidence.verifiedHandle"])
+    .index("by_profile_billing", ["profileId", "handle", "confirmedBilling"])
     .index("by_profile_venue_evidence", ["profileId", "venueId", "independent", "date"])
     .index("by_name_date", ["nameKey", "date"]).index("by_handle_date", ["handle", "date"]),
   performerRegistryBackfill: defineTable({

@@ -1,7 +1,7 @@
 import type { EventDiscoveryTaxonomy, MusicGenre } from "../taxonomy/event-discovery";
 import { compareMusicGenres, type MusicGenreComparison } from "../taxonomy/music-genre-relations";
 import type { VenueHoursCacheFields } from "../venues/venue-hours-cache";
-import { getBelgradeNow, getOpenNowEventState, getVenueClosingForEventStart, isVenueOpenNow } from "../venues/venue-open-now";
+import { createBelgradeInstantResolver, getBelgradeNow, getOpenNowEventState, getVenueClosingForEventStart, isVenueOpenNow } from "../venues/venue-open-now";
 import { normalizeEventTime } from "../events/event-time";
 import { estimateTravel, type Coordinates } from "./location";
 import type { CompassVenueType } from "./venue-profile";
@@ -236,24 +236,25 @@ export function getCompassSourceAt(place: CompassPlace, now: number, reference?:
 
 export function compassCandidates(places: readonly CompassPlace[], source: CompassPlace, origin: Coordinates, vibe: CompassMode | "nearby", now: number): CompassRankedPlace[] {
   const currentSource = getCompassSourceAt(source, now);
+  const resolveInstant = createBelgradeInstantResolver();
   return places.flatMap((place, index) => {
     if (place.id === source.id) return [];
     const estimate = estimateTravel(origin, place);
     const minutes = estimate.walkMinutes > 10 ? estimate.driveMinutes : estimate.walkMinutes;
     const arrival = now + minutes * 60_000;
-    if ((place.hours?.hoursExpiresAt && place.hours.hoursExpiresAt < arrival) || !isVenueOpenNow(place.hours, arrival)) return [];
+    if ((place.hours?.hoursExpiresAt && place.hours.hoursExpiresAt < arrival) || !isVenueOpenNow(place.hours, arrival, resolveInstant)) return [];
     const [event] = getCompassSourceProgrammes(place, arrival);
     const destination = { ...place, event, musicProfile: event?.musicProfile };
     const match = vibe === "nearby" ? { score: null, reason: "nearby", basis: "nearby" } as const
       : compareCompassPlaces(currentSource, destination, vibe);
     if (!match || (vibe !== "nearby" && !matchesCompassMode(match.score, vibe))) return [];
-    const openNow = isVenueOpenNow(place.hours, now);
+    const openNow = isVenueOpenNow(place.hours, now, resolveInstant);
     if (vibe === "nearby" && !openNow) return [];
 
     const programmeTiming = match.basis === "programme" && event
       ? normalizeEventTime(event.time).startLabel ? "at-arrival" : "unknown-start" : undefined;
     const local = getBelgradeNow(arrival);
-    const closing = getVenueClosingForEventStart({ date: local.date, startTime: local.time, venueHours: place.hours });
+    const closing = getVenueClosingForEventStart({ date: local.date, startTime: local.time, venueHours: place.hours }, resolveInstant);
     const ranked: CompassRankedPlace = { ...destination, openNow, hoursLabel: closing?.time, recommendation: { ...match, programmeTiming } };
     return [{ ranked, index, distance: estimate.meters, timingPriority: programmeTiming === "unknown-start" ? 1 : 0 }];
   }).sort((a, b) => {

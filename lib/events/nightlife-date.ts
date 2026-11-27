@@ -1,18 +1,23 @@
 export const NIGHTLIFE_EVENT_TIME_ZONE = "Europe/Belgrade";
 export const NIGHTLIFE_BUSINESS_DAY_ROLLOVER_HOUR = 7;
 
+function dateFormatter(timeZone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit", hour: "2-digit", hourCycle: "h23", month: "2-digit",
+    timeZone, year: "numeric",
+  });
+}
+
+// Ranking a night out evaluates hundreds of events in the same timezone.
+let belgradeFormatter: Intl.DateTimeFormat | undefined;
+
 function getDateTimeParts(
   now: Date,
   timeZone = NIGHTLIFE_EVENT_TIME_ZONE,
 ): { day: number; hour: number; month: number; year: number } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-    month: "2-digit",
-    timeZone,
-    year: "numeric",
-  }).formatToParts(now);
+  const formatter = timeZone === NIGHTLIFE_EVENT_TIME_ZONE
+    ? (belgradeFormatter ??= dateFormatter(timeZone)) : dateFormatter(timeZone);
+  const parts = formatter.formatToParts(now);
   const values = new Map(parts.map((part) => [part.type, part.value]));
 
   return {

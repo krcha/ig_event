@@ -44,6 +44,8 @@ import {
   repairReviewedStructuredEventVenueHandler,
 } from "./internal/eventRepairs/reviewedStructuredCorrections";
 import { sha256Hex } from "../lib/domain/reconciliation/evidence-digest";
+import { compactCompassHoursJson } from "../lib/venues/venue-hours-cache";
+import { isCoordinates } from "../lib/travel/location";
 import { getVenueCoordinates } from "../lib/venues/coordinates";
 import { normalizeInstagramProfileHandle } from "../lib/venues/instagram-follower-observation";
 
@@ -834,6 +836,26 @@ export const listPublicVenueFields = query({
     return venues.map(toPublicVenue).sort((left, right) =>
       left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
     );
+  },
+});
+
+export const listPublicCompassVenues = query({
+  args: {},
+  returns: v.array(v.object({
+    _id: v.id("venues"), name: v.string(), instagramHandle: v.string(),
+    latitude: v.number(), longitude: v.number(), location: v.optional(v.string()), category: v.optional(v.string()),
+    hoursJson: v.optional(v.string()), hoursExpiresAt: v.optional(v.number()),
+    hoursTimezone: v.optional(v.string()), hoursSource: v.optional(venueHoursSource),
+  })),
+  handler: async (ctx) => {
+    const venues = (await collectPublicVenues(ctx)).slice(0, DEFAULT_PUBLIC_VENUE_DIRECTORY_LIMIT);
+    return venues.flatMap(venue => {
+      const point = { latitude: venue.latitude, longitude: venue.longitude };
+      if (!isCoordinates(point)) return [];
+      return [{ ...point, _id: venue._id, name: venue.name, instagramHandle: venue.instagramHandle,
+        category: venue.category, location: venue.location, hoursJson: compactCompassHoursJson(venue.hoursJson),
+        hoursExpiresAt: venue.hoursExpiresAt, hoursTimezone: venue.hoursTimezone, hoursSource: venue.hoursSource }];
+    }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   },
 });
 

@@ -177,6 +177,14 @@ function parseVenueHoursDay(value: unknown): VenueHoursDay | null {
   };
 }
 
+/** The compass needs weekly intervals and verified closure evidence; provider payloads stay server-side. */
+export function compactCompassHoursJson(value: string | null | undefined): string | undefined {
+  const hours = parseVenueHoursJson(value);
+  if (!hours) return;
+  const { raw, ...weeklyHours } = hours;
+  return JSON.stringify({ ...weeklyHours, ...(raw?.operatingStatus ? { raw: { operatingStatus: raw.operatingStatus } } : {}) });
+}
+
 export function parseVenueHoursJson(value: string | null | undefined): VenueHoursJson | null {
   if (!value) {
     return null;

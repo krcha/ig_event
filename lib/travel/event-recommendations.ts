@@ -12,6 +12,8 @@ export function getEventRecommendationWindow(referenceDate: string, now: number)
 export type RecommendationCandidate = Pick<PublicEvent, "_id" | "title" | "venue" | "date" | "time" | "timeStatus" | "status"> & {
   eventTaxonomy: EventDiscoveryTaxonomy;
   genreEstimated: boolean;
+  genreResearched?: true;
+  venueId?: string;
 };
 
 export function rankEventRecommendations(reference: PublicEvent, events: readonly (PublicEvent | RecommendationCandidate)[], now: number) {

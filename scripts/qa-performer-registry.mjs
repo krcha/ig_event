@@ -8,6 +8,8 @@ import {
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 import {
   advanceBackfill,
+  backfillInstagramHandles,
+  findProfiles,
   getBackfillStatus,
   kickBackfill,
   listAppearances,
@@ -80,12 +82,12 @@ function memory() {
             for (const [k, fn] of Object.entries({
               eq: (a, b) => a === b,
               gte: (a, b) => a >= b,
-              gt: (a, b) => a > b,
+              gt: (a, b) => b === undefined ? a !== undefined : a > b,
               lte: (a, b) => a <= b,
               lt: (a, b) => a < b,
             }))
               b[k] = (field, v) => {
-                predicates.push((r) => fn(r[field], v));
+                predicates.push((r) => fn(field.split(".").reduce((value, part) => value?.[part], r), v));
                 return b;
               };
             cb(b);
@@ -554,9 +556,60 @@ try {
     ],
   );
   assert.ok(
-    appearances.every((a) => !a.independent && !a.profileId),
-    "A handle alone contributes no artist identity or genre proof",
+    appearances.every((a) => !a.independent && (!!a.profileId === !!a.handle)),
+    "A confirmed billing creates a contact profile without supplying independent genre evidence",
   );
+  assert.equal(credited.table("performerRegistryProfiles").size, 3);
+  const [performer] = (await findProfiles._handler(credited.ctx, { name: "https://www.instagram.com/teodora.scepanovic/" })).profiles;
+  const registryProfile = await readProfile._handler(credited.ctx, { profileId: performer.profileId });
+  assert.deepEqual([registryProfile.name, registryProfile.instagramHandle, registryProfile.primaryGenre, registryProfile.genres],
+    ["Teodora Šćepanović", "teodora.scepanovic", null, []]);
+  assert.deepEqual((await listAppearances._handler(credited.ctx, { profileId: performer.profileId, cursor: null })).page.map(row => row.eventId), [teodora._id]);
+  assert.deepEqual((await findProfiles._handler(credited.ctx, { name: "https://www.instagram.com/p/teodora/" })).profiles, []);
+  assert.deepEqual(await lookupPerformerRegistryProgramme(credited.ctx, teodora), { matches: [] });
+  const billingBackfill = await backfillInstagramHandles._handler(credited.ctx, { phase: "billing", cursor: null });
+  assert.equal(billingBackfill.billingLinksWritten, 0);
+  assert.equal(billingBackfill.handlesAdded, 0);
+  const exactProfileId = performer.profileId;
+  const storedBilling = credited.table("performerRegistryAppearances").get(appearances[0]._id);
+  delete storedBilling.confirmedBilling;
+  delete credited.table("performerRegistryProfiles").get(exactProfileId).instagramHandle;
+  const restored = await backfillInstagramHandles._handler(credited.ctx, { phase: "billing", cursor: null });
+  assert.deepEqual([restored.profilesCreated, restored.handlesAdded, restored.billingLinksWritten], [0, 1, 1]);
+  credited.table("events").get(teodora._id).status = "rejected";
+  assert.deepEqual((await findProfiles._handler(credited.ctx, { name: "@teodora.scepanovic" })).profiles, [], "Stale materialized billings cannot identify a withdrawn performer.");
+  assert.equal((await syncPerformerRegistryForEvent(credited.ctx, teodora._id)).handlesCleared, 1);
+  credited.put("events", teodora);
+  await syncPerformerRegistryForEvent(credited.ctx, teodora._id);
+  const mismatched = { ...act, identityEvidence: { url: "https://www.instagram.com/someone.else/", quote: "Ena Selka profile." } };
+  assert.equal(evidenceForCredits(sourceEvent, research([mismatched], sourceEvent._id), null)[0].proof, undefined,
+    "Contradictory external and billed Instagram identities do not authorize a genre.");
+  {
+    const seeded = memory();
+    seeded.put("venues", { _id: "venue-a", publicStatus: "published" });
+    const bill = pub("band-origin", ["@sela.band"], { venueInstagramHandle: "club", sourceCaption: "Svirku otvara @sela.band.",
+      normalizedFieldsJson: JSON.stringify({ artists: ["@sela.band"], identityEvidenceVerified: true, sourceGroundingInstagramHandle: "club" }) });
+    const artistPage = { url: "https://artist-directory.org/artist/sela-band", quote: "Sela Band is a rock band from Serbia." };
+    const verified = { billedName: "@sela.band", status: "resolved", identityEvidence: artistPage,
+      genreEvidence: [{ genre: "rock", ...artistPage }] };
+    const report = { ...research([verified], bill._id), matches: [{ performer: "@sela.band", genre: "rock", identityUrl: artistPage.url, url: artistPage.url }] };
+    seeded.put("events", bill); seeded.put("eventPerformerGenreResearch", report);
+    seeded.put("performerRegistryProfiles", { _id: "stable-profile", identityKey: 'profile:["sela band","https://artist-directory.org/artist/sela-band"]',
+      name: "@sela.band", nameKey: "sela band", support: [], independentAppearances: 0 });
+    const delta = await syncPerformerRegistryForEvent(seeded.ctx, bill._id);
+    assert.equal(delta.profilesCreated, 0);
+    assert.equal(delta.handlesAdded, 1);
+    assert.equal(seeded.table("performerRegistryProfiles").size, 1);
+    const profile = await readProfile._handler(seeded.ctx, { profileId: "stable-profile" });
+    assert.deepEqual([profile.name, profile.instagramHandle, profile.primaryGenre], ["Sela Band", "sela.band", "rock"]);
+    const future = { ...bill, _id: "band-next", date: "2027-01-01" };
+    assert.equal((await lookupPerformerRegistryProgramme(seeded.ctx, future)).matches[0].genre, "rock");
+    assert.deepEqual((await lookupPerformerRegistryProgramme(seeded.ctx, { ...future, sourceCaption: "Photo: @sela.band" })).matches, []);
+    const other = { ...future, artists: ["Another Performer (@sela.band)"] };
+    assert.deepEqual((await lookupPerformerRegistryProgramme(seeded.ctx, other)).matches, []);
+    const repeat = await backfillInstagramHandles._handler(seeded.ctx, { phase: "research", cursor: null });
+    assert.deepEqual([repeat.profilesCreated, repeat.handlesAdded, repeat.billingLinksWritten], [0, 0, 0]);
+  }
 
   const tagLine = "SAT / @vuk_vukosavljevic @itsrossv @milhousemusic",
     vukRow = "28 NOVEMBER / SATURDAY NIGHT";

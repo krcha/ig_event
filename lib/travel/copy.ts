@@ -38,6 +38,8 @@ const messages = {
   open: ["Lokal radi sada", "Venue open now", "Место сейчас открыто"],
   openAtArrival: ["Otvoreno po dolasku", "Open when you arrive", "Открыто к твоему приходу"],
   until: ["do", "until", "до"],
+  loadingProgrammes: ["Učitavamo program…", "Loading programmes…", "Загружаем программу…"],
+  loadingPlaces: ["Učitavamo lokale…", "Loading venues…", "Загружаем места…"],
   loadError: ["Ponuda trenutno nije dostupna. Pokušaj ponovo.", "Listings are unavailable. Please try again.", "Подборка недоступна. Повтори попытку."],
   nearest: ["Od najbližeg ka daljim", "Nearest first", "Сначала ближайшие"],
   route: ["Prikaži rutu", "Show route", "Показать маршрут"],

@@ -9,6 +9,8 @@ import {
 } from "../lib/taxonomy/event-discovery";
 import { genreProof } from "../lib/taxonomy/explicit-event-discovery";
 import { normalizeTaxonomyText as norm } from "../lib/taxonomy/venue-types";
+import { buildPendingSourceConflictContext } from "../lib/events/pending-source-conflict-reclassification";
+import { combineEventArtistHandleAliases } from "../lib/events/event-evidence-conflict-policy";
 import {
   canPublishPerformerGenreSource,
   getPerformerGenreResearchActs,
@@ -34,6 +36,30 @@ function audit(text: string): Json {
 }
 const validGenre = new Set<string>(MUSIC_GENRES.map(({ key }) => key));
 const compound = /[,;/|]|\s(?:&|\+|x|b2b|feat\.?|ft\.?|vs\.?)\s/i;
+export function registryBilledArtists(event: Doc<"events">): string[] {
+  if (!event.artists.some(name => name.startsWith("@")) || !event.artists.some(name => !name.includes("@"))) return event.artists;
+  const fields = audit(event.normalizedFieldsJson ?? "");
+  return combineEventArtistHandleAliases(event.artists, [], buildPendingSourceConflictContext(event, fields));
+}
+
+export function confirmsBillingHandle(event: Doc<"events">, credit: Credit, scoped: readonly PerformerHandleCredit[]): boolean {
+  const handle = credit.handle && registryInstagramHandle(credit.handle);
+  if (!handle || /\b(?:photograph\w*|fotograf\w*|sponsor\w*|sponzor\w*|booking|venue|hosted by|organized by)\b/u.test(credit.key)) return false;
+  const fields = audit(event.normalizedFieldsJson ?? "");
+  if (fields.sourceOccurrencePlanUnverified === true || event.sourceConflictFields?.includes("artists") ||
+      [event.venue, event.venueInstagramHandle, event.normalizedVenueInstagramHandle, fields.sourceGroundingInstagramHandle,
+        fields.canonicalVenueEvidenceHandle].some(value => typeof value === "string" && norm(value).replaceAll(" ", "") === norm(handle).replaceAll(" ", ""))) return false;
+  if (scoped.some(pair => pair.performer === credit.name && pair.handle === handle)) return true;
+  if (fields.identityEvidenceVerified !== true || !Array.isArray(fields.artists) || JSON.stringify(fields.artists) !== JSON.stringify(event.artists)) return false;
+  // A copied tag in a photographer/sponsor/footer credit cannot identify an artist.
+  const text = [event.sourceCaption, fields.rowSourceText, fields.splitSourceLine].filter((s): s is string => typeof s === "string").join("\n");
+  const tag = new RegExp("(?:^|[^a-z0-9_.@])@" + handle.replace(/\./g, "\\.") + "(?![a-z0-9_]|\\.[a-z0-9_])", "iu");
+  const lines = text.split(/[\r\n]+/u);
+  const excluded = /\b(?:photo\w*|foto\w*|booking|sponsor\w*|sponzor\w*|partner\w*|organizator\w*|management|rezervacij\w*|contact|tickets?|ulaznic\w*|lokacija)\b/u;
+  if (lines.some((line, i) => tag.test(line) && (excluded.test(norm(line)) ||
+      /📸|📷|📍/u.test(line) || (i > 0 && /[:–—-]\s*$/u.test(lines[i-1]) && excluded.test(norm(lines[i-1])))))) return false;
+  return event.artists.some(raw => tag.test(raw)) && (tag.test(text) || fields.sourceGroundingArtistsVerified === true);
+}
 export function registryCredits(
   artists: readonly string[],
   performerHandles?: readonly PerformerHandleCredit[],
@@ -93,16 +119,45 @@ function profilePage(url: string): boolean {
     (/^[^.]+\.(?:bandcamp\.com|carrd\.co)$/.test(hostname) && pathname === "/")
   );
 }
-function sourceHandle(s: Source, handle: string) {
-  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return (
-    new RegExp(
-      `(?:^|[^a-z0-9_.])@${escaped}(?![a-z0-9_]|\\.[a-z0-9_])`,
-      "i",
-    ).test(s.quote) ||
-    (/^(?:www\.)?instagram\.com$/.test(new URL(s.url).hostname) &&
-      new URL(s.url).pathname.replace(/^\/|\/$/g, "").toLowerCase() === handle)
-  );
+/** Canonical account handle, without @. Posts and other Instagram paths are not profiles. */
+export function registryInstagramHandle(value: string): string | undefined {
+  let handle = value.trim().toLowerCase();
+  if (/^https?:/u.test(handle)) {
+    try {
+      const url = new URL(handle);
+      if (url.protocol !== "https:" || url.port || url.username || url.password ||
+          !/^(?:www\.)?instagram\.com$/u.test(url.hostname)) return;
+      handle = url.pathname.replace(/^\/|\/$/gu, "");
+    } catch { return; }
+  } else handle = handle.replace(/^@/u, "");
+  if (!/^[a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?$/u.test(handle) || handle.includes("..") ||
+      /^(?:p|reel|reels|stories|accounts|about|explore|direct|developer|developers|directory|tv|share)$/u.test(handle)) return;
+  return handle;
+}
+
+function verifiedInstagramIdentity(credit: Credit, sources: Source[]): string | null | undefined {
+  const confirmed = new Set<string>();
+  for (const item of sources) {
+    const profile = registryInstagramHandle(item.url);
+    if (profile) confirmed.add(profile);
+    const mentions = [...item.quote.matchAll(/(?:^|[^\p{L}\p{N}_.@])@([a-z0-9_](?:[a-z0-9_.]{0,28}[a-z0-9_])?)(?![a-z0-9_]|\.[a-z0-9_])/giu)];
+    if (mentions.length !== 1 || !mentions[0] || !profilePage(item.url)) continue;
+    const handle = registryInstagramHandle(mentions[0][1]);
+    const before = norm(item.quote.slice(0, item.quote.indexOf("@")));
+    // An artist's profile may mention collaborators, sponsors or booking contacts.
+    // Require grammatical attribution or a matching billing plus a single-artist biography.
+    const named = before === credit.key || before.endsWith(" " + credit.key);
+    const labelled = /(?:^| )(?:instagram|instagram handle|ig|instagram profil)$/u.test(before) &&
+      (" " + norm(item.quote) + " ").includes(" " + credit.key + " ");
+    const billedBio = credit.handle === handle && before.startsWith(credit.key + " ") &&
+      /(?: is | je ).*\b(?:dj|singer|producer|band|pevac|producent)\b$/u.test(before);
+    if (handle && (named || labelled || billedBio) &&
+        !/\b(?:booking|sponsor|partner|guest|with|alongside|contact|not|without|ne|nije|bez|featuring|management|label)\b/u.test(before)) confirmed.add(handle);
+  }
+  if (!confirmed.size) return;
+  if (confirmed.size !== 1) return null;
+  const [handle] = confirmed;
+  return !credit.handle || credit.handle === handle ? handle : null;
 }
 function styleDescribesArtist(text: string, name: string, genre: MusicGenre) {
   const artist = norm(name);
@@ -178,18 +233,8 @@ function webEvidence(
   const corroboration = source(act.identityCorroboration);
   const sources = [identity, ...(corroboration ? [corroboration] : [])];
   const profileUrl = sources.find((s) => profilePage(s.url))?.url;
-  const instagram = sources
-    .map((s) => new URL(s.url))
-    .find(
-      (u) =>
-        /^(?:www\.)?instagram\.com$/.test(u.hostname) && profilePage(u.href),
-    );
-  const verifiedHandle =
-    credit.handle && sources.some((s) => sourceHandle(s, credit.handle!))
-      ? credit.handle
-      : !credit.handle && instagram
-        ? instagram.pathname.replace(/^\/|\/$/g, "").toLowerCase()
-        : undefined;
+  const verifiedHandle = verifiedInstagramIdentity(credit, sources);
+  if (verifiedHandle === null) return;
   const role = object(act.programmeRole),
     roleProof = source(role.evidence);
   const roleCategory = role.category;
@@ -310,8 +355,11 @@ function editorial(
   const role =
     roleSource &&
     (/\b(?:dj|deejay|disc jockey)\b/.test(norm(roleSource)) ? "party" : "live");
+  const verifiedHandle = verifiedInstagramIdentity(credit, [primary]);
+  if (verifiedHandle === null) return;
   return {
     kind: "editorial",
+    ...(verifiedHandle ? { verifiedHandle } : {}),
     identity: primary,
     profileUrl: primary.url,
     genres,
@@ -344,7 +392,7 @@ export function evidenceForCredits(
   const reviewed = research.genreScope
     ? research
     : object(discovery.reviewedProgramme);
-  return registryCredits(event.artists, performerHandles).map((credit) => {
+  return registryCredits(registryBilledArtists(event), performerHandles).map((credit) => {
     const edit = editorial(credit, event, row, label, reviewed);
     if (edit) return { credit, proof: edit };
     const named = items(research.acts)

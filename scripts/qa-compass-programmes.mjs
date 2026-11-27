@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { buildRecentVenueMusicProfile, projectCompassPlaces, selectCompassProgramme } from "../lib/travel/compass-projection.ts";
+import { requestOutingPart } from "../lib/travel/outing-request.ts";
+import { compactCompassHoursJson } from "../lib/venues/venue-hours-cache.ts";
+import { getEventDiscoveryTaxonomy } from "../lib/taxonomy/event-discovery.ts";
+import { sortPublicEventsByDateVenueTimeTitle } from "../lib/events/public-event-sort.ts";
+import { buildRecentVenueMusicProfile, projectCompassPlaces, projectOutingDirectory, projectOutingProgrammes, selectCompassProgramme } from "../lib/travel/compass-projection.ts";
 import { compassCandidates, getCompassGenres, getCompassMusicBasis, getCompassSourceAt, getCompassSourceProgrammes, matchesVibe } from "../lib/travel/compass.ts";
 
 const now = Date.parse("2026-11-17T20:00:00Z"); // 21:00 Belgrade.
@@ -160,4 +164,55 @@ const lateDeck = projectCompassPlaces([venue("source")], [lateProgramme], afterR
 assert.equal(getCompassSourceAt(lateDeck[0], afterRollover).event?.id, "House until eight",
   "An explicit end time takes precedence over the morning outing rollover.");
 assert.equal(getCompassSourceAt(lateDeck[0], Date.parse("2026-11-18T07:00:00Z")).event, undefined);
+// The fast geographic picker arrives before the programme window. Once joined,
+// both projections must choose exactly the same sources and ranked destinations.
+const testVenues = [club, kafana, venue("source"), venue("near-rock"), venue("far-house")];
+const closure = { verified: true, status: "temporarily_closed", checkedAt: "2026-11-12T10:00:00Z", sourceUrls: ["https://example.com/venue"] };
+const enrichedHours = JSON.stringify({ ...JSON.parse(hoursJson), raw: { operatingStatus: closure, result: { internal: "not used" } } });
+testVenues.push({ ...venue("closed"), hoursJson: enrichedHours });
+const sorted = sortPublicEventsByDateVenueTimeTitle([houseAtClub, folkAtKafana, sourceEvent, lateEvent, endedEvent,
+  houseElsewhere, { ...event("sourced", ["rock"], { venueId: "near-rock" }), performerGenreResearch: { sources: [{ url: "https://example.com/act" }] } },
+  { ...event("unknown time", ["house"], { venueId: "far-house", timeStatus: "unknown" }), performerGenreResearch: { estimated: true, sources: [] } }]);
+const compact = sorted.map(row => ({ _id: row._id, title: row.title, venueId: row.venueId, venue: row.venue, date: row.date,
+  time: row.time, timeStatus: row.timeStatus, eventTaxonomy: getEventDiscoveryTaxonomy(row),
+  genreEstimated: row.performerGenreResearch?.estimated === true, genreResearched: Boolean(row.performerGenreResearch?.sources.length) }));
+const split = new Map(projectOutingProgrammes(compact, now).map(group => [group.venueId, group.programmes]));
+const newDeck = projectOutingDirectory(testVenues.map(place => ({ ...place, hoursJson: compactCompassHoursJson(place.hoursJson) })))
+  .map(place => ({ ...place, programmes: split.get(place.id) ?? [] }));
+const fullDeck = projectCompassPlaces(testVenues, sorted, now);
+assert.deepEqual(newDeck.map(place => place.id), fullDeck.map(place => place.id));
+assert.deepEqual(JSON.parse(newDeck.at(-1).hours.hoursJson).raw, { operatingStatus: closure });
+assert.equal(compactCompassHoursJson("invalid"), undefined);
+for (const [i, place] of fullDeck.entries()) {
+  assert.deepEqual(newDeck[i].programmes, place.programmes);
+  assert.deepEqual(getCompassSourceAt(newDeck[i], now).musicProfile, getCompassSourceAt(place, now).musicProfile);
+  for (const mode of ["same", "different", "nearby"]) {
+    const output = ({ id, event, recommendation, hoursLabel, openNow }) => [id, event?.id, recommendation, hoursLabel, openNow];
+    assert.deepEqual(compassCandidates(newDeck, getCompassSourceAt(newDeck[i], now), origin, mode, now).map(output),
+      compassCandidates(fullDeck, getCompassSourceAt(place, now), origin, mode, now).map(output));
+  }
+}
+// A stalled listing request must reach retry, and a revoked location or
+// unmounted screen must suppress late success/error updates.
+const requests = [];
+function pendingFetch(url, { signal }) {
+  return new Promise((resolve, reject) => {
+    requests.push({ url, signal, resolve });
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+}
+await new Promise(resolve => requestOutingPart("places", () => assert.fail("timeout resolved"), resolve, { fetcher: pendingFetch, timeoutMs: 5 }));
+assert.equal(requests[0].url, "/api/travel/places");
+assert.equal(requests[0].signal.aborted, true);
+const updates = [];
+const dispose = requestOutingPart("programmes", value => updates.push(value), () => updates.push("error"), { fetcher: pendingFetch });
+dispose();
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(updates, []);
+assert.equal(requests[1].url, "/api/travel/places?view=programmes");
+const retried = await new Promise((resolve, reject) => {
+  requestOutingPart("places", resolve, reject, { fetcher: pendingFetch });
+  requests.at(-1).resolve(Response.json({ places: [{ id: "restored" }] }));
+});
+assert.deepEqual(retried, [{ id: "restored" }]);
 console.log("Compass programme QA passed: time-specific programme selection, venue profiles, genre and outing contrast, evidence and arrival eligibility.");

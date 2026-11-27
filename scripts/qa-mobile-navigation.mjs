@@ -23,7 +23,7 @@ for (const prefix of ["/en", "/ru"]) {
   assert.equal(nav.getMobileNavigationHref(`${prefix}/discover`, "2026-10-31"), `${prefix}/discover?date=2026-10-31`);
   assert.equal(nav.getMobileNavigationHref(`${prefix}/saved`, "2026-10-31"), `${prefix}/saved?date=2026-10-31`);
   assert.equal(nav.getMobileNavigationHref(`${prefix}/map`, "2026-10-31"), `${prefix}/map`);
-  for (const page of ["", "/discover", "/map"]) assert.equal(nav.canPrefetchMobileNavigation(`${prefix}${page}`), true);
+  for (const page of ["", "/discover", "/map", "/next"]) assert.equal(nav.canPrefetchMobileNavigation(`${prefix}${page}`), true);
   for (const page of ["/saved", "/admin", "/you"]) assert.equal(nav.canPrefetchMobileNavigation(`${prefix}${page}`), false);
 }
 

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { CompassLocationStep } from "./compass-location-step";
 import { ArrowLeft, ArrowRight, CarFront, Check, Footprints, LoaderCircle, LocateFixed, MapPin, Music2, Route, Shuffle, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "@/i18n/client";
@@ -52,12 +52,11 @@ function readSourceMusicContext(value: unknown): SourceMusicContext {
   return { musicProfile: profile, ...(event ? { event } : {}) };
 }
 
-export function CompassFlow({ places, initialNow, loadFailed }: { places: CompassPlace[]; initialNow: number; loadFailed: boolean }) {
+export function CompassFlow({ places, programmesStatus, onRefresh }: { places: CompassPlace[]; programmesStatus: "loading" | "ready" | "error"; onRefresh: () => void }) {
   const locale = useLocale();
   const t = (key: Parameters<typeof travelText>[1]) => travelText(locale, key);
-  const router = useRouter();
-  const { position, status, error, requestLocation } = useUserLocation();
-  const [now, setNow] = useState(initialNow);
+  const { position } = useUserLocation();
+  const [now, setNow] = useState(Date.now);
   const [phase, setPhase] = useState<"confirm" | "vibe" | "results">("confirm");
   const [rejectedIds, setRejectedIds] = useState<string[]>([]);
   const [manualVenueId, setManualVenueId] = useState("");
@@ -70,7 +69,6 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   }>();
   const [sourceLookupAttempt, setSourceLookupAttempt] = useState(0);
   const [vibe, setVibe] = useState<"same" | "different" | "nearby">("same");
-  const [mounted, setMounted] = useState(false);
   const [index, setIndex] = useState(0);
   const [route, setRoute] = useState<StreetRoute | null>(null);
   const [routeVisible, setRouteVisible] = useState(false);
@@ -90,7 +88,6 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   const [nudged, setNudged] = useState(false);
   const nudgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    setMounted(true);
     const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 30_000);
     const visibility = () => setPaused(document.hidden);
     document.addEventListener("visibilitychange", visibility);
@@ -108,7 +105,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
     currentReference === "venue" ? "venue" : currentReference ? { eventId: currentReference } : undefined) : undefined,
   [sourcePlace, now, currentReference]);
   const sourceVenueId = resolvedSource?.id;
-  const sourceLookupKey = resolvedSource && !currentReference && (!resolvedSource.venueType || resolvedSource.event) && !getCompassGenres(resolvedSource).length
+  const sourceLookupKey = position && programmesStatus === "ready" && resolvedSource && !currentReference && (!resolvedSource.venueType || resolvedSource.event) && !getCompassGenres(resolvedSource).length
     ? `${resolvedSource.id}/${resolvedSource.event?.id ?? ""}` : undefined;
   const lookup = sourceLookup?.key === sourceLookupKey ? sourceLookup : undefined;
   const sourceLookupLoading = Boolean(sourceLookupKey && (!lookup || lookup.status === "loading"));
@@ -140,7 +137,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
     return context.event && context.event.id === resolvedSource.event?.id
       ? { ...resolvedSource, musicProfile: context.musicProfile } : resolvedSource;
   }, [lookup, now, resolvedSource, sourcePlace]);
-  const candidates = useMemo(() => source && position ? compassCandidates(places, source, position, vibe, now) : [], [places, source, position, vibe, now]);
+  const candidates = useMemo(() => phase === "results" && programmesStatus === "ready" && source && position ? compassCandidates(places, source, position, vibe, now) : [], [phase, programmesStatus, places, source, position, vibe, now]);
   useEffect(() => { setIndex((current) => Math.min(current, Math.max(0, candidates.length - 1))); }, [candidates.length]);
   const destination = candidates[Math.min(index, Math.max(0, candidates.length - 1))];
   const destinationEvent = destination?.recommendation.basis === "venue" ? undefined : destination?.event;
@@ -175,7 +172,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
   const delta = ((targetAngle - angle.current + 540) % 360 + 360) % 360 - 180;
   const displayedAngle = angle.current + delta;
   useEffect(() => { angle.current = displayedAngle; }, [displayedAngle]);
-  function chooseVibe(next: "same" | "different" | "nearby") { void enableCompass(true); warmRouteMap(); routeRequest.current?.abort(); setNow(Date.now()); setRouteStatus("idle"); setRouteVisible(false); setVibe(next); setIndex(0); setPhase("results"); }
+  function chooseVibe(next: "same" | "different" | "nearby") { void enableCompass(true); routeRequest.current?.abort(); setNow(Date.now()); setRouteStatus("idle"); setRouteVisible(false); setVibe(next); setIndex(0); setPhase("results"); }
   function reset() { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("confirm"); setConfirmedPlace(null); setSourceReference(""); setSourceLookup(undefined); setManualVenueId(""); setRejectedIds([]); setIndex(0); setRoute(null); setRouteVisible(false); }
   function hideRoute() { void enableCompass(true); routeRequest.current?.abort(); setRouteStatus("idle"); setRouteVisible(false); requestAnimationFrame(() => routeButton.current?.focus({ preventScroll: true })); }
   function nudge() { setNudged(false); requestAnimationFrame(() => setNudged(true)); if (nudgeTimer.current) clearTimeout(nudgeTimer.current); nudgeTimer.current = setTimeout(() => setNudged(false), 800); }
@@ -265,19 +262,14 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
       <div><h1 className={styles.heading}>{t("next")}</h1>{position && phase === "results" ? <p className={styles.modeLabel}>{t(vibe === "same" ? "same" : vibe === "different" ? "different" : "nearby")}<small>{vibe === "nearby" ? t("nearest") : source?.event?.title ?? source?.name}</small></p> : null}</div>
       {position && phase === "results" ? <button type="button" className={styles.textButton} onClick={() => { routeRequest.current?.abort(); setRouteStatus("idle"); setPhase("vibe"); }}>{t("change")}</button> : position && phase === "vibe" ? <button className={styles.resetButton} type="button" onClick={reset} aria-label={t("reset")} title={t("reset")}><LocateFixed size={18} aria-hidden="true" /></button> : null}
     </div>
-    {!position ? <section className={styles.step}>
-      <LocateFixed size={40} className="text-primary" aria-hidden="true" />
-      <p className={styles.intro}>{t("locationIntro")}</p>
-      <button className={styles.primary} type="button" disabled={!mounted || status === "loading"} onClick={requestLocation}><LocateFixed size={18} />{t(status === "loading" ? "locating" : "locate")}</button>
-      {error ? <p role="status" className={styles.error}>{error}</p> : null}
-    </section> : phase === "confirm" ? <section className={`${styles.step} ${styles.confirm}`} key="confirm">
+    {!position ? <CompassLocationStep /> : phase === "confirm" ? <section className={`${styles.step} ${styles.confirm}`} key="confirm">
       <h2 className={styles.title}>{t("here")}</h2>
       {!manualVenueId ? <p className={styles.muted}>{t("nearest")}</p> : null}
       {confirmation ? <>
         <div className={styles.place} key={confirmation.id}><MapPin size={24} className="text-primary" aria-hidden="true" /><h3 className={styles.name}>{confirmation.name}</h3><p className={styles.address}>{confirmation.address}</p>
           <p className={styles.muted}>≈ {formatTravelDuration(estimateTravel(position, confirmation).walkMinutes, locale)} {t("walk")}</p></div>
-        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => { setManualVenueId(""); setRejectedIds(ids => [...ids, confirmation.id]); }}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); warmRouteMap(); setNow(Date.now()); setConfirmedPlace(confirmation); setPhase("vibe"); }}><Check size={18} aria-hidden="true" />{t("yes")}</button></div>
-      </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); router.refresh(); }}>{t("refresh")}</button></>}
+        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => { setManualVenueId(""); setRejectedIds(ids => [...ids, confirmation.id]); }}>{t("no")}</button><button type="button" className={styles.primary} onClick={() => { void enableCompass(true); setNow(Date.now()); setConfirmedPlace(confirmation); setPhase("vibe"); }}><Check size={18} aria-hidden="true" />{t("yes")}</button></div>
+      </> : <><p className={styles.intro}>{t(places.length ? "end" : "noPlaces")}</p><button type="button" className={styles.secondary} onClick={() => { setRejectedIds([]); onRefresh(); }}>{t("refresh")}</button></>}
       {venueOptions.length ? <details className={styles.manualVenue}>
         <summary className={styles.textButton}>{t("chooseAnotherVenue")}</summary>
         <label className={styles.sourceReference}>
@@ -288,6 +280,9 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
           </select>
         </label>
       </details> : null}
+    </section> : programmesStatus !== "ready" ? <section className={styles.step} role="status">
+      {programmesStatus === "error" ? <><p className={styles.error}>{t("loadError")}</p><button className={styles.secondary} type="button" onClick={onRefresh}>{t("refresh")}</button></>
+        : <><LoaderCircle size={20} className="motion-safe:animate-spin" aria-hidden="true" />{t("loadingProgrammes")}</>}
     </section> : phase === "vibe" ? <section className={`${styles.step} ${styles.vibe}`} key="vibe">
       <p className={styles.muted}>{source?.name}{sourceVenueType ? ` · ${sourceVenueType}` : null}</p>
       {sourceProgrammes.length ? <label className={styles.sourceReference}>
@@ -348,8 +343,7 @@ export function CompassFlow({ places, initialNow, loadFailed }: { places: Compas
         </div>
         <div className={`${styles.actions} ${styles.routeActions}`}><button className={styles.primary} type="button" disabled={routeStatus === "loading"} onClick={showRoute} onFocus={warmRouteMap} onPointerEnter={warmRouteMap} onPointerDown={warmRouteMap} ref={routeButton} aria-controls="where-next-direction" aria-expanded={routeVisible}><Route size={17} aria-hidden="true" />{t(routeStatus === "loading" ? "routeLoading" : "route")}</button><YandexTaxiButton latitude={destination.latitude} longitude={destination.longitude} venueName={destination.name} /></div>
         <div className={styles.pagination}><button type="button" className={styles.secondary} disabled={index === 0} onClick={() => { void enableCompass(true); setIndex((value) => value - 1); }} aria-label={t("previous")}><ArrowLeft size={17} aria-hidden="true" /></button><button type="button" className={styles.secondary} disabled={index >= candidates.length - 1} onClick={() => { void enableCompass(true); setIndex((value) => value + 1); }}>{t("nextPlace")}<ArrowRight size={17} aria-hidden="true" /></button><span className={styles.muted}>{Math.min(index + 1, candidates.length)} / {candidates.length}</span></div>
-      </> : <><h2 className={styles.title}>{t("empty")}</h2><p className={styles.intro}>{t("emptyHint")}</p><button className={styles.secondary} type="button" onClick={() => { setNow(Date.now()); router.refresh(); }}>{t("refresh")}</button>{vibe !== "nearby" ? <div><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></div> : null}</>}
+      </> : <><h2 className={styles.title}>{t("empty")}</h2><p className={styles.intro}>{t("emptyHint")}</p><button className={styles.secondary} type="button" onClick={() => { setNow(Date.now()); onRefresh(); }}>{t("refresh")}</button>{vibe !== "nearby" ? <div><button type="button" className={styles.textButton} onClick={() => chooseVibe("nearby")}>{t("nearby")}<ArrowRight size={14} /></button></div> : null}</>}
     </section>}
-    {loadFailed ? <p role="status" className={styles.error}>{t("loadError")}</p> : null}
   </main>;
 }

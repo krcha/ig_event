@@ -480,7 +480,7 @@ function dailyQueueFixture() {
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
     by_priority_readyAt: ["priority", "readyAt"], by_reason_priority_attempt_readyAt: ["reason", "priority", "lastAttemptAt", "readyAt"],
-    by_identity: ["identityKey"], by_name: ["nameKey"], by_event: ["eventId"],
+    by_identity: ["identityKey"], by_instagram_handle: ["instagramHandle"], by_name: ["nameKey"], by_event: ["eventId"],
     by_creation_time: ["_creationTime", "_creationTime"],
     by_publicationState_date: ["publicationState", "date"], by_key: ["key"],
   };
