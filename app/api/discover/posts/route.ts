@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isPlausibleConvexPublicId } from "@/lib/convex/public-id";
 import { loadDiscoverEventsAfter } from "@/lib/discover/feed-page";
-import { compressedPublicJson } from "@/lib/http/compressed-json";
+import { publicJsonResponse } from "@/lib/http/compressed-json";
 import {
   addDaysToDateKey,
   formatUtcDateKey,
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  return compressedPublicJson({
+  return publicJsonResponse({
     date,
     events: batch.events,
     hasMore: batch.hasMore,

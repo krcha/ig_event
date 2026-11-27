@@ -62,9 +62,11 @@ formats pass through unchanged. Cached stored derivatives expire after one hour;
 upstream derivatives expire after five minutes. Ingestion originals, checksums
 and source/slide attachments are unchanged.
 
-Calendar overview and Discover page JSON negotiate Brotli/gzip above 1 KB,
-with identity fallback and `Vary: Accept-Encoding`. Their existing `no-store`
-policy and response schemas are preserved. Clerk uses the pinned SDK's
+Calendar overview, Discover and the outing compass return JSON with
+`Vary: Accept-Encoding` and `no-store`. The serving HTTP layer compresses
+the response for supported clients and sets the matching encoding header.
+Check the decoded JSON through the public domain when changing that layer.
+Clerk uses the pinned SDK's
 headless browser variant with the existing custom forms and providers.
 
 `/api/events/[eventId]/export` creates a 1080 x 1920 public JPEG for the event
