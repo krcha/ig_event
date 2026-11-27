@@ -178,6 +178,21 @@ export async function evaluateEventPublication(
   });
 }
 
+// Pages can share one snapshot read per linked venue across eligibility and display.
+export type PublicationVenueCache = Map<Doc<"venues">["_id"], Promise<Doc<"venues"> | null>>;
+
+export function loadPublicationVenue(
+  ctx: Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">,
+  id: Doc<"venues">["_id"],
+  cache?: PublicationVenueCache,
+) {
+  const cached = cache?.get(id);
+  if (cached) return cached;
+  const pending = ctx.db.get(id);
+  cache?.set(id, pending);
+  return pending;
+}
+
 /**
  * Authoritative public-read adapter during the strangler migration. A current
  * materialized decision is mandatory once either publication field exists,
@@ -188,7 +203,7 @@ export async function evaluateEventPublication(
 export async function isEventPubliclyVisible(
   ctx: QueryCtx | MutationCtx,
   event: Doc<"events">,
-  options: { allowNeverMigratedApproved?: boolean } = {},
+  options: { allowNeverMigratedApproved?: boolean; venueCache?: PublicationVenueCache } = {},
 ): Promise<boolean> {
   if (event.status !== "approved") return false;
   const hasMaterializedDecision =
@@ -204,7 +219,7 @@ export async function isEventPubliclyVisible(
     return false;
   }
   if (event.venueId) {
-    const venue = await ctx.db.get(event.venueId);
+    const venue = await loadPublicationVenue(ctx, event.venueId, options.venueCache);
     if (!venue || !isVenuePublic(venue)) return false;
   } else {
     const normalizedHandle = normalizeHandle(
@@ -250,7 +265,7 @@ export async function isEventPubliclyVisible(
     ];
     if (legacyVenueIds.length > 1) return false;
     if (legacyVenueIds.length === 1) {
-      const venue = await ctx.db.get(legacyVenueIds[0]!);
+      const venue = await loadPublicationVenue(ctx, legacyVenueIds[0]!, options.venueCache);
       if (!venue || !isVenuePublic(venue)) return false;
     } else if (await hasCompleteEventVenueBindingCoverage(ctx)) {
       // Once the migration proves every eligible historical row was bound,

@@ -5,6 +5,7 @@ import {
 } from "convex/server";
 import { v } from "convex/values";
 import { requireAdminOrServiceSecret } from "./authz";
+import { eventDiscoveryTaxonomy } from "./eventDiscoveryValues";
 import { markSourceOccurrenceTopologyMutation } from "./internal/sourceOccurrenceTopologyEpoch";
 import {
   approvedLegacyVenueRepairArgs,
@@ -24,6 +25,7 @@ import {
   listApprovedUpcomingByDatePaginatedHandler,
   listPublicCalendarEventsWindowPaginatedHandler,
   listPublicEventsWindowHandler,
+  listPublicRecommendationWindowPaginatedHandler,
 } from "./eventDomain/publicReads";
 import {
   refreshCanonicalEventDerivedStates,
@@ -295,6 +297,26 @@ export const listPublicCalendarEventsWindowPaginated = query({
     includePerformerGenreResearch: v.optional(v.boolean()),
   },
   handler: listPublicCalendarEventsWindowPaginatedHandler,
+});
+
+export const listPublicRecommendationWindowPaginated = query({
+  args: {
+    fromDate: v.string(),
+    beforeDate: v.string(),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.object({
+    continueCursor: v.string(),
+    isDone: v.boolean(),
+    rawPageCount: v.number(),
+    scanLimitReached: v.boolean(),
+    page: v.array(v.object({
+      _id: v.id("events"), title: v.string(), venue: v.string(), date: v.string(),
+      time: v.optional(v.string()), timeStatus: eventTimeStatus, status: v.literal("approved"),
+      eventTaxonomy: eventDiscoveryTaxonomy, genreEstimated: v.boolean(),
+    })),
+  }),
+  handler: listPublicRecommendationWindowPaginatedHandler,
 });
 
 export const listApprovedUpcomingByDatePaginated = query({

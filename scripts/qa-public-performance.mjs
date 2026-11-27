@@ -313,7 +313,7 @@ assert.match(
 );
 assert.match(
   publicReadsSource,
-  /export async function listPublicCalendarEventsWindowPaginatedHandler[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?readMode === "materialized"[\s\S]*?MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE[\s\S]*?PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
+  /async function paginatePublicCalendarWindow[\s\S]*?return paginatePublicationRows\(\{[\s\S]*?readMode === "materialized"[\s\S]*?MATERIALIZED_PUBLIC_CALENDAR_PAGE_SIZE[\s\S]*?PUBLIC_EVENT_PAGE_SIZE,[\s\S]*?loadApprovedWindowRawPage\(ctx, readMode, \{[\s\S]*?beforeDate: args\.beforeDate,[\s\S]*?projectVisible:/,
   "The compact calendar window should use the same single-read pagination adapter with bounded mode-specific pages.",
 );
 

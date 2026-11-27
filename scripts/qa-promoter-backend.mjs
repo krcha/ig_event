@@ -23,6 +23,7 @@ import {
 import {
   getPublicApprovedEventHandler,
   listPublicCalendarEventsWindowPaginatedHandler,
+  listPublicRecommendationWindowPaginatedHandler,
 } from "../convex/eventDomain/publicReads.ts";
 import {
   buildPendingModerationVenueResolver,
@@ -30,6 +31,9 @@ import {
   prepareHumanApprovalCandidateFromVenueResolver,
 } from "../convex/eventDomain/moderationVenue.ts";
 import { projectPublicEvent } from "../convex/publicEventProjection.ts";
+import { getDisplayEventTime, resolveEventTimeProvenance } from "../lib/events/event-time.ts";
+import { getEventDiscoveryTaxonomy, EVENT_DISCOVERY_VERSION } from "../lib/taxonomy/event-discovery.ts";
+import { PERFORMER_GENRE_RESEARCH_VERSION } from "../lib/taxonomy/performer-genre-research.ts";
 import {
   listFavoriteVenues,
   listSavedEvents,
@@ -408,6 +412,79 @@ try {
   }
   assert.deepEqual(materialized.tables, originalMaterializedFacts);
   assert.equal(materialized.writes.length, 0);
+
+  // Exercise both production visibility modes, including an empty nonterminal page.
+  const window = { fromDate: "2026-10-18", beforeDate: "2026-10-19", cursor: null };
+  const live = { primaryCategory: "live", categories: ["live"], formats: ["concert"], genres: [] };
+  const billed = [
+    event("estimated", physical, { time: "21:00-23:00", timeStatus: "confirmed", timeSource: "caption" }),
+    event("researched", physical, { time: "TBA" }),
+    event("direct", physical),
+    event("stale", physical, { title: "Kviz znanja", eventType: "event", timeStatus: "confirmed" }),
+    promoterNamedEvent,
+  ];
+  const labels = ["estimated", "researched", "direct", "stale"].map((id) => ({
+    _id: `label-${id}`, eventId: id, eventUpdatedAt: id === "stale" ? 0 : 1, version: EVENT_DISCOVERY_VERSION,
+    taxonomy: id === "direct" ? { ...live, genres: ["pop"] } : live,
+    auditJson: JSON.stringify({ estimatedGenres: ["rock"] }),
+  }));
+  const matches = [{ performer: "QA artist", genre: "jazz-blues", url: "https://example.org/bio", identityUrl: "https://example.org/artist" }];
+  for (const mode of ["materialized", "compatibility"]) {
+    const pageSize = mode === "materialized" ? 50 : 10;
+    const hiddenRows = Array.from({ length: pageSize }, (_, index) =>
+      event(`hidden-${index}`, hiddenOrganizer));
+    const events = [...hiddenRows, ...billed, event("outside", physical, { date: window.beforeDate })]
+      .map((row) => mode === "materialized" ? row : {
+        ...row, publicationPolicyVersion: undefined, publicationState: undefined, publicationReason: undefined,
+      });
+    const comparison = fixture({
+      ...(mode === "materialized" ? originalMaterializedFacts : {}), events, venues,
+      eventDiscoveryLabels: labels,
+      eventPerformerGenreResearch: [{
+        _id: "verified", eventId: "researched", eventUpdatedAt: 1, version: PERFORMER_GENRE_RESEARCH_VERSION, matches,
+      }],
+    });
+    const empty = await listPublicRecommendationWindowPaginatedHandler(comparison.ctx, window);
+    assert.deepEqual(empty.page, []);
+    assert.equal(empty.isDone, false);
+    assert.equal(comparison.reads.filter(({ id }) => id === hiddenOrganizer._id).length, 1,
+      "All hidden appearances at one venue share one eligibility read");
+    assert.equal(comparison.reads.some(({ table }) => table === "eventDiscoveryLabels"), false);
+    const page = await listPublicRecommendationWindowPaginatedHandler(comparison.ctx, { ...window, cursor: empty.continueCursor });
+    assert.equal(page.isDone, true);
+    assert.deepEqual(page.page.map(({ _id }) => _id), billed.map(({ _id }) => _id));
+    assert.deepEqual(page.page.map(({ eventTaxonomy }) => eventTaxonomy.genres), [["rock"], ["jazz-blues"], ["pop"], [], []]);
+    assert.deepEqual(page.page.map(({ genreEstimated }) => genreEstimated), [true, false, false, false, false]);
+    assert.equal(page.page[3].eventTaxonomy.primaryCategory, "participate");
+    assert.equal(page.page[0].time, "21:00–23:00");
+    assert.equal(page.page[0].timeStatus, "confirmed");
+    assert.equal("time" in page.page[1], false);
+    assert.equal(page.page[3].timeStatus, "unknown", "Legacy times without provenance remain unknown");
+    assert.deepEqual(comparison.reads.filter(({ operation }) => operation === "paginate").map(({ index, limit }) => [index, limit]),
+      Array.from({ length: 2 }, () => [mode === "materialized" ? "by_publicationState_date" : "by_status_date", pageSize]));
+    assert.equal(comparison.reads.filter(({ id }) => id === physical._id).length, 1,
+      "Lifecycle and canonical display share the same physical venue read");
+    assert.equal(comparison.reads.filter(({ table }) => table === "eventDiscoveryLabels").length, billed.length);
+    assert.equal(comparison.reads.filter(({ table }) => table === "eventPerformerGenreResearch").length, 2,
+      "Only current eligible music labels without a direct genre need a research read");
+
+    const ordinary = await listPublicCalendarEventsWindowPaginatedHandler(comparison.ctx, {
+      ...window, cursor: empty.continueCursor, includeEventTaxonomy: true, includePerformerGenreResearch: true,
+    });
+    assert.deepEqual(page.page, ordinary.page.map((row) => {
+      const venue = row.venueId === physical._id ? physical.name : row.venue;
+      const time = getDisplayEventTime(row.time);
+      return {
+        _id: row._id, title: row.title, venue, date: row.date, ...(time ? { time } : {}),
+        timeStatus: resolveEventTimeProvenance(row).status, status: row.status,
+        eventTaxonomy: getEventDiscoveryTaxonomy({ ...row, venue }), genreEstimated: Boolean(row.performerGenreResearch?.estimated),
+      };
+    }), "Compact rows must preserve exactly the public ranking inputs of the enriched calendar");
+    assert.equal(comparison.writes.length, 0);
+    await assert.rejects(() => listPublicRecommendationWindowPaginatedHandler(comparison.ctx, {
+      fromDate: "2026-09-01", beforeDate: "2026-11-01",
+    }), /date window/iu);
+  }
 
   const compatibilityEvent = event("legacy-promoter-event", organizer, {
     publicationPolicyVersion: undefined, publicationState: undefined, publicationReason: undefined,

@@ -18,7 +18,7 @@ import { isVenuePublic } from "../../lib/venues/venue-lifecycle";
 import { venueRequiresPhysicalDetails } from "../../lib/taxonomy/venue-types";
 import { requireAdminOrServiceSecret } from "../authz";
 import { projectPublicEvent } from "../publicEventProjection";
-import { isEventPubliclyVisible } from "../publicationPolicy";
+import { isEventPubliclyVisible, loadPublicationVenue, type PublicationVenueCache } from "../publicationPolicy";
 import {
   resolvePublicationReadMode,
   type PublicationReadMode,
@@ -27,6 +27,8 @@ import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy"
 import { getConfirmedEventSchemaFacts } from "../../lib/events/confirmed-event-schema-facts";
 import { getEventArtistDisplayCredits } from "../../lib/events/event-artist-display-credits";
 import { loadPublicEventDiscoveryLabels } from "../eventDiscovery";
+import { getDisplayEventTime, resolveEventTimeProvenance } from "../../lib/events/event-time";
+import { getEventDiscoveryTaxonomy } from "../../lib/taxonomy/event-discovery";
 
 // Live publication validation can touch persisted source evidence, venue
 // identities, and occurrence lineage for every raw row. Keep each public UDF
@@ -162,6 +164,7 @@ function getUpcomingWeekendDates(today: string): Set<string> {
 async function loadPublicVenueIdsForEvents(
   ctx: QueryCtx,
   events: Doc<"events">[],
+  venueCache?: PublicationVenueCache,
 ): Promise<{
   physicalVenueIds: Set<Id<"venues">>;
   publicVenueIds: Set<Id<"venues">>;
@@ -175,7 +178,7 @@ async function loadPublicVenueIdsForEvents(
     ),
   ];
   const venues = await Promise.all(
-    venueIds.map((venueId) => ctx.db.get(venueId)),
+    venueIds.map((venueId) => loadPublicationVenue(ctx, venueId, venueCache)),
   );
   const publicVenues = venues.filter(
     (venue): venue is Doc<"venues"> => venue !== null && isVenuePublic(venue),
@@ -190,18 +193,33 @@ async function loadPublicVenueIdsForEvents(
   };
 }
 
-async function projectCanonicallyGroundedPublicEventPage(
+type VisibleWindowRow = {
+  event: ReturnType<typeof projectPublicEvent>;
+  physicalVenue?: Doc<"venues">;
+};
+
+async function projectGroundedPublicEventRows(
   ctx: QueryCtx,
   groundedEvents: Doc<"events">[],
-) {
-  const { physicalVenueIds, venuesById } = await loadPublicVenueIdsForEvents(ctx, groundedEvents);
-  return groundedEvents.map((event) =>
-    projectPublicEvent(
-      event,
-      event.venueId !== undefined && physicalVenueIds.has(event.venueId),
-      event.venueId ? venuesById.get(event.venueId) : undefined,
-    ),
-  );
+  requirePublicVenue: boolean,
+  venueCache?: PublicationVenueCache,
+): Promise<VisibleWindowRow[]> {
+  const { physicalVenueIds, publicVenueIds, venuesById } = await loadPublicVenueIdsForEvents(ctx, groundedEvents, venueCache);
+  const rows: VisibleWindowRow[] = [];
+  for (const event of groundedEvents) {
+    if (requirePublicVenue && (!event.venueId || !publicVenueIds.has(event.venueId))) continue;
+    const linked = event.venueId ? venuesById.get(event.venueId) : undefined;
+    const physical = event.venueId !== undefined && physicalVenueIds.has(event.venueId);
+    rows.push({
+      event: projectPublicEvent(event, physical, linked),
+      physicalVenue: physical ? linked : undefined,
+    });
+  }
+  return rows;
+}
+
+async function projectCanonicallyGroundedPublicEventPage(ctx: QueryCtx, events: Doc<"events">[]) {
+  return (await projectGroundedPublicEventRows(ctx, events, false)).map(({ event }) => event);
 }
 
 async function projectPublicEventPage(ctx: QueryCtx, events: Doc<"events">[]) {
@@ -251,6 +269,7 @@ function usesEventEvidenceV2(event: Doc<"events">): boolean {
 async function filterLegacyCompatiblePublicEvents(
   ctx: QueryCtx,
   events: Doc<"events">[],
+  venueCache?: PublicationVenueCache,
 ): Promise<Doc<"events">[]> {
   const visibility = await Promise.all(
     events.map((event) => {
@@ -264,6 +283,7 @@ async function filterLegacyCompatiblePublicEvents(
         hasHumanReviewedLegacySourcePolicyMarker(event.normalizedFieldsJson);
       return isEventPubliclyVisible(ctx, event, {
         allowNeverMigratedApproved: !requiresLiveGroundingCheck,
+        venueCache,
       });
     }),
   );
@@ -274,16 +294,15 @@ async function projectLegacyCompatiblePublicEventPage(
   ctx: QueryCtx,
   events: Doc<"events">[],
 ) {
-  return projectCanonicallyGroundedPublicEventPage(
-    ctx,
-    await filterLegacyCompatiblePublicEvents(ctx, events),
-  );
+  return (await loadVisibleWindowRows(ctx, events, "compatibility")).map(({ event }) => event);
 }
 
-async function projectMaterializedPublicEventPage(
-  ctx: QueryCtx,
-  events: Doc<"events">[],
-) {
+async function loadVisibleWindowRows(ctx: QueryCtx, events: Doc<"events">[], mode: PublicationReadMode) {
+  if (mode === "compatibility") {
+    const venueCache: PublicationVenueCache = new Map();
+    const grounded = await filterLegacyCompatiblePublicEvents(ctx, events, venueCache);
+    return projectGroundedPublicEventRows(ctx, grounded, false, venueCache);
+  }
   const currentPublishableEvents = events.filter(
     (event) =>
       event.status === "approved" &&
@@ -291,22 +310,7 @@ async function projectMaterializedPublicEventPage(
       event.publicationState === "publishable" &&
       event.publicationReason === "canonical_source_grounding_verified",
   );
-  const { physicalVenueIds, publicVenueIds, venuesById } = await loadPublicVenueIdsForEvents(
-    ctx,
-    currentPublishableEvents,
-  );
-  return currentPublishableEvents
-    .filter(
-      (event) =>
-        event.venueId !== undefined && publicVenueIds.has(event.venueId),
-    )
-    .map((event) =>
-      projectPublicEvent(
-        event,
-        event.venueId !== undefined && physicalVenueIds.has(event.venueId),
-        event.venueId ? venuesById.get(event.venueId) : undefined,
-      ),
-    );
+  return projectGroundedPublicEventRows(ctx, currentPublishableEvents, true);
 }
 
 function toApprovedEventDuplicateRecord(
@@ -444,9 +448,8 @@ export async function getPublicApprovedEventHandler(
     event.publicationState === "publishable" &&
     event.publicationPolicyVersion === PUBLICATION_POLICY_VERSION &&
     (await resolvePublicationReadMode(ctx)) === "materialized";
-  const [projected] = await (materialized
-    ? projectMaterializedPublicEventPage(ctx, [event])
-    : projectLegacyCompatiblePublicEventPage(ctx, [event]));
+  const [row] = await loadVisibleWindowRows(ctx, [event], materialized ? "materialized" : "compatibility");
+  const projected = row?.event;
   if (!projected) return null;
   const structuredDataFacts = getConfirmedEventSchemaFacts(event, projected.venueId);
   const artistDisplayCredits = getEventArtistDisplayCredits(event);
@@ -538,9 +541,12 @@ function toPublicCalendarEvent(event: ReturnType<typeof projectPublicEvent>) {
   };
 }
 
-export async function listPublicCalendarEventsWindowPaginatedHandler(
+type CalendarWindow = { beforeDate: string; fromDate: string; cursor?: string | null };
+
+async function paginatePublicCalendarWindow<T>(
   ctx: QueryCtx,
-  args: { beforeDate: string; cursor?: string | null; fromDate: string; includeEventTaxonomy?: boolean; includePerformerGenreResearch?: boolean },
+  args: CalendarWindow,
+  project: (rows: VisibleWindowRow[]) => Promise<T[]>,
 ) {
   assertPublicEventDateWindow(
     args.fromDate,
@@ -562,18 +568,40 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
         fromDate: args.fromDate,
         numItems,
       }),
-    projectVisible: async (events) => {
-      const projected = (await (readMode === "materialized"
-        ? projectMaterializedPublicEventPage(ctx, events)
-        : projectLegacyCompatiblePublicEventPage(ctx, events)
-      )).map(toPublicCalendarEvent);
-      if (!args.includeEventTaxonomy) return projected;
-      return Promise.all(projected.map(async (event) => {
-        const discovery = await loadPublicEventDiscoveryLabels(ctx, event, args.includePerformerGenreResearch === true);
-        return discovery ? { ...event, ...discovery } : event;
-      }));
-    },
+    projectVisible: async (events) => project(await loadVisibleWindowRows(ctx, events, readMode)),
   });
+}
+
+export async function listPublicCalendarEventsWindowPaginatedHandler(
+  ctx: QueryCtx,
+  args: CalendarWindow & { includeEventTaxonomy?: boolean; includePerformerGenreResearch?: boolean },
+) {
+  return paginatePublicCalendarWindow(ctx, args, async (rows) => {
+    const projected = rows.map(({ event }) => toPublicCalendarEvent(event));
+    if (!args.includeEventTaxonomy) return projected;
+    return Promise.all(projected.map(async (event) => {
+      const discovery = await loadPublicEventDiscoveryLabels(ctx, event, args.includePerformerGenreResearch === true);
+      return discovery ? { ...event, ...discovery } : event;
+    }));
+  });
+}
+
+export async function listPublicRecommendationWindowPaginatedHandler(ctx: QueryCtx, args: CalendarWindow) {
+  return paginatePublicCalendarWindow(ctx, args, (rows) => Promise.all(rows.map(async ({ event, physicalVenue }) => {
+    const discovery = await loadPublicEventDiscoveryLabels(ctx, event, true);
+    const research = discovery?.performerGenreResearch;
+    // Calendar normalization uses the current bound physical venue's public name.
+    const venue = physicalVenue?.name ?? event.venue;
+    const time = getDisplayEventTime(event.time);
+    return {
+      _id: event._id, title: event.title, venue, date: event.date,
+      ...(time ? { time } : {}),
+      timeStatus: resolveEventTimeProvenance(event).status,
+      status: "approved" as const,
+      eventTaxonomy: discovery?.eventTaxonomy ?? getEventDiscoveryTaxonomy({ ...event, venue }),
+      genreEstimated: Boolean(research && "estimated" in research && research.estimated === true),
+    };
+  })));
 }
 
 export async function listApprovedUpcomingByDatePaginatedHandler(

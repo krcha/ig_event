@@ -155,7 +155,7 @@ assert.match(
 
 const calendarQuerySource = section(
   publicReadsSource,
-  "export async function listPublicCalendarEventsWindowPaginatedHandler",
+  "async function paginatePublicCalendarWindow",
   "export async function listApprovedUpcomingByDatePaginatedHandler",
 );
 const calendarQueryFacadeSource = section(
@@ -190,8 +190,8 @@ assert.match(
 );
 assert.match(
   calendarQuerySource,
-  /readMode === "materialized"[\s\S]*projectMaterializedPublicEventPage\(ctx, events\)[\s\S]*projectLegacyCompatiblePublicEventPage\(ctx, events\)/,
-  "The calendar must use the audited materialized projection only after cutover and retain live compatibility validation for rollback.",
+  /projectVisible: async \(events\) => project\(await loadVisibleWindowRows\(ctx, events, readMode\)\)/,
+  "Every calendar or recommendation page must project through the same publication visibility gate.",
 );
 assert.doesNotMatch(
   calendarQuerySource,
