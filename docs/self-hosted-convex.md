@@ -229,19 +229,30 @@ place.
 
 ## Backups
 
-Minimum backup before upgrades or migrations:
+Take a consistent snapshot of the database and its file storage before an
+upgrade or migration. Restore it on an isolated machine with outbound traffic
+blocked, jobs disabled and no live integrations. Use a provider snapshot that
+covers the entire data volume, or the stopped-volume procedure below during a
+planned maintenance window. Point a private local env file at that clone and
+confirm its deployment URL before running the logical export.
+
+On 27 November 2026 the full-media export of 15,102 files exhausted memory on
+the serving VPS and interrupted public event details. Starting the CLI on a
+laptop still runs the export worker on the selected backend. Run it on the
+isolated copy with sufficient memory and disk capacity.
 
 ```bash
 mkdir -p backups
-npx convex export --env-file .env.production \
+npx convex export --env-file .env.recovery-isolated \
   --include-file-storage \
   --path backups/convex-self-hosted-$(date +%Y%m%d-%H%M%S).zip
 ```
 
-The file-storage flag is required: an export without it does not back up the
-images and other stored media. Verify the ZIP CRC and compare the number of
-stored files with the `_storage/documents.jsonl` records before rotating older
-exports. Include component exports when validating tables.
+Keep a private copy off the VPS. Verify archive CRCs, then compare file IDs,
+lengths and SHA-256 hashes against `_storage/documents.jsonl`. Restore the
+application tables on an empty isolated deployment and compare row counts.
+Read a restored event, its venue and performer credit, then retrieve its poster
+and verify its bytes. Record which media the restore exercise covered.
 
 For a complete server recovery, capture the production source/builds, matching
 Docker images, Compose files, secrets, host scripts/timers, Instagram collector
@@ -249,7 +260,7 @@ state and Event Zeka n8n workflows as well. See
 [full server backups](server-backups.md) for the inventory and recovery order.
 
 A tar of a running SQLite volume is not a transaction-consistent database
-backup. Use the supported Convex export for an online recovery point. A raw
+backup. Use the supported Convex export on the isolated snapshot for a portable recovery point. A raw
 volume backup requires a coordinated offline snapshot; an online SQLite backup
 and a later object-store archive are supplemental artifacts captured at
 different times.
@@ -275,8 +286,8 @@ CONVEX_SELF_HOSTED_IMAGE_TAG=<known-good-tag>
 Upgrade sequence:
 
 ```bash
-# 1. Export data first.
-npx convex export --env-file .env.production \
+# 1. Export the isolated snapshot described in Backups and verify restoration.
+npx convex export --env-file .env.recovery-isolated \
   --include-file-storage \
   --path backups/convex-self-hosted-before-upgrade-$(date +%Y%m%d-%H%M%S).zip
 
