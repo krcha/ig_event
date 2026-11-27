@@ -60,6 +60,7 @@ import type * as internal_eventDiscoveryExecutor from "../internal/eventDiscover
 import type * as internal_eventRepairs_approvedLegacyVenue from "../internal/eventRepairs/approvedLegacyVenue.js";
 import type * as internal_eventRepairs_approvedPublicationRepairs from "../internal/eventRepairs/approvedPublicationRepairs.js";
 import type * as internal_eventRepairs_evidencePolicy from "../internal/eventRepairs/evidencePolicy.js";
+import type * as internal_eventRepairs_namedPendingVenue from "../internal/eventRepairs/namedPendingVenue.js";
 import type * as internal_eventRepairs_pendingBenignSourceConflicts from "../internal/eventRepairs/pendingBenignSourceConflicts.js";
 import type * as internal_eventRepairs_pendingSourceConflictReclassification from "../internal/eventRepairs/pendingSourceConflictReclassification.js";
 import type * as internal_eventRepairs_revertFalseCinemaAutomaticApproval from "../internal/eventRepairs/revertFalseCinemaAutomaticApproval.js";
@@ -124,6 +125,7 @@ import type * as internal_retentionReceiptCoverage from "../internal/retentionRe
 import type * as internal_sourceConflictReviewContext from "../internal/sourceConflictReviewContext.js";
 import type * as internal_sourceOccurrenceLimits from "../internal/sourceOccurrenceLimits.js";
 import type * as internal_sourceOccurrenceReceipts from "../internal/sourceOccurrenceReceipts.js";
+import type * as internal_namedPendingVenueApproval from "../internal/namedPendingVenueApproval.js";
 import type * as internal_sourceOccurrenceTopologyEpoch from "../internal/sourceOccurrenceTopologyEpoch.js";
 import type * as legacyDefinitiveOutputRecoveryAllowlist from "../legacyDefinitiveOutputRecoveryAllowlist.js";
 import type * as maintenance from "../maintenance.js";
@@ -219,6 +221,7 @@ declare const fullApi: ApiFromModules<{
   "internal/eventRepairs/approvedLegacyVenue": typeof internal_eventRepairs_approvedLegacyVenue;
   "internal/eventRepairs/approvedPublicationRepairs": typeof internal_eventRepairs_approvedPublicationRepairs;
   "internal/eventRepairs/evidencePolicy": typeof internal_eventRepairs_evidencePolicy;
+  "internal/eventRepairs/namedPendingVenue": typeof internal_eventRepairs_namedPendingVenue;
   "internal/eventRepairs/pendingBenignSourceConflicts": typeof internal_eventRepairs_pendingBenignSourceConflicts;
   "internal/eventRepairs/pendingSourceConflictReclassification": typeof internal_eventRepairs_pendingSourceConflictReclassification;
   "internal/eventRepairs/revertFalseCinemaAutomaticApproval": typeof internal_eventRepairs_revertFalseCinemaAutomaticApproval;
@@ -283,6 +286,7 @@ declare const fullApi: ApiFromModules<{
   "internal/sourceConflictReviewContext": typeof internal_sourceConflictReviewContext;
   "internal/sourceOccurrenceLimits": typeof internal_sourceOccurrenceLimits;
   "internal/sourceOccurrenceReceipts": typeof internal_sourceOccurrenceReceipts;
+  "internal/namedPendingVenueApproval": typeof internal_namedPendingVenueApproval;
   "internal/sourceOccurrenceTopologyEpoch": typeof internal_sourceOccurrenceTopologyEpoch;
   legacyDefinitiveOutputRecoveryAllowlist: typeof legacyDefinitiveOutputRecoveryAllowlist;
   maintenance: typeof maintenance;

@@ -1,5 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { hasNamedPendingVenueEvidence } from "./eventRepairs/namedPendingVenue";
+import { recheckNamedVenue } from "./namedPendingVenueApproval";
 import { repairAutomaticVenueAlias } from "./autonomousVenueRepair";
 import { repairPendingBenignSourceConflictHandler } from "./eventRepairs/pendingBenignSourceConflicts";
 
@@ -17,7 +19,7 @@ const MAX_REPAIRS_PER_SOURCE_GENERATION = 3;
 /** Called by the existing approval sweep after a failed, read-only preflight. */
 export async function attemptAutomaticPendingRepair(
   ctx: MutationCtx, event: Doc<"events">, diagnostic: AutomaticRepairDiagnostic,
-): Promise<{ repaired: boolean; repairReason: string; queued: boolean }> {
+): Promise<{ repaired: boolean; repairReason: string; queued: boolean; approved?: boolean }> {
   const now = Date.now();
   const rows = await ctx.db.query("automaticApprovalHolds").withIndex("by_event", (q) => q.eq("eventId", event._id)).take(2);
   if (rows.length > 1) throw new Error("Automatic approval hold is not unique.");
@@ -33,8 +35,15 @@ export async function attemptAutomaticPendingRepair(
   let repairReason = diagnostic.holdReason;
   let queued = false;
   let attempted = false;
+  let approved = false;
   if (attempts < MAX_REPAIRS_PER_SOURCE_GENERATION) {
-    if (diagnostic.repairCategory === "certified_venue_rebind") {
+    if (diagnostic.holdReason === "persisted_source_policy_failed" && hasNamedPendingVenueEvidence(event)) {
+      const result = await recheckNamedVenue(ctx, { id: event._id, expectedUpdatedAt: event.updatedAt });
+      approved = result.outcome === "approved";
+      repaired = approved;
+      repairReason = result.reason;
+      attempted = true;
+    } else if (diagnostic.repairCategory === "certified_venue_rebind") {
       const result = await repairAutomaticVenueAlias(ctx, event);
       repaired = result.repaired; repairReason = result.reason; attempted = true;
     } else if (diagnostic.repairCategory === "source_conflict_review") {
@@ -56,10 +65,10 @@ export async function attemptAutomaticPendingRepair(
     holdReason: diagnostic.holdReason, repairCategory: diagnostic.repairCategory,
     sourcePostId: diagnostic.sourcePostId ?? undefined, sourceRevision: diagnostic.sourceRevision ?? undefined,
     diagnosticJson: JSON.stringify(diagnostic), status: repaired ? "resolved" as const : queued ? "queued" as const : "held" as const,
-    repairAttemptCount: attempts + (attempted && repaired ? 1 : 0), lastRepairReason: repairReason,
+    repairAttemptCount: attempts + (attempted && (repaired || diagnostic.holdReason === "persisted_source_policy_failed") ? 1 : 0), lastRepairReason: repairReason,
     nextRetryAt: now + RETRY_MS, leaseOwner: undefined, leaseExpiresAt: undefined,
     observedAt: now, updatedAt: now };
   if (previous) await ctx.db.patch(previous._id, value);
   else await ctx.db.insert("automaticApprovalHolds", { ...value, createdAt: now });
-  return { repaired, repairReason, queued };
+  return { repaired, repairReason, queued, ...(approved ? { approved } : {}) };
 }

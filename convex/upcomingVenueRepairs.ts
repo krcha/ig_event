@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { namedVenueResult, recheckNamedVenue } from "./internal/namedPendingVenueApproval";
 import { mutation, query } from "./_generated/server";
 import { exactJsonValue } from "../lib/events/exact-json-value";
 import { requireAdminOrServiceSecret } from "./authz";
@@ -62,5 +63,16 @@ export const apply = mutation({
       }
     }
     return { id: event._id, updatedAt: event.updatedAt, status: event.status, publicationState: event.publicationState ?? null, holdReason };
+  },
+});
+
+/** Recheck one previously previewed plan against current evidence, including its final venue and duplicate cohort. */
+export const recheckNamedPending = mutation({
+  args: { plan: upcomingVenueRepairPlan, serviceSecret: v.string() },
+  returns: namedVenueResult,
+  handler: async (ctx, { plan, serviceSecret }) => {
+    const { kind } = await requireAdminOrServiceSecret(ctx, serviceSecret);
+    if (kind !== "service") throw new Error("Named pending venue repair requires service authentication.");
+    return recheckNamedVenue(ctx, { id: plan.id, expectedUpdatedAt: plan.expectedUpdatedAt, plan });
   },
 });

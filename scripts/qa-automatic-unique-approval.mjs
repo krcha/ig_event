@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 
+import { recheckNamedPending as recheckNamed } from "../convex/upcomingVenueRepairs.ts";
+import { check as checkNamedVenue } from "../convex/internal/namedPendingVenueApproval.ts";
+import { hasNamedPendingVenueEvidence } from "../convex/internal/eventRepairs/namedPendingVenue.ts";
 import { sweepPage } from "../convex/internal/automaticUniqueApproval.ts";
 import { evaluateAutomaticUniqueApproval } from "../convex/internal/automaticUniqueApprovalPreflight.ts";
 import { diagnosePending } from "../convex/automaticApprovalDiagnostics.ts";
@@ -953,6 +956,50 @@ const blank = makeBlankVenueRepairContext();
 const repairArgs = { id: blank.eventId, expectedUpdatedAt: 10, serviceSecret: "qa-diagnostic-secret" };
 try {
   Date.now = () => proofAsOfMs;
+  function namedFixture() {
+    const fixture = makeBlankVenueRepairContext();
+    const row = fixture.tables.get("events").get(fixture.eventId);
+    row.normalizedFieldsJson = JSON.stringify({ ...JSON.parse(row.normalizedFieldsJson),
+      titleUsedFallback: false, titleDerivedFromContext: false, approvalTitleSensible: true,
+      sourceOccurrencePlanUnverified: false, dateEvidenceVerified: true, identityEvidenceVerified: true,
+      timeEvidenceVerified: true, venueEvidenceVerified: true, moderationPendingReasons: ["unresolved_venue_identity"],
+    });
+    fixture.ctx.runMutation = async (_ref, args) => {
+      const saved = structuredClone(fixture.tables);
+      const writeCount = fixture.writes.length;
+      try { return await checkNamedVenue._handler(fixture.ctx, args); }
+      catch (error) {
+        fixture.tables.clear();
+        for (const [name, records] of saved) fixture.tables.set(name, records);
+        fixture.writes.length = writeCount;
+        throw error;
+      }
+    };
+    return { ...fixture, row };
+  }
+  const named = namedFixture();
+  assert.equal(hasNamedPendingVenueEvidence(named.row), true);
+  for (const patch of [{ reviewedBy: "moderator" }, { reviewedAt: 1 }, { moderationNote: "Keep pending" },
+    { status: "rejected" }, { sourceConflictFields: ["venue"] }, { sourceCaption: "The show has been postponed." },
+    { date: "2000-01-01" }, { rawExtractionJson: "{}" }]) {
+    assert.equal(hasNamedPendingVenueEvidence({ ...named.row, ...patch }), false);
+  }
+  const namedPlan = (await previewVenueRepair._handler(named.ctx, repairArgs)).plan;
+  const namedArgs = { plan: namedPlan, serviceSecret: repairArgs.serviceSecret };
+  assert.equal((await recheckNamed._handler(named.ctx, { ...namedArgs, plan: { ...namedPlan, expectedReceiptUpdatedAt: -1 } })).outcome, "stale");
+  assert.equal(named.writes.length, 0);
+  const duplicate = { ...named.row, _id: "qa-late-competing-post", venue: repairVenue.name,
+    normalizedVenueIdentity: "qa hall", venueId: repairVenue._id, status: "approved" };
+  named.tables.get("events").set(duplicate._id, duplicate);
+  assert.equal((await recheckNamed._handler(named.ctx, namedArgs)).outcome, "held");
+  assert.equal(named.writes.length, 0);
+  assert.equal(named.tables.get("events").get(named.eventId).venue, "");
+  named.tables.get("events").delete(duplicate._id);
+  assert.equal((await recheckNamed._handler(named.ctx, namedArgs)).outcome, "approved");
+  const afterWriteCount = named.writes.length;
+  assert.equal((await recheckNamed._handler(named.ctx, namedArgs)).outcome, "already_applied");
+  assert.equal(named.writes.length, afterWriteCount);
+  assert.equal(await isCanonicallyGroundedApprovedEvent(named.ctx, named.tables.get("events").get(named.eventId)), true);
   const repairPreview = await previewVenueRepair._handler(blank.ctx, repairArgs);
   assert.equal(repairPreview.venue, repairVenue.name);
   assert.equal(repairPreview.instagramHandle, repairVenue.instagramHandle);

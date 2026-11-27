@@ -128,7 +128,8 @@ export const sweepPage = internalMutation({
         console.info("Automatic unique approval held", evaluation.diagnostic);
         // Certified repair errors roll back the transaction; never swallow
         // errors after the source/provenance writer has started.
-        await attemptAutomaticPendingRepair(ctx, event, evaluation.diagnostic);
+        const repair = await attemptAutomaticPendingRepair(ctx, event, evaluation.diagnostic);
+        if (repair.approved) approvedCount = 1;
       }
       if (preflight) {
         await persistAutomaticUniqueApproval(ctx, event, preflight);

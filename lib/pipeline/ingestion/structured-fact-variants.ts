@@ -1,6 +1,7 @@
 import type { ExtractedEventData } from "@/lib/ai/extract-event-data";
 import type { EventTimeProvenance } from "@/lib/events/event-time";
 import { buildUnnamedScheduleFallbackTitle, venueValueAppearsInEventEvidence } from "@/lib/events/unnamed-schedule-fallback";
+import { hasSharedCaptionVenue } from "@/lib/domain/venues/shared-caption-venue";
 import type { IngestionVenueResolver } from "@/lib/domain/venues/index";
 import { findPositiveLocativeVenueHandleEvidence, resolveIngestionVenue } from "@/lib/domain/venues/index";
 import type { DateNormalization, EventDateEvidenceSource, EventVariant, SplitEventCandidate } from "@/lib/pipeline/ingestion/contracts";
@@ -207,6 +208,12 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
     claimMatchesSourceAccount(normalizeString(extracted.shared_schedule_context.venue.value))
     ? sourceAccountRecord.name
     : "";
+  const sharedPromoterHandle = usesStructuredEvidence && extracted._extractionPolicyVersion === "event_quality_v1" && sourceRole === "promoter" &&
+    extracted.source_conflicts.length === 0 && venueNormalization.source === "evidence_handle" && venueNormalization.evidenceHandle &&
+    ingestionVenueResolver.venueIdByProviderHandle.has(venueNormalization.evidenceHandle) &&
+    hasSharedCaptionVenue({ caption: post.caption ?? "", handle: venueNormalization.evidenceHandle,
+      venue: normalizedVenue, shared: extracted.shared_schedule_context.venue, rows: extracted.schedule_entries })
+    ? venueNormalization.evidenceHandle : null;
   const rawEventVariants: EventVariant[] = usesSplitEventCandidates
     ? splitEventCandidates.map((entry) => {
         const extractedVariantArtists =
@@ -376,6 +383,9 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
         );
         const scopedRowCanonicalVenue =
           rowVenueIsDirect || sharedVenueValue ? "" : rowCanonicalVenue;
+        const namedSharedPromoterVenue = sharedPromoterHandle && !entry.titleUsedFallback &&
+          extracted.schedule_entries.some(row => row.source_text === entry.sourceLine &&
+            row.title === entry.lineTitle && row.title.trim() && entry.sourceLine.includes(row.title));
         const singleSplitCanonicalVenueEvidenceSource =
           splitEventCandidates.length === 1 && !rowVenueIsDirect &&
             !venueMentionIsOnlyInRowTitle(
@@ -391,11 +401,12 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
           ? null
           : scopedRowCanonicalVenue
           ? rowCanonicalVenueEvidenceSource
-          : singleSplitCanonicalVenueEvidenceSource;
+          : namedSharedPromoterVenue ? "evidence_handle" : singleSplitCanonicalVenueEvidenceSource;
         const variantCanonicalVenueEvidenceHandle = carouselVenueDisagreesWithCanonicalEvidence
           ? null
           : scopedRowCanonicalVenue
           ? rowCanonicalVenueNormalization.evidenceHandle ?? null
+          : namedSharedPromoterVenue ? sharedPromoterHandle
           : singleSplitCanonicalVenueEvidenceSource === "evidence_handle"
             ? venueNormalization.evidenceHandle ?? null
             : null;
@@ -433,7 +444,7 @@ export function buildStructuredFactVariants(input: BuildStructuredFactVariantsIn
                 scopedRowCanonicalVenue ||
                 parentScopedVenue ||
                 (singleOccurrenceModelVenueVerified ? rawModelVenue : "") ||
-                (singleSplitCanonicalVenueEvidenceSource ? normalizedVenue : "") ||
+                ((singleSplitCanonicalVenueEvidenceSource || namedSharedPromoterVenue) ? normalizedVenue : "") ||
                 (trustedVenueAccountFallback ? normalizedVenue : "") ||
                 (claimMatchesSourceAccount(rowVenue) ? sourceAccountVenue : "")
           : normalizedVenue;

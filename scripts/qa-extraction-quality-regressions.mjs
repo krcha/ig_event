@@ -308,6 +308,30 @@ const handleResolver = buildIngestionVenueResolver({
   canonicalVenueNamesByHandle: handleNames,
   configuredVenueNamesByHandle: handleNames,
 });
+const promoterRows = [
+  entry({ date: "2026-10-02", title: "Lana themed party", venue: "KULT", dateText: "2. oktobra", sourceText: "2. oktobra – Lana themed party", source: "caption" }),
+  entry({ date: "2026-10-09", title: "Nitrous Album Party", venue: "KULT", dateText: "9. oktobra", sourceText: "9. oktobra – Nitrous Album Party", source: "caption" }),
+];
+function preparePromoter(captionFooter, change = () => {}) {
+  const evidence = extraction(promoterRows);
+  evidence.venue = "KULT";
+  evidence._extractionPolicyVersion = EVENT_EXTRACTION_POLICY_VERSION;
+  evidence.shared_schedule_context.venue = { applies_to_all: true, value: "KULT", evidence: "Vidimo se @clubkult", source: "caption" };
+  change(evidence);
+  const post = makePost({ handle: "listingpromoter", sourceUrl: "https://www.instagram.com/p/qa-shared-venue/",
+    caption: ["Svako ima svoju muzičku priču!", ...promoterRows.map(row => row.source_text), captionFooter].join("\n") });
+  return prepareEventsForInsert(post, evidence, null, handleNames, {}, handleNames, {
+    eventDateFilterNow: NOW, sourceRolesByHandle: { listingpromoter: "promoter" },
+  }).filter(r => r.event);
+}
+const promoterPrepared = preparePromoter("Vidimo se @clubkult !!! ❤️✨\n#party");
+assert.deepEqual(promoterPrepared.map(r => [r.event.venue, r.normalizedFields.venueEvidenceVerified]), [["KULT", true], ["KULT", true]]);
+for (const [footer, change] of [
+  ["Thanks @clubkult", undefined], ["Vidimo se @clubkult !!!\nLocation: Another Hall", undefined],
+  ["U drugom klubu\nVidimo se @clubkult", undefined],
+  ["Vidimo se @clubkult", e => { e.schedule_entries[1].venue = "Hangar"; }],
+  ["Vidimo se @clubkult", e => { e.shared_schedule_context.venue.applies_to_all = false; }],
+]) assert.ok(preparePromoter(footer, change).every(r => r.normalizedFields.canonicalVenueEvidenceHandle !== "clubkult"));
 const ownHandleOptions = { handle: "clubkult", venueNames: ["KULT"] };
 for (const evidenceText of ["not at @clubkult", "thanks @clubkult", "at #clubkult", "@clubkult presents"]) {
   assert.equal(findPositiveLocativeVenueHandleEvidence({ ...ownHandleOptions, evidenceText }), null);

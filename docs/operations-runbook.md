@@ -345,6 +345,22 @@ approved event held by an incomplete receipt, use
 review digest. The existing approved records and saved references keep
 their IDs; proof and public visibility are checked again during the write.
 
+For a named pending programme with an empty venue, the regular approval sweep
+can certify the active venue account or a promoter's explicitly shared,
+single-venue caption. It checks the saved row's title and date, source receipt,
+venue binding, and the pending and approved events on that date. After a
+successful write the public reader must accept the event. A duplicate, a
+material source conflict or a manual decision keeps the record on hold.
+
+To recheck a specific reviewed list, first run the service-only
+`upcomingVenueRepairs:preview` with one event ID and its observed
+`expectedUpdatedAt`. Pass that exact plan to
+`upcomingVenueRepairs:recheckNamedPending`. Preview each sibling immediately
+before its own recheck because a successful sibling changes the shared receipt
+version. `approved` records a new publication, `already_applied` recognizes
+the original event version, and `held` and `stale` make no event or receipt
+changes. The source caption may establish a day without a start time.
+
 The Convex `approve server-verified unique events` cron runs every minute. It
 scans at most 60 pending event versions per tick, one version per transaction.
 The singleton `automaticUniqueApprovalState` stores its pending-index cursor,
