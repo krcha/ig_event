@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai/research-performer-genres";
 import { getStoredOrLegacyEventTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
-import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres } from "@/lib/taxonomy/explicit-event-discovery";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence } from "@/lib/taxonomy/explicit-event-discovery";
 import {
   canPublishPerformerGenreSource,
   getEventListingResearchAct,
@@ -50,6 +50,7 @@ export type EventGenreResolution = {
 };
 
 type ResolverOptions = EventDiscoveryOptions & {
+  categoryOnly?: boolean;
   deadlineAt?: number;
   classify?: typeof classifyEventDiscoveryBatch;
   estimate?: typeof estimatePerformerGenresBatch;
@@ -147,8 +148,9 @@ export async function resolveEventGenresBatch(
     throw new Error("Invalid event discovery batch size or duplicate key.");
   }
   const deadlineAt = options.deadlineAt ?? Date.now() + DEFAULT_DEADLINE_MS;
-  const explicit = new Map(events.map((event) => [event.key, classifyExplicitEventDiscovery(event)]));
-  const needsModel = events.filter(({ key }) => !explicit.get(key)?.complete);
+  const candidates = events.filter(event => event.currentTaxonomy || !hasConflictingProgrammeEvidence(event));
+  const explicit = new Map(candidates.map((event) => [event.key, classifyExplicitEventDiscovery(event)]));
+  const needsModel = candidates.filter(({ key }) => !explicit.get(key)?.complete);
   const classified = needsModel.length
     ? await (options.classify ?? classifyEventDiscoveryBatch)(needsModel, providerOptions(options, deadlineAt)).catch(() => null)
     : null;
@@ -159,6 +161,10 @@ export async function resolveEventGenresBatch(
   }
   const lookups: Lookup[] = [];
   const results = events.map((event): EventGenreResolution => {
+    if (!explicit.has(event.key)) {
+      return { eventId: event.key, expectedUpdatedAt: event.expectedUpdatedAt, taxonomy: null,
+        method: "unknown", auditJson: JSON.stringify({ programmeConflict: true, evidence: [] }) };
+    }
     const modelRow = byKey.get(event.key);
     const local = explicit.get(event.key);
     const titledCategory = local?.titleCategory === "other" ? undefined : local?.titleCategory;
@@ -196,6 +202,7 @@ export async function resolveEventGenresBatch(
       result.deferred = true;
       return result;
     }
+    if (options.categoryOnly) return result;
     const fallback = taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
     const format = getPerformerGenreResearchFormat(fallback);
     const corroborated = taxonomy && corroborateLiveProgrammeGenre(event, taxonomy);
@@ -310,5 +317,5 @@ export async function resolveEventGenresBatch(
   }
   return { model: classified?.model ?? "explicit-event-evidence", results,
     usage: classified?.usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, estimateUsage: estimated?.usage,
-    searchCalls, localClassified: events.length - needsModel.length };
+    searchCalls, localClassified: candidates.length - needsModel.length };
 }

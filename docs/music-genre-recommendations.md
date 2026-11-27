@@ -49,6 +49,46 @@ researched lineups can stay unresolved; published occurrences remain available.
 The saved genres represent claims about the event. Similarity is calculated
 from the current taxonomy when ranking and never produces extra genre claims.
 
+### Primary categories in the next 48 hours
+
+Every ten minutes the existing discovery executor scans up to four indexed
+pages of twelve listings before the ordinary upcoming sweep. The two scans
+have independent cursors. Only approved, publishable occurrences at public
+venues are eligible. The urgent window uses a rolling 48 elapsed hours in
+Europe/Belgrade. A stated overnight interval remains eligible while it is in
+progress. A listing with no confirmed start can qualify by date, including the
+previous outing until 07:00. This does not assign a start time to it. The
+indexed bounds stay fixed while a pass is paginating. The next pass starts
+within 30 minutes of completing the previous one at the usual cron cadence.
+
+For a missing, stale or unsupported generic label, the mutation first tries
+occurrence-specific rules. A positive local decision writes the taxonomy,
+source quotes, event revision and rule version in one transaction. It can
+replace a previously empty result during its ordinary 14-day research
+cooldown. Recognized explicit programme genres retain their evidence. A
+confirmed primary category is skipped on future priority passes. Contradictory
+announcements and inconclusive inputs do not acquire a fabricated category.
+
+The local pass also runs after the shared daily limit of 96 event attempts
+is exhausted. When the model can help identify the activity it receives only
+the scoped announcement and does no performer search or estimation. At most
+72 daily attempts can serve this purpose. Until 18:00 Belgrade time ordinary
+enrichment can use up to 72, reserving 24 for later announcements. After 18:00
+the ordinary sweep can consume unspent capacity. After three consecutive
+priority batches with normal capacity available, the normal cursor gets a
+turn. The shared lease expires after four minutes, and the executor stops
+provider work at its 220-second deadline. Only a transient failure may retry
+once after one hour for the same event revision and priority-rule version.
+
+The authenticated executor response includes a `priority` count for the pages
+it actually scanned. `eligible` counts in-window public rows, including already
+`known` ones. `attempted` counts reserved model slots. `written` counts durable
+primary classifications, including local decisions. `unresolved` counts the
+eligible unclassified rows that did not receive a durable primary on this
+invocation. Compare these per-invocation counts with the live catalogue's
+latest label for the matching event revision. A row with `taxonomy: null` is
+still unresolved.
+
 ## Programme and public reads
 
 The compass loads a bounded current calendar window and retains a small

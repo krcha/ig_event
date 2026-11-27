@@ -9,7 +9,7 @@ import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-fa
 import { normalizeEventTime } from "../lib/events/event-time";
 import { formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
-import { classifyExplicitEventDiscovery } from "../lib/taxonomy/explicit-event-discovery";
+import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getStoredOrLegacyEventTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
@@ -20,11 +20,13 @@ import {
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
+import { categoryWindow, discoveryBudgets, PRIORITY_CATEGORY_VERSION } from "../lib/taxonomy/priority-event-discovery";
+import { revalidateEventDiscoveryClassification } from "../lib/ai/classify-event-discovery";
 import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
 
 const CAPTION_MAX_LENGTH = 2200;
-const UPCOMING_DAILY_BUDGET = 96;
+
 const ENRICHMENT_LEASE_MS = 240_000;
 const ENRICHMENT_RETRY_MS = 60 * 60 * 1000;
 const genreKeys: ReadonlySet<string> = new Set(MUSIC_GENRES.map(({ key }) => key));
@@ -456,6 +458,13 @@ function validateGenreDiscoveryBatch(model: string, results: GenreDiscoveryResul
   }
 }
 
+// A previous web image can finish a lease after backend rollout. Recheck the
+// current scoped programme at the actual write boundary as well as in the worker.
+async function conflictsWithNewClassification(ctx: MutationCtx, event: Doc<"events">, result: GenreDiscoveryResult) {
+  if (!result.taxonomy && !result.estimatedGenres?.length && !result.webResearch?.matches.length) return false;
+  return hasConflictingProgrammeEvidence(await discoveryCandidate(ctx, event));
+}
+
 async function captionClaimsAreCurrent(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, claims: ReturnType<typeof readCaptionClaims>) {
   if (!claims.length) return true;
   const caption = await readScopedInstagramCaption(ctx, event, readEventEvidenceRecord(event.normalizedFieldsJson));
@@ -539,7 +548,7 @@ export const recordDailyBatch = mutation({
         counts.unchanged++;
         continue;
       }
-      if (!await captionClaimsAreCurrent(ctx, event, readCaptionClaims(auditJson))) {
+      if (await conflictsWithNewClassification(ctx, event, result) || !await captionClaimsAreCurrent(ctx, event, readCaptionClaims(auditJson))) {
         // Another occurrence may have been added while the model was working.
         counts.stale++;
         continue;
@@ -578,6 +587,119 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
   return { row, current, currentTaxonomy: format && taxonomy ? taxonomy : undefined };
 }
 
+const priorityCounts = v.object({ scanned: v.number(), eligible: v.number(), known: v.number(),
+  written: v.number(), attempted: v.number(), unresolved: v.number() });
+const CATEGORY_RESCAN_MS = 30 * 60_000;
+type CategoryEvidence = ExplicitDiscoveryEvidence;
+
+function hasKnownCategory(row: Doc<"eventDiscoveryLabels"> | null, event: Doc<"events">) {
+  if (!row || !labelIsCurrent(row, event.updatedAt) || !row.taxonomy) return false;
+  const taxonomy = row.taxonomy;
+  return taxonomy.primaryCategory !== "other" || taxonomy.genres.length > 0 || taxonomy.formats.length > 0 ||
+    readPriorityEvidence(row.auditJson).some(claim => claim.kind === "category" && claim.label === "other");
+}
+
+function readPriorityEvidence(auditJson: string): CategoryEvidence[] {
+  const { evidence } = readEventEvidenceRecord(auditJson);
+  if (!Array.isArray(evidence)) return [];
+  return evidence.filter((claim): claim is CategoryEvidence => claim && (claim.kind === "category" || claim.kind === "format" || claim.kind === "genre") &&
+    typeof claim.label === "string" && DISCOVERY_TEXT_SOURCES.includes(claim.source) && typeof claim.quote === "string" &&
+    claim.quote.trim().length > 0 && claim.quote.length <= 120);
+}
+
+async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, existing: Doc<"eventDiscoveryLabels"> | null,
+  candidate: Awaited<ReturnType<typeof discoveryCandidate>>, taxonomy: EventDiscoveryTaxonomy, evidence: CategoryEvidence[], model: string) {
+  const current = existing && labelIsCurrent(existing, event.updatedAt) ? existing : null;
+  const audit = readEventEvidenceRecord(current?.auditJson);
+  const excluded = getExcludedDiscoveryGenres(candidate, DISCOVERY_TEXT_SOURCES);
+  const musical = taxonomy.categories.some(category => category === "live" || category === "party");
+  const direct = musical ? classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
+  const summary = musical ? classifyExplicitEventDiscovery({ title: candidate.title, description: candidate.description,
+    date: candidate.date, venue: candidate.venue, artists: candidate.artists, currentTaxonomy: { ...taxonomy, genres: [] } }) : null;
+  const genreProof = [...evidence, ...(direct?.evidence ?? []), ...(summary?.evidence ?? [])].filter(claim =>
+    musical && claim.kind === "genre" && genreKeys.has(claim.label) && !excluded.has(claim.label as MusicGenre) &&
+    hasExplicitGenreEvidence(candidate, claim.source, claim.quote, claim.label as MusicGenre));
+  const genres = [...new Set(genreProof.map(claim => claim.label as MusicGenre))].slice(0, 5);
+  const proof = [...evidence.filter(claim => claim.kind !== "genre"), ...genres.map(genre => genreProof.find(c => c.label === genre)!)];
+  const priorMusic = getStoredOrLegacyEventTaxonomy({ ...event, eventTaxonomy: current?.taxonomy ?? undefined }).primaryCategory;
+  const estimate = current && musical && priorMusic === taxonomy.primaryCategory && !genres.length && !audit.partialProgramme && !audit.ambiguousPerformerIdentity
+    ? readEstimatedGenres(current.auditJson).filter(genre => !excluded.has(genre)) : [];
+  // Earlier attempts may have been unable to identify either a programme or
+  // genre. A newly confirmed music programme gives the regular sweep new input.
+  delete audit.upcomingGenreRetryAt;
+  const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model,
+    taxonomy: { ...taxonomy, genres }, auditJson: serializeGenreAudit({ ...audit, evidence: proof,
+      categoryPriority: { version: PRIORITY_CATEGORY_VERSION, confirmedAt: Date.now(), model } }, estimate.length ? estimate : undefined) };
+  if (existing) await ctx.db.replace(existing._id, value);
+  else await ctx.db.insert("eventDiscoveryLabels", value);
+}
+
+// A separate opt-in RPC keeps older web workers on their existing contract during rollout.
+export const claimPriorityCategories = mutation({
+  args: { serviceSecret: v.string(), owner: v.string(), allowModel: v.boolean() },
+  returns: v.object({ events: v.array(upcomingInput), more: v.boolean(), counts: priorityCounts }),
+  handler: async (ctx, { serviceSecret, owner, allowModel }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    if (!/^[0-9a-f-]{36}$/iu.test(owner)) throw new Error("Invalid category enrichment owner.");
+    const state = await loadEnrichmentState(ctx);
+    const now = Date.now();
+    const counts = { scanned: 0, eligible: 0, known: 0, written: 0, attempted: 0, unresolved: 0 };
+    const events: Awaited<ReturnType<typeof discoveryCandidate>>[] = [];
+    if (state?.lease && state.lease.until > now) return { counts, events, more: false };
+    const window = categoryWindow(now), budgets = discoveryBudgets(now, state);
+    const scan = state?.categoryScan;
+    if (scan?.completedAt && now - scan.completedAt < CATEGORY_RESCAN_MS && scan.throughDate === window.throughDate) {
+      return { counts, events, more: false };
+    }
+    // A Convex cursor must continue with exactly the same index bounds, even
+    // across midnight. Eligibility is independently checked against the live clock.
+    const fromDate = scan?.cursor ? scan.fromDate : window.fromDate;
+    const throughDate = scan?.cursor ? scan.throughDate : window.throughDate;
+    const page = await ctx.db.query("events").withIndex("by_publicationState_date", q =>
+      q.eq("publicationState", "publishable").gte("date", fromDate).lte("date", throughDate)).paginate({
+      cursor: scan?.cursor ?? null, numItems: 12,
+    });
+    const attempts = new Map((state?.categoryAttempts ?? []).filter(item => item.at > now - 4 * 86_400_000)
+      .map(item => [item.eventId, item]));
+    for (const event of page.page) {
+      counts.scanned++;
+      if (!window.includes(event) || !await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
+      counts.eligible++;
+      const label = await loadLabel(ctx, event._id);
+      if (hasKnownCategory(label, event)) { counts.known++; continue; }
+      const candidate = await discoveryCandidate(ctx, event);
+      if (hasConflictingProgrammeEvidence(candidate)) { counts.unresolved++; continue; }
+      const explicit = classifyExplicitEventDiscovery(candidate);
+      if (explicit && (explicit.complete || (explicit.titleCategory && explicit.taxonomy.categories.length === 1)) &&
+        explicit.evidence.some(c => c.kind === "category" && c.label === explicit.taxonomy.primaryCategory)) {
+        await savePriorityCategory(ctx, event, label, candidate, explicit.taxonomy,
+          explicit.evidence, "explicit-priority-category-v1");
+        counts.written++;
+        continue;
+      }
+      counts.unresolved++;
+      const old = attempts.get(event._id);
+      const same = old && old.version === PRIORITY_CATEGORY_VERSION && old.updatedAt === event.updatedAt ? old : undefined;
+      if (!allowModel || events.length >= budgets.urgent || (same && (same.tries >= 2 || now - same.at < ENRICHMENT_RETRY_MS))) continue;
+      attempts.set(event._id, { eventId: event._id, updatedAt: event.updatedAt, version: PRIORITY_CATEGORY_VERSION,
+        at: now, tries: (same?.tries ?? 0) + 1 });
+      events.push(candidate);
+    }
+    counts.attempted = events.length;
+    const categoryScan = { fromDate, throughDate, cursor: page.isDone ? null : page.continueCursor,
+      ...(page.isDone ? { completedAt: now } : {}) };
+    const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, categoryOnly: true as const, nextCursor: null,
+      events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
+    const next = { dayKey: budgets.dayKey, attempted: budgets.total + events.length, categoryScan,
+      categoryAttempts: [...attempts.values()], categoryBudget: { dayKey: budgets.dayKey,
+        attempted: budgets.priority.attempted + events.length, consecutive: budgets.priority.consecutive + (lease ? 1 : 0) } };
+    if (state) await ctx.db.patch(state._id, { ...next, lease });
+    else await ctx.db.insert("eventDiscoveryEnrichmentState", { key: "upcoming", fromDate: getNightlifeDefaultDateKey(new Date(now)),
+      cursor: null, ...next, ...(lease ? { lease } : {}) });
+    return { events, more: !page.isDone, counts };
+  },
+});
+
 export const claimUpcomingBatch = mutation({
   args: { serviceSecret: v.string(), owner: v.string() },
   returns: v.object({ state: v.union(v.literal("busy"), v.literal("idle"), v.literal("scanned"), v.literal("claimed")),
@@ -588,9 +710,7 @@ export const claimUpcomingBatch = mutation({
     const state = await loadEnrichmentState(ctx);
     const now = Date.now();
     if (state?.lease && state.lease.until > now) return { state: "busy" as const, events: [] };
-    const dayKey = getBelgradeDayKey(now);
-    const attempted = state?.dayKey === dayKey ? state.attempted : 0;
-    const budget = UPCOMING_DAILY_BUDGET - attempted;
+    const { dayKey, total: attempted, general: budget, priority } = discoveryBudgets(now, state);
     if (budget <= 0) return { state: "idle" as const, events: [] };
     const cursor = state?.cursor ?? null;
     const fromDate = cursor && state ? state.fromDate : getNightlifeDefaultDateKey(new Date(now));
@@ -605,7 +725,8 @@ export const claimUpcomingBatch = mutation({
     const nextCursor = page.isDone ? null : page.continueCursor;
     const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, nextCursor,
       events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
-    const updated = { fromDate, cursor: lease ? cursor : nextCursor, dayKey, attempted: attempted + events.length };
+    const updated = { fromDate, cursor: lease ? cursor : nextCursor, dayKey, attempted: attempted + events.length,
+      categoryBudget: { ...priority, consecutive: 0 } };
     if (state) await ctx.db.patch(state._id, { ...updated, lease });
     else await ctx.db.insert("eventDiscoveryEnrichmentState", { key: "upcoming", ...updated, ...(lease ? { lease } : {}) });
     return { state: lease ? "claimed" as const : nextCursor ? "scanned" as const : "idle" as const, events };
@@ -624,6 +745,32 @@ export const completeUpcomingBatch = mutation({
     const counts = { written: 0, unchanged: 0, stale: 0 };
     if (!state || !lease || lease.owner !== owner || lease.until <= now) return { completed: false, counts };
     const claimed = new Map(lease.events.map(({ eventId, expectedUpdatedAt }) => [eventId, expectedUpdatedAt]));
+    if (lease.categoryOnly) {
+      const window = categoryWindow(now);
+      const terminal = new Set<Id<"events">>();
+      for (const result of results) {
+        const event = await ctx.db.get(result.eventId);
+        if (!event || claimed.get(result.eventId) !== result.expectedUpdatedAt || event.updatedAt !== result.expectedUpdatedAt ||
+          !window.includes(event) || !await isUpcomingDiscoveryPublic(ctx, event, window.fromDate)) { counts.stale++; continue; }
+        if (result.deferred) continue; // The reserved attempt permits one retry after a transient failure.
+        terminal.add(event._id);
+        const row = await loadLabel(ctx, event._id);
+        if (hasKnownCategory(row, event) || !result.taxonomy) { counts.unchanged++; continue; }
+        const candidate = await discoveryCandidate(ctx, event);
+        const evidence = readPriorityEvidence(result.auditJson);
+        const checked = revalidateEventDiscoveryClassification(candidate, { key: event._id, taxonomy: result.taxonomy,
+          credits: [], discardedClaims: 0, evidence });
+        if (hasConflictingProgrammeEvidence(candidate) || !checked.taxonomy || checked.taxonomy.primaryCategory !== result.taxonomy.primaryCategory ||
+          !checked.evidence.some(claim => claim.kind === "category" && claim.label === checked.taxonomy?.primaryCategory)) {
+          counts.stale++; continue;
+        }
+        await savePriorityCategory(ctx, event, row, candidate, checked.taxonomy, checked.evidence, model);
+        counts.written++;
+      }
+      await ctx.db.patch(state._id, { lease: undefined, categoryAttempts: state.categoryAttempts?.map(attempt =>
+        terminal.has(attempt.eventId) ? { ...attempt, tries: 2 } : attempt) });
+      return { completed: true, counts };
+    }
     for (const result of results) {
       const { eventId, expectedUpdatedAt, taxonomy } = result;
       const event = await ctx.db.get(eventId);
@@ -636,7 +783,8 @@ export const completeUpcomingBatch = mutation({
         counts.unchanged++;
         continue;
       }
-      if (!await captionClaimsAreCurrent(ctx, event, readCaptionClaims(result.auditJson))) {
+      if ((!hasKnownCategory(enrichment.row, event) && await conflictsWithNewClassification(ctx, event, result)) ||
+        !await captionClaimsAreCurrent(ctx, event, readCaptionClaims(result.auditJson))) {
         counts.stale++;
         continue;
       }
@@ -646,6 +794,15 @@ export const completeUpcomingBatch = mutation({
       const previousEstimate = enrichment.current && !currentAudit.partialProgramme && !currentAudit.ambiguousPerformerIdentity
         ? readEstimatedGenres(enrichment.current.auditJson) : undefined;
       const audit = { ...readEventEvidenceRecord(enrichment.current?.auditJson), ...currentAudit };
+      const prior = enrichment.current && readPriorityEvidence(enrichment.current.auditJson).filter(claim =>
+        (claim.kind === "category" && savedTaxonomy?.categories.some(label => label === claim.label)) ||
+        (claim.kind === "format" && savedTaxonomy?.formats.some(label => label === claim.label)));
+      if (prior?.length) {
+        const source = await discoveryCandidate(ctx, event);
+        const retained = prior.filter(claim => source[claim.source]?.includes(claim.quote) && discoveryQuoteMatchesOccurrence(claim.quote, event.date));
+        const combined = [...retained, ...readPriorityEvidence(result.auditJson)];
+        audit.evidence = [...new Map(combined.map(c => [JSON.stringify([c.kind, c.label, c.source, c.quote]), c])).values()];
+      }
       const label = { eventId, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model,
         taxonomy: savedTaxonomy, auditJson: serializeGenreAudit(audit, webResearch || savedTaxonomy?.genres.length ? undefined :
           estimatedGenres ?? previousEstimate) };

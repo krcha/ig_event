@@ -98,7 +98,7 @@ function readDateMinutes(date: string | null | undefined): number | null {
   return parsed / 60_000;
 }
 
-function createBelgradeInstantResolver(): InstantResolver {
+export function createBelgradeInstantResolver(): InstantResolver {
   const candidatesByWallMinute = new Map<number, number[]>();
   return (wallMinutes, boundary) => {
     let candidates = candidatesByWallMinute.get(wallMinutes);

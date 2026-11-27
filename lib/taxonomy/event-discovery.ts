@@ -1,6 +1,6 @@
 import { getEventPrimaryCategory, type EventCategoryInput } from "./event-categories";
-import { classifyExplicitEventDiscovery } from "./explicit-event-discovery";
-import { canonicalizeEventType, normalizeTaxonomyText } from "./venue-types";
+import { classifyExplicitEventDiscovery, summaryCancelsEvent } from "./explicit-event-discovery";
+import { canonicalizeEventType } from "./venue-types";
 
 export const EVENT_DISCOVERY_VERSION = 1;
 
@@ -86,15 +86,6 @@ export function getStoredOrLegacyEventTaxonomy(event: DiscoveryEvent): EventDisc
         ? "food"
         : "other";
   return { primaryCategory, categories: [primaryCategory], genres: [], formats: [] };
-}
-
-function summaryCancelsEvent(title: string | undefined, description: string | undefined): boolean {
-  if (!description) return false;
-  const name = normalizeTaxonomyText(title);
-  return description.slice(0, 500).split(/[.!?;\n]/).some((sentence) => {
-    const match = /^(?:(?:the|this) )?(.+?) (?:was |is |has been |je )?(?:cancell?ed|otkazan[aoie]?)(?: (?:due to|because|zbog) .+)?$/.exec(normalizeTaxonomyText(sentence));
-    return match && (match[1] === name || match[1] === "event" || match[1] === "dogadjaj");
-  });
 }
 
 export function getEventDiscoveryTaxonomy(event: DiscoveryEvent): EventDiscoveryTaxonomy {

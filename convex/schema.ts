@@ -411,7 +411,15 @@ export default defineSchema({
     cursor: v.union(v.string(), v.null()),
     dayKey: v.string(),
     attempted: v.number(),
+    categoryScan: v.optional(v.object({
+      fromDate: v.string(), throughDate: v.string(), cursor: v.union(v.string(), v.null()), completedAt: v.optional(v.number()),
+    })),
+    categoryBudget: v.optional(v.object({ dayKey: v.string(), attempted: v.number(), consecutive: v.number() })),
+    categoryAttempts: v.optional(v.array(v.object({
+      eventId: v.id("events"), updatedAt: v.number(), version: v.number(), at: v.number(), tries: v.number(),
+    }))),
     lease: v.optional(v.object({
+      categoryOnly: v.optional(v.literal(true)),
       owner: v.string(),
       until: v.number(),
       nextCursor: v.union(v.string(), v.null()),

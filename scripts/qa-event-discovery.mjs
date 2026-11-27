@@ -8,7 +8,7 @@ import {
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
-import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasExplicitGenreEvidence } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence } from "../lib/taxonomy/explicit-event-discovery.ts";
 import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 
 const expectedGenres = [
@@ -25,6 +25,37 @@ const mockResponse = (rows) => Response.json({
   usage: { input_tokens: 73, output_tokens: 44, total_tokens: 117 },
 });
 const options = { apiKey: "test-only-key", model: "fixture-model" };
+
+let remoteProgrammeCalls = 0;
+const noRemoteRequest = async () => { remoteProgrammeCalls++; throw new Error("Unexpected programme provider call"); };
+const localOnly = { classify: noRemoteRequest, research: noRemoteRequest, estimate: noRemoteRequest };
+const withdrawn = { key: "cancelled-festival", expectedUpdatedAt: 1, title: "Film festival", date: "2026-11-27",
+  description: "Film festival cancelled.", artists: [], venue: "", eventType: "arts & culture" };
+const twoNights = "27.11 - Rock concert; 28.11 - DJ set cancelled.";
+const show = { ...withdrawn, key: "first-night", title: "Rock concert", description: "", occurrenceText: twoNights };
+assert.equal(hasConflictingProgrammeEvidence(show), false);
+assert.equal(hasConflictingProgrammeEvidence({ ...show, date: "2026-11-28", title: "DJ set" }), true);
+assert.equal(hasConflictingProgrammeEvidence({ title: "DJ set", description: "No live music." }), false);
+assert.equal(hasConflictingProgrammeEvidence({ title: "Live music", description: "No live music." }), true);
+for (const categoryOnly of [true, false]) {
+  const run = await resolveEventGenresBatch([withdrawn, show], { ...localOnly, categoryOnly });
+  assert.equal(run.localClassified, 1);
+  assert.equal(run.results[0].taxonomy, null);
+  assert.equal(JSON.parse(run.results[0].auditJson).programmeConflict, true);
+  assert.equal(run.results[1].taxonomy.primaryCategory, "live");
+}
+assert.equal(remoteProgrammeCalls, 0);
+for (const [title, description, category] of [
+  ["Dani makedonske kuhinje", "", "food"],
+  ["12 MET FASHION DAY", "Modna revija u Velikom Platzu.", "culture"],
+]) {
+  const found = classifyExplicitEventDiscovery({ title, description });
+  assert.equal(found?.taxonomy.primaryCategory, category);
+  assert.ok(found.evidence.some(claim => claim.kind === "category" && claim.label === category));
+}
+for (const title of ["Film o modnoj reviji", "Restoran makedonske kuhinje", "U redovnoj ponudi su dani makedonske kuhinje"]) {
+  assert.equal(classifyExplicitEventDiscovery({ title }), null);
+}
 
 const currentParty = { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: [] };
 const auralQuote = "- u Nassau - AURAL APOTHECARY pušta Post Punk, Dark Disco & Weird Folk!";

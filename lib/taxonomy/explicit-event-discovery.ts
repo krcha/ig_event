@@ -112,6 +112,36 @@ export function discoveryQuoteMatchesOccurrence(quote: string, date: string | un
   return !days.length || days.every((day) => day === Number(date.slice(-2)));
 }
 
+export function summaryCancelsEvent(title: string | undefined, description: string | undefined): boolean {
+  if (!description) return false;
+  const name = normalizeTaxonomyText(title);
+  return description.slice(0, 500).split(/[.!?;\n]/).some((sentence) => {
+    const match = /^(?:(?:the|this) )?(.+?) (?:was |is |has been |je )?(?:cancell?ed|otkazan[aoie]?)(?: (?:due to|because|zbog) .+)?$/.exec(normalizeTaxonomyText(sentence));
+    return match && (match[1] === name || match[1] === "event" || match[1] === "dogadjaj");
+  });
+}
+
+// Evaluate the calendar date before splitting sentences. Dots inside "27.11"
+// belong to the occurrence and cannot be treated as sentence terminators.
+const ACTIVITY_NOUN = "live music|koncert\\w*|concert|dj set|festival|radionic\\w*|workshop|quiz|kviz|projekc\\w*|screening|predstav\\w*|exhibition|izlozb\\w*|party|zurk\\w*|panel|talk|lecture";
+const CANCELLED_ACTIVITY = new RegExp(`\\b(?:otkazan\\w* (?:${ACTIVITY_NOUN})|(?:${ACTIVITY_NOUN}) (?:is |je )?(?:cancell?ed|otkazan\\w*))\\b`);
+const EXCLUDED_ACTIVITY = new RegExp(`\\b(?:no|without|bez|nema) (${ACTIVITY_NOUN})\\b`);
+
+export function hasConflictingProgrammeEvidence(input: ExplicitDiscoveryInput): boolean {
+  const scoped = DISCOVERY_TEXT_SOURCES.flatMap(source => programmeRows((input[source] ?? "").slice(0, SOURCE_LIMIT[source]))
+    .filter(line => discoveryQuoteMatchesOccurrence(line.trim(), input.date))
+    .flatMap(line => clauses(readDatedProgrammeRow(line)?.bill ?? line)));
+  return scoped.some(({ quote, words }) => {
+    if (summaryCancelsEvent(input.title, quote) || CANCELLED_ACTIVITY.test(words)) return true;
+    const denied = EXCLUDED_ACTIVITY.exec(words);
+    if (!denied) return false;
+    // A DJ night can explicitly say "no live music". Only contradictory
+    // positive evidence for that activity should disqualify its programme.
+    const term = new RegExp(`\\b${denied[1]}\\b`);
+    return scoped.some(part => hasAffirmedMatch(part.words, part.words, term));
+  });
+}
+
 function clauses(text: string): Clause[] {
   // Keep a dated programme line whole so its claims cannot lose their date.
   return programmeRows(text).flatMap((line) => readDatedProgrammeRow(line) ? [line] :
@@ -250,6 +280,7 @@ const ACTIVITIES: readonly ActivityRule[] = [
   { category: "culture", format: "stand-up", cue: /\b(?:stand up|standup|stendap|standap)\b/,
     except: /\b(?:radionic\w*|workshop\w*|masterclass)\b/ },
   { category: "culture", format: "festival", cue: /\b(?:film festival|filmsk\w* festival\w*|festival\w* (?:autorsk\w* |nem\w* |kratk\w* |dokumentarn\w* )?film\w*)\b/ },
+  { category: "culture", cue: /^(?:modna revija|fashion show)(?:$| (?:u|na|at)\b)/ },
   { category: "culture", cue: /\b(?:poetsko vece|poetry reading|spoken word|dramsk\w* komad\w*)\b/ },
   { category: "exhibition", format: "exhibition", cue: /\b(?:izlozb\w*|exhibition\w*|vernissag\w*|vystavk\w*)\b/ },
   { category: "exhibition", format: "fair", cue: /\b(?:sajam\w*|sajm\w*|bazar\w*|bazaar\w*|buvljak\w*|flea market|craft market|vintage market|berz\w* ploc\w*)\b/ },
@@ -258,6 +289,7 @@ const ACTIVITIES: readonly ActivityRule[] = [
   { category: "participate", format: "game", cue: /\b(?:bingo|board games?|drustven\w* igr\w*|turnir\w* u (?:pikad\w*|sah\w*)|dart tournament|chess tournament)\b/ },
   { category: "participate", format: "karaoke", cue: /\b(?:karaok\w*)\b/ },
   { category: "food", format: "tasting", cue: /\b(?:degustac\w*|wine tasting|beer tasting|coffee tasting)\b/, except: ROUTINE_MENU },
+  { category: "food", cue: /^dani (?:[a-z]+ ){0,2}kuhinje$/, except: ROUTINE_MENU },
   { category: "food", cue: /\bbrunch\b/, except: ROUTINE_MENU },
   { category: "food", format: "dinner", cue: /\b(?:chef dinner|wine dinner|gala dinner|gala vecer\w*|vecer\w* i dj set|vecer\w* sa degustac\w*|vecer\w* uz degustac\w*)\b/, except: ROUTINE_MENU },
   { category: "food", format: "festival", cue: /\b(?:food festival|gastro festival|festival\w* hran\w*|festival\w* piv\w*|craft beer festival)\b/ },

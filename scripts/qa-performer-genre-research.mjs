@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { categoryWindow, discoveryBudgets } from "../lib/taxonomy/priority-event-discovery.ts";
 import {
+  claimPriorityCategories,
   claimUpcomingBatch,
   completeUpcomingBatch,
   listDailyInputs,
@@ -491,7 +493,8 @@ function dailyQueueFixture() {
           }]));
           range(chain);
           const expectedFields = index === "by_creation_time" && fields.length === 1 ? ["_creationTime"] : lookupKeys[index];
-          assert.deepEqual(fields, expectedFields, `Unexpected ${table} index range.`);
+          if (index === "by_publicationState_date" && fields.length === 3) assert.deepEqual(fields, ["publicationState", "date", "date"]);
+          else assert.deepEqual(fields, expectedFields, `Unexpected ${table} index range.`);
           const rows = tables[table]().filter((row) => checks.every((check) => check(row)));
           const operations = {
             take: async (limit) => rows.slice(0, limit),
@@ -751,6 +754,124 @@ try {
   assert.equal(sweep.enrichmentState().attempted, 3);
   assert.deepEqual((await claim()).events.map(({ key }) => key), ["no-post"]);
   assert.deepEqual(await complete(owner, []), { completed: true, counts: { written: 0, unchanged: 0, stale: 0 } });
+
+  const spring = categoryWindow(Date.parse("2026-03-28T12:00:00Z"));
+  assert.equal(spring.includes({ date: "2026-03-30", time: "13:59", timeStatus: "confirmed" }), true);
+  assert.equal(spring.includes({ date: "2026-03-30", time: "14:00", timeStatus: "confirmed" }), false);
+  const autumn = categoryWindow(Date.parse("2026-10-24T12:00:00Z"));
+  assert.equal(autumn.includes({ date: "2026-10-26", time: "13:00", timeStatus: "confirmed" }), false);
+  const night = categoryWindow(Date.parse("2026-11-27T02:00:00Z"));
+  assert.equal(night.includes({ date: "2026-11-26", time: "22:00–04:00", timeStatus: "confirmed" }), true);
+  assert.equal(night.includes({ date: "2026-11-26", time: "21:00–23:00", timeStatus: "confirmed" }), false);
+  assert.equal(night.includes({ date: "2026-11-26", timeStatus: "unknown" }), true);
+  assert.equal(night.includes({ date: "2026-11-29", timeStatus: "unknown" }), true);
+  const counter = { dayKey: "2026-11-27", attempted: 72 };
+  assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), counter).general, 0);
+  assert.equal(discoveryBudgets(Date.parse("2026-11-27T17:00:00Z"), counter).general, 24);
+  assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), { ...counter,
+    categoryBudget: { dayKey: counter.dayKey, attempted: 72, consecutive: 3 } }).general, 24);
+
+  // Exercise the real mutations with stable Belgrade time, multiple index
+  // pages, old cursors/state, a full budget and new arrivals after the rush.
+  const priorityFixture = dailyQueueFixture();
+  const template = priorityFixture.events.get("single");
+  priorityFixture.events.clear(); priorityFixture.labels.clear();
+  const put = (id, fields) => priorityFixture.events.set(id, { ...template, _id: id, date: "2026-11-27", time: undefined,
+    timeStatus: "unknown", title: id, artists: [], description: undefined, normalizedFieldsJson: undefined,
+    sourceCaption: undefined, instagramPostUrl: undefined, ...fields });
+  let nearNow = Date.parse("2026-11-27T10:00:00Z");
+  const actualNow = Date.now;
+  Date.now = () => nearNow;
+  try {
+    const priorityClaim = (allowModel = true) => claimPriorityCategories._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner, allowModel });
+    const normalClaim = () => claimUpcomingBatch._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner });
+    const finish = (results) => completeUpcomingBatch._handler(priorityFixture.dailyCtx, { serviceSecret: "", owner, model: "fixture", results });
+    const before = await priorityClaim(false);
+    assert.equal(before.counts.scanned, 0);
+    const state = priorityFixture.enrichmentState();
+    state.categoryScan = undefined; state.attempted = 96; state.cursor = "31";
+    for (let i = 0; i < 13; i++) put(`quiz-${i}`, { title: `Pub kviz ${i}` });
+    put("withdrawn", { title: "Film festival", description: "Film festival cancelled." });
+    put("swing", { title: "Live jazz concert", description: "An evening of soul, jazz, blues, gospel and swing.", eventType: "live music" });
+    put("without-proof", { title: "Evening programme" });
+    put("outside", { date: "2026-11-29", time: "15:00", timeStatus: "confirmed", title: "Radionica" });
+    const prior = JSON.stringify({ upcomingGenreRetryAt: nearNow + 14 * 86_400_000 });
+    priorityFixture.labels.set("quiz-12", { _id: "prior-null", eventId: "quiz-12", eventUpdatedAt: template.updatedAt,
+      version: EVENT_DISCOVERY_VERSION, taxonomy: null, model: "previous-model", auditJson: prior });
+    const first = await priorityClaim();
+    assert.equal(first.counts.written, 12); assert.equal(first.more, true); assert.deepEqual(first.events, []);
+    const second = await priorityClaim();
+    assert.equal(second.counts.written, 2); assert.equal(second.counts.attempted, 0);
+    assert.equal(state.attempted, 96, "Explicit programme writes require no paid attempt even after exhaustion.");
+    assert.equal(state.cursor, "31"); assert.equal(priorityFixture.labels.get("quiz-12").taxonomy.primaryCategory, "participate");
+    assert.equal(JSON.parse(priorityFixture.labels.get("quiz-12").auditJson).categoryPriority.version, 1);
+    assert.ok(priorityFixture.labels.get("swing").taxonomy.genres.includes("jazz-blues"));
+    for (const id of ["withdrawn", "outside", "without-proof"]) assert.equal(priorityFixture.labels.has(id), false);
+    assert.equal((await priorityClaim()).counts.scanned, 0, "A completed local scan does not spin.");
+    nearNow += 31 * 60_000;
+    assert.equal((await priorityClaim()).counts.written, 0); assert.equal((await priorityClaim()).counts.written, 0);
+    assert.equal(state.attempted, 96);
+    // Old state already used 72 ordinary attempts before a later announcement.
+    state.attempted = 72; state.categoryScan = undefined; state.cursor = null;
+    assert.equal((await normalClaim()).state, "idle");
+    put("late-unknown", { title: "Session L", eventType: "live music", description: "An evening of soul, jazz, blues, gospel and swing. The band plays." });
+    await priorityClaim();
+    const later = await priorityClaim();
+    assert.ok(later.events.some(e => e.key === "late-unknown")); assert.equal(state.attempted, 72 + later.events.length);
+    assert.equal((await normalClaim()).state, "busy");
+    const result = { eventId: "late-unknown", expectedUpdatedAt: template.updatedAt,
+      taxonomy: { primaryCategory: "live", categories: ["live"], formats: [], genres: [] },
+      auditJson: JSON.stringify({ evidence: [{ kind: "category", label: "live", source: "description", quote: "The band plays." }] }) };
+    const abstention = { eventId: "without-proof", expectedUpdatedAt: template.updatedAt, taxonomy: null, auditJson: "{}" };
+    const completed = await finish([result, abstention]);
+    assert.equal(completed.counts.written, 1);
+    assert.equal((await finish([result])).completed, false);
+    const saved = priorityFixture.labels.get("late-unknown");
+    assert.deepEqual(saved.taxonomy.genres, ["rnb-soul", "jazz-blues"], "A category-only model response cannot erase genres confirmed in the occurrence.");
+    assert.ok(JSON.parse(saved.auditJson).evidence.some(e => e.kind === "genre" && e.source === "description"));
+    assert.equal(priorityFixture.labels.has("without-proof"), false, "Abstention never becomes a durable category.");
+    nearNow += 2 * 3_600_000; state.categoryScan = undefined;
+    await priorityClaim(); assert.equal((await priorityClaim()).events.length, 0, "Confirmed abstention is terminal for this unchanged revision.");
+    priorityFixture.events.get("without-proof").updatedAt++; state.categoryScan = undefined;
+    await priorityClaim(); assert.deepEqual((await priorityClaim()).events.map(e => e.key), ["without-proof"]);
+    await finish([]); nearNow += 2 * 3_600_000; state.categoryScan = undefined;
+    await priorityClaim(); assert.deepEqual((await priorityClaim()).events.map(e => e.key), ["without-proof"]);
+    await finish([]); nearNow += 2 * 3_600_000; state.categoryScan = undefined;
+    await priorityClaim(); assert.deepEqual((await priorityClaim()).events, []);
+  } finally { Date.now = actualNow; }
+
+  // Both old external worker entry points must be fenced during backend-first rollout.
+  const cancelled = dailyQueueFixture();
+  const cancelledFilm = cancelled.events.get("single");
+  Object.assign(cancelledFilm, { title: "Film festival", description: "Film festival cancelled.", date: getBelgradeDayKey() });
+  for (const row of cancelled.events.values()) if (row !== cancelledFilm) row.date = "2000-01-01";
+  const oldWorker = dailyResult("single", { taxonomy: { primaryCategory: "culture", categories: ["culture"], formats: ["festival"], genres: [] } });
+  const badDaily = await recordDailyBatch._handler(cancelled.dailyCtx, { serviceSecret: "", runId: cancelled.run._id, model: "old-worker", results: [oldWorker] });
+  assert.deepEqual(badDaily, { written: 0, unchanged: 0, stale: 1 });
+  const badLease = await claimUpcomingBatch._handler(cancelled.dailyCtx, { serviceSecret: "", owner });
+  assert.deepEqual(badLease.events.map(row => row.key), ["single"]);
+  const badComplete = await completeUpcomingBatch._handler(cancelled.dailyCtx, { serviceSecret: "", owner, model: "old-worker", results: [oldWorker] });
+  assert.deepEqual(badComplete.counts, { written: 0, unchanged: 0, stale: 1 });
+  assert.equal(cancelled.labels.has("single"), false);
+
+  const proofs = dailyQueueFixture();
+  const proofEvent = proofs.events.get("single");
+  proofs.events.clear(); proofs.labels.clear();
+  proofs.events.set("single", { ...proofEvent, date: getBelgradeDayKey(), time: undefined, timeStatus: "unknown",
+    sourceCaption: undefined, description: "Live concert.", title: "Venue programme", artists: [], normalizedFieldsJson: undefined });
+  const runLocal = await claimPriorityCategories._handler(proofs.dailyCtx, { serviceSecret: "", owner, allowModel: false });
+  assert.equal(runLocal.counts.written, 1);
+  const previousProof = JSON.parse(proofs.labels.get("single").auditJson).evidence;
+  assert.deepEqual(previousProof.map(c => c.kind), ["category", "format"]);
+  const regular = await claimUpcomingBatch._handler(proofs.dailyCtx, { serviceSecret: "", owner });
+  assert.equal(regular.events.length, 1);
+  await completeUpcomingBatch._handler(proofs.dailyCtx, { serviceSecret: "", owner, model: "ordinary", results: [{
+    eventId: "single", expectedUpdatedAt: proofEvent.updatedAt,
+    taxonomy: { primaryCategory: "live", categories: ["live"], formats: ["concert"], genres: [] },
+    auditJson: JSON.stringify({ evidence: [] }),
+  }] });
+  assert.deepEqual(JSON.parse(proofs.labels.get("single").auditJson).evidence, previousProof,
+    "Later genre-only work retains dated primary/programme evidence without duplicating it.");
 
   const backfill = dailyQueueFixture();
   const setBackfillLabel = (eventId, taxonomy, auditJson = "{}") => backfill.labels.set(eventId, {
