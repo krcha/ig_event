@@ -472,10 +472,12 @@ function dailyQueueFixture() {
     eventPerformerGenreResearch: () => [...webRows.values()],
     eventDiscoveryIngestionQueue: () => [...ingestionQueue.values()],
     performerRegistryProfiles: () => [],
+    performerDirectoryLinks: () => [],
     performerRegistryAppearances: () => [...appearances.values()],
     eventDiscoveryEnrichmentState: () => enrichmentState ? [enrichmentState] : [],
   };
   const lookupKeys = {
+    by_kind_credit: ["kind", "creditKey"], by_profile_kind: ["profileId", "kind"],
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
