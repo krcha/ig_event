@@ -1000,14 +1000,17 @@ export function assertServiceCreateEventPolicy(
 }
 
 /** Keep the original source proof available for certified venue repair. */
-export function deferServiceApprovalForUnresolvedVenue(normalizedFieldsJson: string | undefined): string {
+export function deferServiceApprovalForUnresolvedVenue(
+  normalizedFieldsJson: string | undefined,
+  reason: "unresolved_venue_identity" | "unverified_venue_account" = "unresolved_venue_identity",
+): string {
   const fields = parseNormalizedFields(normalizedFieldsJson);
   if (!fields) throw new Error("Unresolved venue review requires bound source fields.");
   return JSON.stringify({
     ...fields,
     moderationAutoApproved: false,
     moderationAutoApproveRule: null,
-    moderationPendingReasons: ["unresolved_venue_identity"],
+    moderationPendingReasons: [reason],
   });
 }
 

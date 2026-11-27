@@ -104,7 +104,8 @@ export async function assertSourceAccountVenueFallbackPolicy(
   ctx: QueryCtx | MutationCtx,
   candidate: SourceAccountVenueFallbackCandidate,
   persistedPost: Doc<"scrapedPosts">,
-): Promise<void> {
+  options: { reviewUnmappedAccountFrom?: Id<"scrapedPosts"> } = {},
+): Promise<"unverified_venue_account" | undefined> {
   const fields = parsedObject(candidate.normalizedFieldsJson);
   if (!fields || !Object.hasOwn(fields, "venueAccountFallbackVersion")) return;
   const raw = parsedObject(candidate.rawExtractionJson);
@@ -135,10 +136,15 @@ export async function assertSourceAccountVenueFallbackPolicy(
     .withIndex("by_handle", (q) => q.eq("handle", sourceHandle))
     .take(2);
   const source = sourceRows.length === 1 ? sourceRows[0] : null;
-  if (!source?.active || source.role !== "venue" || !source.venueId) {
+  const reviewUnmappedAccount = options.reviewUnmappedAccountFrom !== undefined &&
+    options.reviewUnmappedAccountFrom === persistedPost._id &&
+    source?.active === true && source.role === "unknown" && !source.venueId &&
+    candidate.venueId !== undefined;
+  const venueId = reviewUnmappedAccount ? candidate.venueId : source?.venueId;
+  if (!source?.active || (!reviewUnmappedAccount && source.role !== "venue") || !venueId) {
     throw new Error("Venue account fallback requires one active mapped venue account.");
   }
-  const venue = await ctx.db.get(source.venueId);
+  const venue = await ctx.db.get(venueId);
   if (
     !venue || !isVenuePublic(venue) ||
     normalizeHandle(venue.instagramHandle) !== sourceHandle ||
@@ -167,4 +173,5 @@ export async function assertSourceAccountVenueFallbackPolicy(
   })) {
     throw new Error("Venue account fallback cannot replace an explicit different or unresolved venue.");
   }
+  if (reviewUnmappedAccount) return "unverified_venue_account";
 }

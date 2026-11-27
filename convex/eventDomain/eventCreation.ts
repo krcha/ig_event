@@ -381,6 +381,7 @@ export async function createEventHandler(
     eventArgs.venue,
   );
   const deferApprovalForVenue = kind === "service" && eventArgs.status === "approved" && !venueFields.venueId;
+  let venueAccountReview: "unverified_venue_account" | undefined;
   if (kind === "service") {
     const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
       eventArgs.normalizedFieldsJson,
@@ -400,10 +401,16 @@ export async function createEventHandler(
       ...venueFields,
     });
     if (eventArgs.status === "approved") {
-      await assertPersistedServiceSourcePolicy(ctx, {
+      venueAccountReview = await assertPersistedServiceSourcePolicy(ctx, {
         ...eventArgs,
         ...venueFields,
+      }, {
+        reviewUnmappedAccountFrom: occurrencePlan && eventArgs.sourceOccurrenceKey && !requireCanonicalApprovedDuplicate
+          ? sourceDocument?._id : undefined,
       });
+      if (venueAccountReview && sourceDocument && occurrencePlan) {
+        assertSourceOccurrencePlanMatchesSourceDocument(occurrencePlan, sourceDocument);
+      }
     }
   }
   void _serviceSecret;
@@ -415,7 +422,7 @@ export async function createEventHandler(
       { ...eventArgs, ...venueFields },
       [],
       {
-        returnUniqueApprovedDuplicate: canReturnCanonicalApprovedDuplicate,
+        returnUniqueApprovedDuplicate: canReturnCanonicalApprovedDuplicate && !venueAccountReview,
       },
     );
     if (existingApprovedDuplicate) {
@@ -435,10 +442,11 @@ export async function createEventHandler(
   if (deferApprovalForVenue && !occurrencePlan) {
     throw new Error("Service event creation needs a source occurrence receipt to hold an unresolved venue for review.");
   }
-  const normalizedEventArgs = normalizeEventTimeWritePatch(deferApprovalForVenue
+  const holdForVenueReview = deferApprovalForVenue || Boolean(venueAccountReview);
+  const normalizedEventArgs = normalizeEventTimeWritePatch(holdForVenueReview
     ? {
         ...eventArgs,
-        normalizedFieldsJson: deferServiceApprovalForUnresolvedVenue(eventArgs.normalizedFieldsJson),
+        normalizedFieldsJson: deferServiceApprovalForUnresolvedVenue(eventArgs.normalizedFieldsJson, venueAccountReview),
         status: "pending" as const,
       }
     : eventArgs);
@@ -514,6 +522,6 @@ export async function createEventHandler(
   });
 
   return returnCreateDisposition
-    ? { eventId, created: true, updatedAt: now, ...(deferApprovalForVenue ? { status: "pending" as const } : {}) }
+    ? { eventId, created: true, updatedAt: now, ...(holdForVenueReview ? { status: "pending" as const } : {}) }
     : eventId;
 }

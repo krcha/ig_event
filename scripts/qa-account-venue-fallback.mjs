@@ -229,6 +229,29 @@ for (const role of ["promoter", "unknown"]) {
 }
 await rejects("Inactive accounts must stay unbound.", { sources: [{ ...source, active: false }] });
 await rejects("An account without a canonical venue ID must stay unbound.", { sources: [{ ...source, venueId: undefined }] });
+const unmappedSource = { ...source, role: "unknown", venueId: undefined };
+async function checkForReview(options, fencedPost = "saved-account-post") {
+  const { candidate, ctx, persistedPost } = fixture(options);
+  return assertSourceAccountVenueFallbackPolicy(ctx, candidate, persistedPost, {
+    reviewUnmappedAccountFrom: fencedPost,
+  });
+}
+assert.equal(await checkForReview({ sources: [unmappedSource] }), "unverified_venue_account");
+assert.equal(await checkForReview({ sources: [source] }), undefined);
+await assert.rejects(checkForReview({ sources: [unmappedSource] }, "another-post"), /active mapped venue/);
+for (const options of [
+  { sources: [] },
+  { sources: [unmappedSource, unmappedSource] },
+  { sources: [{ ...unmappedSource, active: false }] },
+  { sources: [{ ...unmappedSource, role: "promoter" }] },
+  { sources: [unmappedSource], candidate: { venueId: otherVenue._id } },
+  { sources: [unmappedSource], candidate: { venueId: undefined } },
+  { sources: [unmappedSource], post: { analysisResultJson: "stale" } },
+  { sources: [unmappedSource], raw: { venue: otherVenue.name } },
+  { sources: [unmappedSource], venueRows: [{ ...venue, publicStatus: "hidden" }] },
+]) {
+  await assert.rejects(checkForReview(options), /Venue account fallback/);
+}
 await rejects("Duplicate account records must not choose one venue arbitrarily.", {
   sources: [source, { ...source, _id: "second-source-record" }],
 });

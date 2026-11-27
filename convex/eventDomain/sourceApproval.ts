@@ -74,8 +74,9 @@ export async function assertPersistedServiceSourcePolicy(
   options: {
     allowHumanReviewedLegacy?: boolean;
     allowHumanReviewedStructured?: boolean;
+    reviewUnmappedAccountFrom?: Id<"scrapedPosts">;
   } = {},
-): Promise<void> {
+): Promise<"unverified_venue_account" | undefined> {
   if (!(await hasPersistedFocusedConflictReviewProof(ctx, { ...candidate, artists: candidate.artists ?? [] }))) {
     throw new Error("Focused conflict evidence requires its completed current server review.");
   }
@@ -162,7 +163,7 @@ export async function assertPersistedServiceSourcePolicy(
     );
   }
   if (structuredEvidence || humanReviewedStructured) {
-    await assertSourceAccountVenueFallbackPolicy(ctx, candidate, persisted);
+    const reviewReason = await assertSourceAccountVenueFallbackPolicy(ctx, candidate, persisted, options);
     const hasCarouselAnalysis = hasCarouselAnalysisMarker(persisted, candidate);
     const posterAssets =
       structuredExtractionMode === "poster" && !hasCarouselAnalysis
@@ -203,7 +204,7 @@ export async function assertPersistedServiceSourcePolicy(
         "Service approval requires current persisted supported extraction-model event evidence bound to the exact source revision.",
       );
     }
-    return;
+    return reviewReason;
   }
   if (humanReviewedLegacy) return;
   if (

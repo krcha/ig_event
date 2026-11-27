@@ -68,6 +68,7 @@ function prepareAutomatedModerationDecision(
     options.structuredEvidenceVerified &&
     autoApprovalBlockers.length === 0 &&
     options.hasDate &&
+    options.hasVenue &&
     !options.suspiciousYear;
   const strictSourceGroundedApproval =
     options.sourceGroundingVerified &&
