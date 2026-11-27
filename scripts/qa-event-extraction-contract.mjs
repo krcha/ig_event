@@ -2285,6 +2285,11 @@ function runSemanticNormalizationQa() {
 
   for (const fixture of [
     {
+      name: "unresolved recurring music clock",
+      rawTime: "",
+      evidence: { status: "unreadable", exact_text: "petkom od 6h", source: "poster" },
+    },
+    {
       name: "doors only",
       rawTime: "20:00",
       evidence: {
