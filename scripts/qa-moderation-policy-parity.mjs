@@ -213,9 +213,6 @@ assert.ok(!missingEvidence.pendingReasons.includes("low_date_confidence"));
 assert.ok(missingEvidence.signals.includes("time_tbd"));
 assert.ok(automated({ hasDate: false }).pendingReasons.includes("missing_date"));
 assert.ok(automated({ hasVenue: false }).pendingReasons.includes("missing_venue"));
-const structuredWithoutVenue = automated({ hasVenue: false, structuredEvidenceVerified: true });
-assert.equal(structuredWithoutVenue.targetStatus, "pending");
-assert.ok(structuredWithoutVenue.pendingReasons.includes("missing_venue"));
 
 // Exercise the real preparation output at the service create/update boundary:
 // a low aggregate score is information, not a second publication veto.

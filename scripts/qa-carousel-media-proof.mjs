@@ -6,7 +6,8 @@ import { recordOpenAiAnalysis } from "../convex/scrapedPosts.ts";
 import { carouselAssetSourceKey, hasCarouselAnalysisMarker, hasPersistedCarouselEventMediaProof } from "../convex/internal/carouselMediaProof.ts";
 import { buildInstagramCarouselImageCoverage } from "../lib/pipeline/instagram-image-coverage.ts";
 import { assertPersistedServiceSourcePolicy } from "../convex/eventDomain/sourceApproval.ts";
-import { hasEventEvidenceV2AutoApproval } from "../lib/events/event-update-precondition.ts";
+import { hasEventEvidenceV2AutoApproval, hasUnlocatedCarouselRangeEvidenceForReview } from "../lib/events/event-update-precondition.ts";
+import { createEvent } from "../convex/events.ts";
 import { isCanonicallyGroundedApprovedEvent } from "../convex/publicEventGrounding.ts";
 import { isExistingEventEligibleForDurableMediaRetry } from "../lib/pipeline/ingestion/media-durability.ts";
 
@@ -151,6 +152,34 @@ try {
   assert.equal(hasEventEvidenceV2AutoApproval(approvedCandidate.normalizedFieldsJson, approvedCandidate), true);
   await assertPersistedServiceSourcePolicy(context, approvedCandidate);
   assert.equal(await isCanonicallyGroundedApprovedEvent(context, approvedCandidate), true);
+  const rangeRow = { ...row, date_evidence: { ...row.date_evidence, exact_text: "16–18 October", resolved_date: "2026-10-16/2026-10-18" }, source_conflicts: [] };
+  const rangeFields = { ...approvalFields, normalizedVenue: "", venue: "", dateEvidenceText: rangeRow.date_evidence.exact_text,
+    sourceConflictResolutionVersion: 1, sourceAccountRole: "promoter", materialSourceConflicts: [], materialSourceConflictCount: 0,
+    benignSourceConflicts: [], benignSourceConflictCount: 0, carouselSourceText: rangeRow.source_text,
+    carouselTextEvidence: rangeRow.text_evidence, carouselPosterEvidence: rangeRow.poster_evidence };
+  const rangeCandidate = { ...approvedCandidate, venue: "", dateEvidenceText: rangeFields.dateEvidenceText,
+    normalizedFieldsJson: JSON.stringify(rangeFields), rawExtractionJson: JSON.stringify({ ...analysis, schedule_entries: [rangeRow] }) };
+  const rangeProof = { reviewUnlocatedRangeFrom: post._id };
+  const originalAnalysis = post.analysisResultJson;
+  post.analysisResultJson = rangeCandidate.rawExtractionJson;
+  assert.equal(hasEventEvidenceV2AutoApproval(rangeCandidate.normalizedFieldsJson, rangeCandidate), false);
+  assert.equal(hasUnlocatedCarouselRangeEvidenceForReview(rangeCandidate.normalizedFieldsJson, rangeCandidate), true);
+  assert.equal(await assertPersistedServiceSourcePolicy(context, rangeCandidate, rangeProof), "unresolved_venue_identity");
+  assert.equal(await isCanonicallyGroundedApprovedEvent(context, rangeCandidate), false);
+  await assert.rejects(createEvent._handler(context, { ...rangeCandidate, serviceSecret: "wrong-secret" }), /auth/i);
+  await assert.rejects(createEvent._handler(context, { ...rangeCandidate, serviceSecret: process.env.CRON_SECRET }), /resolved source venue handle/i);
+  await assert.rejects(createEvent._handler(context, { ...rangeCandidate, serviceSecret: process.env.CRON_SECRET,
+    processingFence: { ...fence, owner: "wrong-owner" } }), /fence is stale/i);
+  await assert.rejects(assertPersistedServiceSourcePolicy(context, rangeCandidate, { reviewUnlocatedRangeFrom: "wrong-post" }), /does not match/i);
+  for (const patch of [{ venue: "Different Place" }, { date: "2026-10-19" },
+    { normalizedFieldsJson: JSON.stringify({ ...rangeFields, carouselSourceText: "A different row" }) },
+    { normalizedFieldsJson: JSON.stringify({ ...rangeFields, sourceConflictResolutionVersion: undefined }) }]) {
+    await assert.rejects(assertPersistedServiceSourcePolicy(context, { ...rangeCandidate, ...patch }, rangeProof), /exact retained event row/i);
+  }
+  storage.delete(receipts[0].storageId);
+  await assert.rejects(assertPersistedServiceSourcePolicy(context, rangeCandidate, rangeProof), /current persisted/i);
+  storage.set(receipts[0].storageId, missing);
+  post.analysisResultJson = originalAnalysis;
   storage.delete(receipts[0].storageId);
   await assert.rejects(assertPersistedServiceSourcePolicy(context, approvedCandidate), /current persisted/i,
     "The actual service approval entry point rejects a missing unselected input.");

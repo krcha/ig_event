@@ -166,6 +166,7 @@ function isEventEvidenceSourceConflict(value: unknown): value is EventEvidenceSo
 export function getEffectiveEventEvidenceV2Conflicts(
   fields: Record<string, unknown>,
   eventFields: EventApprovalFields,
+  conflictRowDate = eventFields.date,
 ): unknown[] | null {
   const reported = fields.extractionSourceConflicts;
   if (!Array.isArray(reported)) return null;
@@ -215,7 +216,7 @@ export function getEffectiveEventEvidenceV2Conflicts(
     typeof eventFields.rawExtractionJson === "string" ? eventFields.rawExtractionJson : undefined,
   );
   if (!rawExtraction) return null;
-  const rawConflicts = readBoundExtractionSourceConflicts(eventFields, fields, rawExtraction);
+  const rawConflicts = readBoundExtractionSourceConflicts({ date: conflictRowDate }, fields, rawExtraction);
   if (!Array.isArray(rawConflicts) || !arraysContainSameJsonValues(reported, rawConflicts)) {
     return null;
   }
@@ -419,12 +420,45 @@ export function hasEventEvidenceV2AutoApproval(
   eventFields?: EventApprovalFields,
   options: { requireFutureDate?: boolean } = {},
 ): boolean {
+  return hasBoundEventEvidenceV2(normalizedFieldsJson, eventFields, options);
+}
+
+/** A carousel date interval can support human review of a dated child even
+ * when the source does not identify one venue for that day. Public approval
+ * continues to require its exact dated row. */
+export function hasUnlocatedCarouselRangeEvidenceForReview(
+  normalizedFieldsJson: string | undefined,
+  event: EventApprovalFields,
+): boolean {
+  if (typeof event.venue !== "string" || event.venue.trim() || typeof event.date !== "string") return false;
+  const fields = parseNormalizedFields(normalizedFieldsJson);
+  const raw = parseNormalizedFields(typeof event.rawExtractionJson === "string" ? event.rawExtractionJson : undefined);
+  const indexes = fields?.carouselSourceRowIndexes;
+  if (fields?.sourceConflictResolutionVersion !== 1 ||
+      !Array.isArray(indexes) || indexes.length !== 1 || !Number.isSafeInteger(indexes[0]) ||
+      raw?._carouselContractVersion !== "carousel_evidence_v1" || !Array.isArray(raw.schedule_entries)) return false;
+  const row = raw.schedule_entries[indexes[0]];
+  const range = row?.date_evidence?.resolved_date;
+  if (typeof range !== "string" || row.date_evidence.exact_text !== fields.dateEvidenceText ||
+      row.date_evidence.source !== fields.dateEvidenceSource) return false;
+  const days = range.split("/");
+  if (days.length !== 2 || !days.every(isValidIsoDate) || days[0]! >= days[1]! ||
+      (event.date !== days[0] && event.date !== days[1])) return false;
+  return hasBoundEventEvidenceV2(normalizedFieldsJson, event, {}, range);
+}
+
+function hasBoundEventEvidenceV2(
+  normalizedFieldsJson: string | undefined,
+  eventFields: EventApprovalFields | undefined,
+  options: { requireFutureDate?: boolean },
+  conflictRowDate = eventFields?.date,
+): boolean {
   const fields = parseNormalizedFields(normalizedFieldsJson);
   if (!fields || !eventFields || hasExplicitNonEventEvidence(normalizedFieldsJson, eventFields)) {
     return false;
   }
   const pendingReasons = fields.moderationPendingReasons;
-  const conflicts = getEffectiveEventEvidenceV2Conflicts(fields, eventFields);
+  const conflicts = getEffectiveEventEvidenceV2Conflicts(fields, eventFields, conflictRowDate);
   const date = normalizeComparableOptionalText(eventFields.date);
   return (
     fields.extractionContractVersion === "event_evidence_v2" &&

@@ -7,6 +7,7 @@ import {
   assertServiceCreateEventPolicy,
   deferServiceApprovalForUnresolvedVenue,
   hasEventEvidenceV2AutoApproval,
+  hasUnlocatedCarouselRangeEvidenceForReview,
 } from "../../lib/events/event-update-precondition";
 import { assertPublicEventImageWrite } from "../../lib/images/public-event-image";
 import { PUBLICATION_POLICY_VERSION } from "../../lib/domain/publication/policy";
@@ -381,34 +382,33 @@ export async function createEventHandler(
     eventArgs.venue,
   );
   const deferApprovalForVenue = kind === "service" && eventArgs.status === "approved" && !venueFields.venueId;
-  let venueAccountReview: "unverified_venue_account" | undefined;
+  let venueReviewReason: "unresolved_venue_identity" | "unverified_venue_account" | undefined;
   if (kind === "service") {
+    const candidate = { ...eventArgs, ...venueFields };
+    const fencedReviewSource = occurrencePlan && eventArgs.sourceOccurrenceKey && !requireCanonicalApprovedDuplicate
+      ? sourceDocument?._id : undefined;
     const structuredEvidenceApproval = hasEventEvidenceV2AutoApproval(
       eventArgs.normalizedFieldsJson,
-      { ...eventArgs, ...venueFields },
+      candidate,
     );
+    const reviewUnlocatedRange = deferApprovalForVenue && !structuredEvidenceApproval && fencedReviewSource !== undefined &&
+      hasUnlocatedCarouselRangeEvidenceForReview(eventArgs.normalizedFieldsJson, candidate);
     if (
       eventArgs.status === "approved" &&
       !venueFields.venueInstagramHandle &&
-      !structuredEvidenceApproval
+      !structuredEvidenceApproval && !reviewUnlocatedRange
     ) {
       throw new Error(
         "Service-authenticated event creation cannot approve an event without a resolved source venue handle.",
       );
     }
-    assertServiceCreateEventPolicy(args.status, args.normalizedFieldsJson, {
-      ...eventArgs,
-      ...venueFields,
-    });
+    assertServiceCreateEventPolicy(reviewUnlocatedRange ? "pending" : args.status, args.normalizedFieldsJson, candidate);
     if (eventArgs.status === "approved") {
-      venueAccountReview = await assertPersistedServiceSourcePolicy(ctx, {
-        ...eventArgs,
-        ...venueFields,
-      }, {
-        reviewUnmappedAccountFrom: occurrencePlan && eventArgs.sourceOccurrenceKey && !requireCanonicalApprovedDuplicate
-          ? sourceDocument?._id : undefined,
+      venueReviewReason = await assertPersistedServiceSourcePolicy(ctx, candidate, {
+        reviewUnmappedAccountFrom: fencedReviewSource,
+        reviewUnlocatedRangeFrom: reviewUnlocatedRange ? fencedReviewSource : undefined,
       });
-      if (venueAccountReview && sourceDocument && occurrencePlan) {
+      if (venueReviewReason && sourceDocument && occurrencePlan) {
         assertSourceOccurrencePlanMatchesSourceDocument(occurrencePlan, sourceDocument);
       }
     }
@@ -422,7 +422,7 @@ export async function createEventHandler(
       { ...eventArgs, ...venueFields },
       [],
       {
-        returnUniqueApprovedDuplicate: canReturnCanonicalApprovedDuplicate && !venueAccountReview,
+        returnUniqueApprovedDuplicate: canReturnCanonicalApprovedDuplicate && !venueReviewReason,
       },
     );
     if (existingApprovedDuplicate) {
@@ -442,11 +442,11 @@ export async function createEventHandler(
   if (deferApprovalForVenue && !occurrencePlan) {
     throw new Error("Service event creation needs a source occurrence receipt to hold an unresolved venue for review.");
   }
-  const holdForVenueReview = deferApprovalForVenue || Boolean(venueAccountReview);
+  const holdForVenueReview = deferApprovalForVenue || Boolean(venueReviewReason);
   const normalizedEventArgs = normalizeEventTimeWritePatch(holdForVenueReview
     ? {
         ...eventArgs,
-        normalizedFieldsJson: deferServiceApprovalForUnresolvedVenue(eventArgs.normalizedFieldsJson, venueAccountReview),
+        normalizedFieldsJson: deferServiceApprovalForUnresolvedVenue(eventArgs.normalizedFieldsJson, venueReviewReason),
         status: "pending" as const,
       }
     : eventArgs);

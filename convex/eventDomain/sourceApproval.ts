@@ -10,6 +10,7 @@ import {
   HUMAN_REVIEWED_STRUCTURED_SOURCE_POLICY_VERSION,
   hasCompleteSourceGroundingAttestation,
   hasEventEvidenceV2AutoApproval,
+  hasUnlocatedCarouselRangeEvidenceForReview,
   hasExplicitNonEventEvidence,
   hasHumanReviewableLegacySourceAttestation,
   hasHumanReviewableStructuredSourceAttestation,
@@ -75,12 +76,17 @@ export async function assertPersistedServiceSourcePolicy(
     allowHumanReviewedLegacy?: boolean;
     allowHumanReviewedStructured?: boolean;
     reviewUnmappedAccountFrom?: Id<"scrapedPosts">;
+    reviewUnlocatedRangeFrom?: Id<"scrapedPosts">;
   } = {},
-): Promise<"unverified_venue_account" | undefined> {
+): Promise<"unresolved_venue_identity" | "unverified_venue_account" | undefined> {
   if (!(await hasPersistedFocusedConflictReviewProof(ctx, { ...candidate, artists: candidate.artists ?? [] }))) {
     throw new Error("Focused conflict evidence requires its completed current server review.");
   }
-  const structuredEvidence = hasEventEvidenceV2AutoApproval(
+  const rangeForReview = options.reviewUnlocatedRangeFrom !== undefined;
+  if (rangeForReview && !hasUnlocatedCarouselRangeEvidenceForReview(candidate.normalizedFieldsJson, candidate)) {
+    throw new Error("Unlocated date range review requires the exact retained event row.");
+  }
+  const structuredEvidence = rangeForReview || hasEventEvidenceV2AutoApproval(
     candidate.normalizedFieldsJson,
     candidate,
   );
@@ -149,6 +155,7 @@ export async function assertPersistedServiceSourcePolicy(
     persistedCandidates.length === 1 ? persistedCandidates[0] : null;
   if (
     !persisted ||
+    (rangeForReview && options.reviewUnlocatedRangeFrom !== persisted._id) ||
     normalizeHandle(persisted.handle) !== handle ||
     normalizeHandle(persisted.username) !== handle ||
     persisted.postId !== postId ||
@@ -204,7 +211,7 @@ export async function assertPersistedServiceSourcePolicy(
         "Service approval requires current persisted supported extraction-model event evidence bound to the exact source revision.",
       );
     }
-    return reviewReason;
+    return rangeForReview ? "unresolved_venue_identity" : reviewReason;
   }
   if (humanReviewedLegacy) return;
   if (
