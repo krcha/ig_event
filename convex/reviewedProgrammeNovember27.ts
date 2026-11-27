@@ -7,6 +7,7 @@ import {
   nextEventUpdatedAt,
 } from "../lib/events/event-update-precondition";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
+import { exactJsonValue } from "../lib/events/exact-json-value";
 import {
   BILLED_PROGRAMME_REVIEW_VERSION,
   EMPTY_RESEARCH_RETRY_MS,
@@ -115,19 +116,6 @@ const targets: Target[] = [
 function fail(title: string, detail: string): never {
   throw new Error(`Reviewed programme: ${title}: ${detail}`);
 }
-function same(a: unknown, b: unknown): boolean {
-  // Convex sorts object keys on the wire, while array order is billing order.
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => same(v, b[i]));
-  if (a && b && typeof a === "object" && typeof b === "object") {
-    const left = Object.entries(a),
-      right = b as Record<string, unknown>;
-    return (
-      left.length === Object.keys(right).length &&
-      left.every(([k, v]) => Object.hasOwn(right, k) && same(v, right[k]))
-    );
-  }
-  return a === b;
-}
 function taxonomy(t: Target) {
   return { primaryCategory: t.category, categories: [t.category], formats: [t.format], genres: [] };
 }
@@ -148,7 +136,7 @@ async function inspect(ctx: QueryCtx | MutationCtx, t: Target) {
   if (
     !e ||
     e.title !== t.title ||
-    !same(e.artists, t.artists) ||
+    !exactJsonValue(e.artists, t.artists) ||
     e.venueId !== t.venueId ||
     e.date !== "2026-11-27" ||
     e.instagramPostId !== t.post ||
@@ -166,8 +154,8 @@ async function inspect(ctx: QueryCtx | MutationCtx, t: Target) {
   if (l.model === review) {
     if (
       readEventEvidenceRecord(JSON.stringify(audit.reviewedProgramme)).review !== review ||
-      !same(l.taxonomy, taxonomy(t)) ||
-      !same(r?.matches ?? [], t.matches) ||
+      !exactJsonValue(l.taxonomy, taxonomy(t)) ||
+      !exactJsonValue(r?.matches ?? [], t.matches) ||
       (t.matches.length && (r?.eventUpdatedAt !== e.updatedAt || r?.model !== review)) ||
       (!t.matches.length && r) ||
       (t.changeTime &&
