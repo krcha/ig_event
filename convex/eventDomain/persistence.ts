@@ -1,3 +1,4 @@
+import { schedulePublishedDiscovery } from "../internal/schedulePublishedDiscovery";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { DomainError } from "../../lib/domain/errors";
@@ -137,6 +138,7 @@ export async function deleteEventWithSavedReferences(
     },
   );
   await ctx.db.delete(eventId);
+  await schedulePublishedDiscovery(ctx, eventId);
   return { deletedReferenceCount, topologyMutated };
 }
 
@@ -214,7 +216,10 @@ export async function deleteExpiredEventWithSavedReferences(
   for (const references of reverseReferences) {
     for (const row of references.referenceRows) await ctx.db.delete(row._id);
   }
-  for (const member of events) await ctx.db.delete(member._id);
+  for (const member of events) {
+    await ctx.db.delete(member._id);
+    await schedulePublishedDiscovery(ctx, member._id);
+  }
   // Removing an expired sibling must not rewrite or deapprove a current row.
   // An unexpected visibility change aborts the whole Convex transaction.
   for (const { event: remaining, decision } of retainedDecisions.values()) {

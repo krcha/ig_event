@@ -1,3 +1,4 @@
+import { schedulePublishedDiscovery } from "./internal/schedulePublishedDiscovery";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
@@ -302,6 +303,10 @@ async function refreshEventPublicationStatesInline(
       event.publicationState !== patch.publicationState
     ) {
       await ctx.db.patch(event._id, patch);
+    }
+    if (event.publicationState === "publishable" || patch.publicationState === "publishable" ||
+      event.publicationReason === "derived_state_refresh_deferred") {
+      await schedulePublishedDiscovery(ctx, event._id);
     }
   }
 }

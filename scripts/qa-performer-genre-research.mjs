@@ -10,6 +10,8 @@ import {
   listUnknownGenreInputs,
   listUpcomingDiscoveryRefresh,
   loadPublicEventDiscoveryLabels,
+  processPublishedEvent,
+  scheduleDailyPage,
   recordBatch,
   recordDailyBatch,
   recordGenreResearch,
@@ -460,18 +462,23 @@ function dailyQueueFixture() {
   eventFixture("no-post", {}, "no-post");
   eventFixture("no-receipt", {}, "no-receipt");
   eventFixture("other-run", {}, "other-run");
+  const ingestionQueue = new Map();
   const tables = {
     events: () => [...events.values()],
     scrapedPosts: () => posts,
     ingestionRunHandleReceipts: () => receipts,
     eventDiscoveryLabels: () => [...labels.values()],
     eventPerformerGenreResearch: () => [...webRows.values()],
+    eventDiscoveryIngestionQueue: () => [...ingestionQueue.values()],
+    performerRegistryProfiles: () => [],
+    performerRegistryAppearances: () => [],
     eventDiscoveryEnrichmentState: () => enrichmentState ? [enrichmentState] : [],
   };
   const lookupKeys = {
     by_instagramPostId: ["instagramPostId"], by_canonicalSourceUrl: ["canonicalSourceUrl"],
     by_normalizedInstagramPostUrl: ["normalizedInstagramPostUrl"], by_instagramPostUrl: ["instagramPostUrl"],
     by_eventId: ["eventId"], by_postId: ["postId"], by_run_handle: ["runId", "handle"],
+    by_priority_readyAt: ["priority", "readyAt"], by_name: ["nameKey"], by_event: ["eventId"],
     by_creation_time: ["_creationTime", "_creationTime"],
     by_publicationState_date: ["publicationState", "date"], by_key: ["key"],
   };
@@ -488,6 +495,7 @@ function dailyQueueFixture() {
             eq: (value, target) => value === target,
             gte: (value, target) => value >= target,
             lte: (value, target) => value <= target,
+            gt: (value, target) => value > target,
           }).map(([op, test]) => [op, (field, value) => {
             fields.push(field);
             checks.push((row) => test(row[field], value));
@@ -495,7 +503,8 @@ function dailyQueueFixture() {
           }]));
           range(chain);
           const expectedFields = index === "by_creation_time" && fields.length === 1 ? ["_creationTime"] : lookupKeys[index];
-          if (index === "by_publicationState_date" && fields.length === 3) assert.deepEqual(fields, ["publicationState", "date", "date"]);
+          if (index === "by_name" && fields.length === 2) assert.deepEqual(fields, ["nameKey", "independentAppearances"]);
+          else if (index === "by_publicationState_date" && fields.length === 3) assert.deepEqual(fields, ["publicationState", "date", "date"]);
           else assert.deepEqual(fields, expectedFields, `Unexpected ${table} index range.`);
           const rows = tables[table]().filter((row) => checks.every((check) => check(row)));
           const operations = {
@@ -517,6 +526,11 @@ function dailyQueueFixture() {
         } };
       },
       insert: async (table, data) => {
+        if (table === "eventDiscoveryIngestionQueue") {
+          assert.ok(!ingestionQueue.has(data.eventId));
+          ingestionQueue.set(data.eventId, { ...data, _id: "queue-" + data.eventId });
+          return;
+        }
         if (table === "eventDiscoveryEnrichmentState") {
           assert.equal(enrichmentState, null);
           enrichmentState = { _id: "enrichment-state", ...data };
@@ -528,18 +542,26 @@ function dailyQueueFixture() {
         byEvent.set(data.eventId, { ...data, _id: `${table}-${data.eventId}` });
       },
       replace: async (id, data) => {
-        const byEvent = labels.get(data.eventId)?._id === id ? labels : webRows;
+        const byEvent = ingestionQueue.get(data.eventId)?._id === id ? ingestionQueue : labels.get(data.eventId)?._id === id ? labels : webRows;
         assert.equal(byEvent.get(data.eventId)?._id, id);
         byEvent.set(data.eventId, { ...data, _id: id });
       },
+      delete: async (id) => {
+        for (const map of [ingestionQueue, webRows, labels]) for (const row of map.values()) {
+          if (row._id === id) { map.delete(row.eventId); return; }
+        }
+        assert.fail("Missing document for deletion.");
+      },
       patch: async (id, data) => {
+        const row = [...ingestionQueue.values(), ...labels.values()].find(row => row._id === id);
+        if (row) { Object.assign(row, data); return; }
         assert.equal(id, enrichmentState?._id);
         Object.assign(enrichmentState, data);
       },
     },
   };
   labels.get("already-classified").eventId = "already-classified";
-  return { dailyCtx, events, labels, webRows, run, pages, localRow, localDetail, neighbor,
+  return { dailyCtx, events, labels, webRows, ingestionQueue, run, pages, localRow, localDetail, neighbor,
     enrichmentState: () => enrichmentState };
 }
 
@@ -670,6 +692,17 @@ try {
   assert.equal(dailyQueue.get("legacy-sibling").sourceCaption, undefined, "A pending sibling still means the caption covers multiple events.");
 
   const dailyResult = (eventId, extra = {}) => ({ eventId, expectedUpdatedAt: 100, taxonomy: party, auditJson: "{}", ...extra });
+  const scheduledJobs = [];
+  const dailySchedulingCtx = { ...daily.dailyCtx, scheduler: { async runAfter(_delay, _fn, args) { scheduledJobs.push(args.eventId); } } };
+  let scheduledCursor = null;
+  do {
+    const page = await scheduleDailyPage._handler(dailySchedulingCtx, { ...dailyArgs, cursor: scheduledCursor });
+    scheduledCursor = page.cursor;
+  } while (scheduledCursor !== null);
+  assert.ok(scheduledJobs.includes("single"));
+  assert.ok(!scheduledJobs.includes("no-receipt"), "A daily recovery only schedules events from its own completed run.");
+  assert.equal(daily.enrichmentState(), null, "Daily callbacks cannot bypass the paid reservation budget.");
+
   const recordDaily = (...results) => recordDailyBatch._handler(daily.dailyCtx, { ...dailyArgs, model: "fixture", results });
   const projection = (eventId, includeEstimate = true) =>
     loadPublicEventDiscoveryLabels(daily.dailyCtx, daily.events.get(eventId), includeEstimate);
@@ -819,7 +852,11 @@ try {
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), counter).general, 0);
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T17:00:00Z"), counter).general, 24);
   assert.equal(discoveryBudgets(Date.parse("2026-11-27T05:00:00Z"), { ...counter,
-    categoryBudget: { dayKey: counter.dayKey, attempted: 72, consecutive: 3 } }).general, 24);
+    categoryBudget: { dayKey: counter.dayKey, attempted: 72, consecutive: 3 } }).general, 12);
+  for (const [hour, remaining] of [[6, 0], [14, 6], [20, 12]]) {
+    assert.equal(discoveryBudgets(Date.parse(`2026-11-27T${String(hour).padStart(2, "0")}:00:00+01:00`),
+      { ...counter, attempted: 84 }).remaining, remaining);
+  }
 
   // Exercise the real mutations with stable Belgrade time, multiple index
   // pages, old cursors/state, a full budget and new arrivals after the rush.
@@ -915,7 +952,7 @@ try {
     await urgent();
     const state = ordered.enrichmentState();
     const lastSlot = () => {
-      state.attempted = 95; state.dayKey = "2026-11-27";
+      state.attempted = 83; state.dayKey = "2026-11-27";
       state.categoryBudget = { dayKey: state.dayKey, attempted: 35, consecutive: 3 };
       // Existing rollout state can be halfway through the old unranked scan.
       state.categoryScan = { fromDate: "2026-11-26", throughDate: "2026-11-29", cursor: "12" };
@@ -937,7 +974,7 @@ try {
       assert.fail("The multi-page scan never reached the event it should reserve.");
     };
     assert.deepEqual(await nextReservation(), ["tomorrow-confirmed"]);
-    assert.equal(state.attempted, 96); assert.equal(ordered.labels.get("yesterday-free").taxonomy.primaryCategory, "participate");
+    assert.equal(state.attempted, 84); assert.equal(ordered.labels.get("yesterday-free").taxonomy.primaryCategory, "participate");
     assert.equal(state.categoryAttempts.some(a => a.eventId.startsWith("yesterday")), false);
     await finishUnknown("tomorrow-confirmed");
     lastSlot();
@@ -989,6 +1026,43 @@ try {
   }] });
   assert.deepEqual(JSON.parse(proofs.labels.get("single").auditJson).evidence, previousProof,
     "Later genre-only work retains dated primary/programme evidence without duplicating it.");
+
+  // Run the same mutation the publication transaction schedules. A previous
+  // null/cooldown and a full paid budget must not hide new local programme proof.
+  const ingested = dailyQueueFixture();
+  const ingestedEvent = ingested.events.get("single");
+  const date = getBelgradeDayKey(Date.now() + 86_400_000);
+  const runIngested = () => processPublishedEvent._handler(ingested.dailyCtx, { eventId: ingestedEvent._id });
+  Object.assign(ingestedEvent, { artists: [], date, time: undefined, timeStatus: "unknown", title: "Pub kviz",
+    description: undefined, normalizedFieldsJson: undefined, sourceCaption: undefined });
+  ingested.labels.set("single", { _id: "prior-null", eventId: "single", eventUpdatedAt: ingestedEvent.updatedAt,
+    version: EVENT_DISCOVERY_VERSION, model: "previous", taxonomy: null,
+    auditJson: JSON.stringify({ upcomingGenreRetryAt: Date.now() + EMPTY_RESEARCH_RETRY_MS }) });
+  await runIngested();
+  assert.equal(ingested.labels.get("single").taxonomy.primaryCategory, "participate");
+  assert.equal(ingested.ingestionQueue.size, 0);
+  const durable = structuredClone(ingested.labels.get("single"));
+  await runIngested();
+  assert.deepEqual(ingested.labels.get("single"), durable, "Replayed publication is idempotent.");
+  Object.assign(ingestedEvent, { updatedAt: ingestedEvent.updatedAt + 1, title: "Programme U",
+    eventType: "other", description: undefined });
+  await runIngested();
+  await runIngested();
+  assert.equal(ingested.ingestionQueue.size, 1);
+  assert.equal(ingested.ingestionQueue.get("single").eventUpdatedAt, ingestedEvent.updatedAt);
+  assert.equal(await loadPublicEventDiscoveryLabels(ingested.dailyCtx, ingestedEvent, true), undefined);
+  const queued = await claimUpcomingBatch._handler(ingested.dailyCtx, { owner, serviceSecret: "" });
+  assert.deepEqual(queued.events.map(({ key }) => key), ["single"], "The existing budgeted worker claims the saved ingestion job.");
+  assert.equal(ingested.enrichmentState().attempted, 1);
+  ingested.labels.set("single", { ...durable, eventUpdatedAt: ingestedEvent.updatedAt,
+    taxonomy: { primaryCategory: "live", categories: ["live"], genres: [], formats: ["concert"] } });
+  const raced = await completeUpcomingBatch._handler(ingested.dailyCtx, { owner, serviceSecret: "", model: "earlier-worker",
+    results: [{ eventId: "single", expectedUpdatedAt: ingestedEvent.updatedAt, taxonomy: party, auditJson: "{}" }] });
+  assert.equal(raced.counts.stale, 1);
+  assert.equal(ingested.labels.get("single").taxonomy.primaryCategory, "live");
+  ingestedEvent.publicationState = "hidden";
+  await runIngested();
+  assert.equal(ingested.ingestionQueue.size, 0, "Withdrawal cancels the queued revision.");
 
   const backfill = dailyQueueFixture();
   const setBackfillLabel = (eventId, taxonomy, auditJson = "{}") => backfill.labels.set(eventId, {

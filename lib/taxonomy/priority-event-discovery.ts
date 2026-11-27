@@ -43,11 +43,14 @@ export function discoveryBudgets(now: number, state: { dayKey: string; attempted
   const { date: dayKey, minuteOfDay } = getBelgradeNow(now);
   const total = state?.dayKey === dayKey ? state.attempted : 0;
   const priority = state?.categoryBudget?.dayKey === dayKey ? state.categoryBudget : { dayKey, attempted: 0, consecutive: 0 };
-  const remaining = Math.max(0, UPCOMING_DAILY_BUDGET - total);
+  // Both lanes share the reserve. A full early-morning sweep used to consume
+  // the combined 96 slots before newly published daytime announcements arrived.
+  const withheld = minuteOfDay < 12 * 60 ? 12 : minuteOfDay < 18 * 60 ? 6 : 0;
+  const remaining = Math.max(0, UPCOMING_DAILY_BUDGET - withheld - total);
   // Keep 24 slots for late-arriving urgent events through the afternoon; also
   // keep at least 24 for the continuing full-calendar and genre sweep.
   const general = minuteOfDay < 18 * 60 ? Math.min(remaining, Math.max(0, 72 - (total - priority.attempted))) : remaining;
   const regularTurn = priority.consecutive >= 3 && general > 0 && remaining > 12;
   const urgent = regularTurn ? 0 : Math.min(remaining, Math.max(0, 72 - priority.attempted));
-  return { dayKey, total, priority, general, urgent };
+  return { dayKey, total, remaining, priority, general, urgent };
 }

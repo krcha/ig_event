@@ -438,12 +438,35 @@ recheck the persisted review, current source, retained media, and public facts.
 
 ### Event discovery enrichment
 
-The completed daily runner follows ingestion with a genre-classification pass.
-The Convex `enrich upcoming event discovery` cron also calls the authenticated
-`POST /api/cron/event-discovery` route every ten minutes. It covers upcoming
-approved, publishable events from manual, resumed and older workflows, including
-events approved or corrected after ingestion. An exact programme announcement
-or a verified match for the billed performers takes priority over a model estimate.
+Every public approval, material edit or withdrawal schedules
+`eventDiscovery:processPublishedEvent` in the publication transaction. The worker
+reads the current event, venue and scoped occurrence evidence. It saves a proven
+programme category and advertised genres immediately. Approved events can also
+reuse independently verified facts about the billed performers. This local work
+runs even when the daily AI allowance is exhausted.
+
+The private `performerRegistryProfiles` table stores verified identities and
+their supported dominant genre where available. `performerRegistryAppearances`
+records the billed name, event, date, venue and source of an announced performance.
+An announcement alone does not confirm that a performance took place. A copied
+genre, estimate, venue playlist or unsupported name match cannot become an
+independent source for another performance. Public projections recheck the
+support for a reused profile.
+
+Unresolved upcoming events enter `eventDiscoveryIngestionQueue`. The existing
+ten-minute Convex cron calls the authenticated `POST /api/cron/event-discovery`
+route and prioritizes the next 48 hours. Model reservations share the existing
+daily allowance, with 12 slots reserved until Belgrade noon and six until
+18:00. A new event revision or new direct evidence can resolve
+locally during a search cooldown. The daily ingestion callback schedules
+the same idempotent local worker. Only the shared sweep reserves paid work.
+
+For an existing deployment, initialize the registry with the internal mutation
+`performerRegistry:kickBackfill {}` and inspect `performerRegistry:getBackfillStatus {}`.
+For a bounded date range, invoke `eventDiscovery:backfillPublishedDiscovery`
+with `fromDate`, `throughDate` and `cursor: null`, then pass each returned cursor
+until it is null. Run the nearest dates first. The same transaction and evidence
+checks serve live ingestion and backfill. Repeating the backfill is safe.
 
 Set `EVENT_DISCOVERY_EXECUTOR_ORIGIN` in Convex to the web origin when the
 existing `AUTONOMOUS_MODERATION_EXECUTOR_ORIGIN` is unavailable. Convex uses the

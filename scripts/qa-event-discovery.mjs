@@ -8,8 +8,39 @@ import {
 import { estimatePerformerGenresBatch } from "../lib/ai/estimate-performer-genres.ts";
 import { researchPerformerGenresBatch } from "../lib/ai/research-performer-genres.ts";
 import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
-import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence } from "../lib/taxonomy/explicit-event-discovery.ts";
+import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, isExternalMusicRoleExcluded } from "../lib/taxonomy/explicit-event-discovery.ts";
 import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
+
+// A credited programme must support its own date and activity. A stage name,
+// legacy type, or biography cannot supply either on its own.
+const billed = { title: "Nova", artists: ["Nova"], date: "2026-11-27", venue: "Jazz Klub" };
+const discoSlot = { ...billed, title: "DJ Nova", artists: ["DJ Nova"], occurrenceText: "PETAK / DJ Nova" };
+const inspectBilled = (input) => classifyExplicitEventDiscovery(input);
+assert.equal(inspectBilled(discoSlot)?.taxonomy.primaryCategory, "party");
+assert.deepEqual(inspectBilled(discoSlot)?.taxonomy.genres, []);
+for (const patch of [
+  { occurrenceText: "PETAK / DJ Nova", artists: [] }, { occurrenceText: "DJ Nova" },
+  { occurrenceText: "28.11 DJ Nova" }, { occurrenceText: "SUBOTA / DJ Nova" },
+  { occurrenceText: "PETAK / thanks to DJ Nova" }, { occurrenceText: "PETAK / #DJ #Nova" },
+  { occurrenceText: "PETAK / DJ Nova", sourceCaption: "DJ Nova neće nastupati." },
+  { occurrenceText: "PETAK / DJ Nova", sourceCaption: "An interview with DJ Nova." },
+]) assert.equal(inspectBilled({ ...discoSlot, ...patch })?.taxonomy.categories.includes("party") ?? false, false);
+const describesSet = { ...billed, sourceCaption: "Nova pušta pank!" };
+assert.deepEqual(inspectBilled(describesSet)?.taxonomy, { primaryCategory: "party", categories: ["party"], formats: ["dj-set"], genres: ["metal-punk"] });
+for (const sourceCaption of ["Nova ne pušta pank.", "Nora pušta pank.", "28.11. Nova pušta pank.", "#Nova #pušta #pank", "Nova pušta film o pank sceni."]) {
+  assert.equal(inspectBilled({ ...billed, sourceCaption })?.taxonomy.categories.includes("party") ?? false, false);
+}
+const singer = { ...billed, sourceCaption: "Kvartet Nova izvodiće pesme sa novog albuma." };
+assert.equal(inspectBilled(singer)?.taxonomy.primaryCategory, "live");
+assert.equal(inspectBilled({ ...singer, sourceCaption: "Nova performs." }), null);
+assert.equal(inspectBilled({ ...singer, venue: "Nova" }), null);
+const selection = { ...billed, occurrenceText: "Muzički izbor Nova / petak 27.11.", sourceCaption:
+  "Tonight: endless dance. Očekuje vas muzičko putovanje od folk rocka do hip hopa." };
+assert.equal(inspectBilled(selection)?.taxonomy.primaryCategory, "party");
+assert.deepEqual(inspectBilled(selection)?.taxonomy.genres, ["rock", "hip-hop"]);
+assert.deepEqual(inspectBilled(selection)?.taxonomy.formats, []);
+assert.equal(inspectBilled({ ...selection, sourceCaption: "Subota 28.11. — endless dance." }), null);
+assert.equal(inspectBilled({ ...billed, eventType: "nightlife", description: "Nightlife event with Nova at Jazz Klub." }), null);
 
 const expectedGenres = [
   "electronic", "house", "techno", "trance", "drum-and-bass", "disco-funk", "pop", "rock", "indie-alternative", "metal-punk",
@@ -37,6 +68,27 @@ assert.equal(hasConflictingProgrammeEvidence(show), false);
 assert.equal(hasConflictingProgrammeEvidence({ ...show, date: "2026-11-28", title: "DJ set" }), true);
 assert.equal(hasConflictingProgrammeEvidence({ title: "DJ set", description: "No live music." }), false);
 assert.equal(hasConflictingProgrammeEvidence({ title: "Live music", description: "No live music." }), true);
+for (const [description, role, excluded] of [
+  ["No DJ set. Meet Ena Selka in person.", "party", true],
+  ["Večeras nema žurke. Upoznajte umetnicu.", "party", true],
+  ["Неће бити ДЈ сета.", "party", true],
+  ["No live music, DJ set by Ena Selka.", "live", true],
+  ["No live music, DJ set by Ena Selka.", "party", false],
+  ["Bez muzike uživo, DJ pušta ploče.", "live", true],
+  ["Ovo nije koncert.", "live", true],
+  ["No party hats. No DJ set before 8 PM.", "party", false],
+  ["No concert tickets available.", "live", false],
+  ["There was no live music last week.", "live", false],
+  ["No jazz tonight.", "live", false],
+]) {
+  assert.equal(isExternalMusicRoleExcluded({ title: "Ena Selka", description }, role), excluded, description);
+}
+for (const source of ["sourceCaption", "occurrenceText"]) {
+  const twoDates = { title: "Ena Selka", date: "2026-11-27",
+    [source]: "27.11 - Live set; 28.11 - Meet the artist.\nNo live music." };
+  assert.equal(isExternalMusicRoleExcluded(twoDates, "live"), false);
+  assert.equal(isExternalMusicRoleExcluded({ ...twoDates, date: "2026-11-28" }, "live"), true);
+}
 for (const categoryOnly of [true, false]) {
   const run = await resolveEventGenresBatch([withdrawn, show], { ...localOnly, categoryOnly });
   assert.equal(run.localClassified, 1);

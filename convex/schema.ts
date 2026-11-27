@@ -1,7 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { analyticsEventFields } from "./analyticsValidators";
-import { eventDiscoveryTaxonomy, performerGenreMatch } from "./eventDiscoveryValues";
+import { performerBackfillPhase, performerEvidence, performerSupport } from "./performerRegistryValues";
+import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 
 const eventStatus = v.union(
   v.literal("pending"),
@@ -405,6 +406,32 @@ export default defineSchema({
     matches: v.array(performerGenreMatch),
     auditJson: v.string(),
   }).index("by_eventId", ["eventId"]),
+  performerRegistryProfiles: defineTable({
+    identityKey: v.string(), name: v.string(), nameKey: v.string(),
+    support: v.array(performerSupport), primaryGenre: v.optional(musicGenre),
+    independentAppearances: v.number(),
+  }).index("by_identity", ["identityKey"]).index("by_name", ["nameKey", "independentAppearances"]),
+  performerRegistryAppearances: defineTable({
+    eventId: v.id("events"), eventUpdatedAt: v.number(), name: v.string(), nameKey: v.string(),
+    handle: v.optional(v.string()), profileId: v.optional(v.id("performerRegistryProfiles")),
+    venue: v.string(), venueId: v.optional(v.id("venues")), date: v.string(),
+    // A published billing records an announcement, including after its date has passed.
+    status: v.literal("announced"), listingUrl: v.optional(v.string()),
+    independent: v.boolean(), evidence: v.optional(performerEvidence),
+  }).index("by_event", ["eventId"]).index("by_profile_date", ["profileId", "date"])
+    .index("by_profile_evidence", ["profileId", "independent", "date"])
+    .index("by_profile_venue_evidence", ["profileId", "venueId", "independent", "date"])
+    .index("by_name_date", ["nameKey", "date"]).index("by_handle_date", ["handle", "date"]),
+  performerRegistryBackfill: defineTable({
+    key: v.literal("v1"), phase: performerBackfillPhase, cursor: v.union(v.string(), v.null()),
+    fromDate: v.string(), throughDate: v.string(), startedAt: v.number(), updatedAt: v.number(),
+    generation: v.number(), step: v.number(), examined: v.number(),
+  }).index("by_key", ["key"]),
+  eventDiscoveryIngestionQueue: defineTable({
+    eventId: v.id("events"), eventUpdatedAt: v.number(), date: v.string(),
+    priority: v.number(), readyAt: v.number(), lastAttemptAt: v.optional(v.number()),
+    reason: v.union(v.literal("category"), v.literal("performer_genre"), v.literal("listing_genre")),
+  }).index("by_eventId", ["eventId"]).index("by_priority_readyAt", ["priority", "readyAt"]),
   eventDiscoveryEnrichmentState: defineTable({
     key: v.literal("upcoming"),
     fromDate: v.string(),

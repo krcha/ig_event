@@ -1066,7 +1066,10 @@ try {
   const repairedEvent = largeReceipt.tables.get("events").get(largeReceipt.eventId);
   assert.equal(largeResult.publicationState, "publishable", "The exact repair must be visible even when sibling refresh is deferred.");
   assert.equal(await isCanonicallyGroundedApprovedEvent(largeReceipt.ctx, repairedEvent), true);
-  assert.deepEqual(deferred, [{ eventIds: [largeReceipt.eventId, ...siblingIds], offset: 0 }]);
+  assert.deepEqual(deferred, [
+    { eventIds: [largeReceipt.eventId, ...siblingIds], offset: 0 },
+    { eventId: largeReceipt.eventId },
+  ], "The newly published event schedules discovery while its siblings await publication refresh.");
   assert.ok(siblingIds.every((id) => largeReceipt.tables.get("events").get(id).publicationReason === "derived_state_refresh_deferred"));
 
   const promoter = makeBlankVenueRepairContext();

@@ -234,7 +234,7 @@ function makeLegacyVenueRefreshContext() {
       db,
       scheduler: {
         async runAfter(_delay, _reference, args) {
-          scheduled.push(structuredClone(args));
+          if (!args.eventId) scheduled.push(structuredClone(args));
         },
       },
     },
@@ -368,7 +368,7 @@ function makeLegacyVenueRefreshContext() {
     db: state.db,
     scheduler: {
       async runAfter(_delay, _reference, args) {
-        scheduled.push(structuredClone(args));
+        if (!args.eventId) scheduled.push(structuredClone(args));
       },
     },
   };

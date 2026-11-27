@@ -13,6 +13,7 @@ import {
   type PerformerGenreResearchInput,
   type PerformerGenreResearchResult,
 } from "@/lib/ai/research-performer-genres";
+import { isExternalMusicRoleExcluded } from "@/lib/taxonomy/explicit-event-discovery";
 import { getStoredOrLegacyEventTaxonomy, type EventDiscoveryTaxonomy, type MusicGenre } from "@/lib/taxonomy/event-discovery";
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence } from "@/lib/taxonomy/explicit-event-discovery";
@@ -39,6 +40,7 @@ export type EventGenreCandidate = EventDiscoveryInput & {
   description?: string;
   currentTaxonomy?: EventDiscoveryTaxonomy;
   preferPerformerResearch?: boolean;
+  performerSearchHints?: { performer: string; profileUrl: string }[];
 };
 
 export type EventGenreResolution = {
@@ -218,6 +220,8 @@ export async function resolveEventGenresBatch(
       return result;
     }
     if (format) {
+      const role = fallback.categories.find(c => c === "live" || c === "party");
+      if (role && isExternalMusicRoleExcluded(event, role)) return result;
       const acts = getPerformerGenreResearchActs(event, format, true);
       if (acts.length) lookups.push({ event, result, format, acts, excludedGenres });
     } else if (!event.currentTaxonomy && !local?.complete && fallback.primaryCategory === "other" &&
@@ -248,7 +252,8 @@ export async function resolveEventGenresBatch(
         const key = inputs.length;
         const listingTitle = index === 0 && (!act.titleOnly || lookup.discoveryOnly)
           ? getEventListingResearchAct(lookup.event)?.billedName : undefined;
-        inputs.push({ ...act, key, eventTitle: lookup.event.title, venue: lookup.event.venue,
+        const profileLead = lookup.event.performerSearchHints?.find(hint => !act.titleOnly && hint.performer === act.billedName)?.profileUrl;
+        inputs.push({ ...act, ...(profileLead ? { unverifiedProfileLead: profileLead } : {}), key, eventTitle: lookup.event.title, venue: lookup.event.venue,
           date: lookup.event.date, time: lookup.event.time, city: "Belgrade", trustedFormat: lookup.format, listingTitle,
           ...(lookup.discoveryOnly ? { discoveryOnly: true } : {}) });
         return key;
@@ -265,6 +270,10 @@ export async function resolveEventGenresBatch(
             result.deferred = true;
             continue;
           }
+          result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), performerLookup: {
+            scope: lookup.acts.some(a => !a.titleOnly) ? "billed-artists" : "event-listing",
+            outcomes: acts.map((act, index) => ({ name: lookup.acts[index].billedName, status: act!.status })),
+          } });
           const supportedActs = acts.filter((act, index): act is PerformerGenreResearchResult =>
             !lookup.acts[index].titleOnly && act?.status === "resolved" && act.billedName === lookup.acts[index].billedName &&
             Boolean(act.identityEvidence && canPublishPerformerGenreSource(act.identityEvidence.url)));
@@ -282,7 +291,7 @@ export async function resolveEventGenresBatch(
                 !lookup.acts[index].titleOnly && act.programmeRole && canPublishPerformerGenreSource(act.programmeRole.evidence.url)
                 ? [{ performer: act.billedName, ...act.programmeRole, identity: act.identityEvidence, corroboration: act.identityCorroboration }] : []);
               const category = roles[0]?.category;
-              if (!category || !roles.every(role => role.category === category)) {
+              if (!category || isExternalMusicRoleExcluded(lookup.event, category) || !roles.every(role => role.category === category)) {
                 if (supportedActs.length) result.auditJson = JSON.stringify({
                   ...JSON.parse(result.auditJson), partialProgramme: { responseId: found.responseId, acts: supportedActs },
                 });

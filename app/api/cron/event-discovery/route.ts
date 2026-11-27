@@ -8,8 +8,7 @@ import { isAuthorizedCronRequestHeader } from "@/lib/pipeline/cron-ingestion-con
 export const dynamic = "force-dynamic";
 export const maxDuration = 240;
 
-const listDailyInputs = "eventDiscovery:listDailyInputs" as unknown as FunctionReference<"query">;
-const recordDailyBatch = "eventDiscovery:recordDailyBatch" as unknown as FunctionReference<"mutation">;
+const scheduleDailyPage = "eventDiscovery:scheduleDailyPage" as unknown as FunctionReference<"mutation">;
 const claimPriorityCategories = "eventDiscovery:claimPriorityCategories" as unknown as FunctionReference<"mutation">;
 const claimUpcomingBatch = "eventDiscovery:claimUpcomingBatch" as unknown as FunctionReference<"mutation">;
 const completeUpcomingBatch = "eventDiscovery:completeUpcomingBatch" as unknown as FunctionReference<"mutation">;
@@ -85,22 +84,9 @@ export async function POST(request: Request) {
       }
       return NextResponse.json({ state: "scanned", tested: 0, priority });
     }
-    const page: { events: EventGenreCandidate[]; cursor: string | null } = await convex.query(listDailyInputs, { serviceSecret, runId, cursor });
-    if (!page.events.length) {
-      return NextResponse.json({ state: page.cursor ? "processed" : "idle", cursor: page.cursor, tested: 0 });
-    }
-
-    const resolved = await resolveEventGenresBatch(page.events, { deadlineAt });
-    const applied = await convex.mutation(recordDailyBatch, {
-      serviceSecret, runId, model: resolved.model,
-      results: storageRows(resolved.results),
-    });
-    return NextResponse.json({ state: "processed", cursor: page.cursor, tested: resolved.results.length,
-      localClassified: resolved.localClassified,
-      estimated: resolved.results.filter(({ method }) => method === "estimate").length,
-      webSourced: resolved.results.filter(({ method }) => method === "web").length,
-      deferred: resolved.results.filter(({ deferred }) => deferred).length, searchCalls: resolved.searchCalls,
-      applied, usage: resolved.usage, estimateUsage: resolved.estimateUsage });
+    const page: { scheduled: number; cursor: string | null } = await convex.mutation(scheduleDailyPage, { serviceSecret, runId, cursor });
+    return NextResponse.json({ state: page.scheduled || page.cursor ? "processed" : "idle",
+      cursor: page.cursor, tested: 0, scheduled: page.scheduled, searchCalls: 0 });
   } catch {
     return NextResponse.json({ state: "deferred" }, { status: 503 });
   } finally {

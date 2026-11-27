@@ -1,6 +1,8 @@
+import { syncPerformerRegistryForEvent, lookupPerformerRegistryProgramme, lookupPerformerRegistrySearchHints } from "./performerRegistry";
+import { schedulePublishedDiscovery } from "./internal/schedulePublishedDiscovery";
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireAdminOrServiceSecret } from "./authz";
 import { eventDiscoveryTaxonomy, musicGenre, performerGenreMatch } from "./eventDiscoveryValues";
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
@@ -9,7 +11,7 @@ import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-fa
 import { normalizeEventTime } from "../lib/events/event-time";
 import { addDaysToDateKey, formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
-import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
+import { classifyExplicitEventDiscovery, discoveryQuoteMatchesOccurrence, DISCOVERY_TEXT_SOURCES, getExcludedDiscoveryGenres, isExternalMusicRoleExcluded, hasConflictingProgrammeEvidence, hasExplicitGenreEvidence, type ExplicitDiscoveryEvidence } from "../lib/taxonomy/explicit-event-discovery";
 import { DISCOVERY_CATEGORIES, DISCOVERY_FORMATS, EVENT_DISCOVERY_VERSION, getStoredOrLegacyEventTaxonomy, MUSIC_GENRES, type EventDiscoveryTaxonomy, type MusicGenre } from "../lib/taxonomy/event-discovery";
 import {
   EMPTY_RESEARCH_RETRY_MS,
@@ -22,7 +24,7 @@ import {
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
-import { categoryWindow, discoveryBudgets, UPCOMING_DAILY_BUDGET, type CategoryScanPhase, PRIORITY_CATEGORY_VERSION } from "../lib/taxonomy/priority-event-discovery";
+import { categoryWindow, discoveryBudgets, type CategoryScanPhase, PRIORITY_CATEGORY_VERSION } from "../lib/taxonomy/priority-event-discovery";
 import { revalidateEventDiscoveryClassification } from "../lib/ai/classify-event-discovery";
 import { normalizeTaxonomyText } from "../lib/taxonomy/venue-types";
 import { isVenuePublic } from "../lib/venues/venue-lifecycle";
@@ -48,7 +50,8 @@ const discoveryInputFields = {
 };
 const dailyInput = v.object(discoveryInputFields);
 const upcomingInput = v.object({ ...discoveryInputFields, currentTaxonomy: v.optional(eventDiscoveryTaxonomy),
-  preferPerformerResearch: v.optional(v.boolean()) });
+  preferPerformerResearch: v.optional(v.boolean()),
+  performerSearchHints: v.optional(v.array(v.object({ performer: v.string(), profileUrl: v.string() }))) });
 const unknownGenreInput = v.object({ ...discoveryInputFields, currentTaxonomy: eventDiscoveryTaxonomy });
 const webGenreResult = v.object({ model: v.string(), matches: v.array(performerGenreMatch), auditJson: v.string() });
 const genreDiscoveryResult = v.object({
@@ -194,8 +197,20 @@ export async function loadPublicEventDiscoveryLabels(
   const label = await loadLabel(ctx, event._id);
   if (!label || !labelIsCurrent(label, event.updatedAt)) return;
   const taxonomy = label.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
-  if (includePerformerGenreResearch && getPerformerGenreResearchFormat(taxonomy)) {
-    const enriched = projectGenreFallback(taxonomy, label, await loadGenreResearch(ctx, event._id));
+  const registryCategory = label.model === REGISTRY_MODEL || readEventEvidenceRecord(label.auditJson).performerRegistryCategory === true;
+  const includeGenre = includePerformerGenreResearch && !!getPerformerGenreResearchFormat(taxonomy);
+  let research = includeGenre ? await loadGenreResearch(ctx, event._id) : null;
+  if (registryCategory || research?.model === REGISTRY_MODEL) {
+    const full = await ctx.db.get(event._id);
+    if (!full) return;
+    const candidate = await discoveryCandidate(ctx, full);
+    const programme = hasConflictingProgrammeEvidence(candidate) ? { category: undefined, matches: [] } :
+      await usableRegistryProgramme(ctx, full, candidate, taxonomy);
+    if (registryCategory && taxonomy.primaryCategory !== programme.category) return;
+    if (research?.model === REGISTRY_MODEL) research = { ...research, matches: programme.matches };
+  }
+  if (includeGenre) {
+    const enriched = projectGenreFallback(taxonomy, label, research);
     if (enriched) return enriched;
   }
   return label.taxonomy ? { eventTaxonomy: label.taxonomy } : undefined;
@@ -298,7 +313,7 @@ export const recordGenreResearch = mutation({
       }
       const row = await loadGenreResearch(ctx, eventId);
       const now = Date.now();
-      if (row && researchIsCurrent(row, expectedUpdatedAt) &&
+      if (row && row.model !== REGISTRY_MODEL && researchIsCurrent(row, expectedUpdatedAt) &&
         (row.matches.length || (!matches.length && now - row.researchedAt < EMPTY_RESEARCH_RETRY_MS))) {
         counts.unchanged++;
         continue;
@@ -307,6 +322,7 @@ export const recordGenreResearch = mutation({
         researchedAt: now, model, matches, auditJson };
       if (row) await ctx.db.replace(row._id, data);
       else await ctx.db.insert("eventPerformerGenreResearch", data);
+      await schedulePublishedDiscovery(ctx, eventId);
       counts.written++;
       if (matches.length) counts.resolved++;
     }
@@ -465,7 +481,10 @@ function validateGenreDiscoveryBatch(model: string, results: GenreDiscoveryResul
 // current scoped programme at the actual write boundary as well as in the worker.
 async function conflictsWithNewClassification(ctx: MutationCtx, event: Doc<"events">, result: GenreDiscoveryResult) {
   if (!result.taxonomy && !result.estimatedGenres?.length && !result.webResearch?.matches.length) return false;
-  return hasConflictingProgrammeEvidence(await discoveryCandidate(ctx, event));
+  const candidate = await discoveryCandidate(ctx, event);
+  const taxonomy = result.taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
+  const role = taxonomy.categories.find(c => c === "party" || c === "live");
+  return hasConflictingProgrammeEvidence(candidate) || !!(role && isExternalMusicRoleExcluded(candidate, role));
 }
 
 async function captionClaimsAreCurrent(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, claims: ReturnType<typeof readCaptionClaims>) {
@@ -504,14 +523,20 @@ function enrichmentAudit(result: GenreDiscoveryResult, now: number): Record<stri
     now + (result.deferred ? ENRICHMENT_RETRY_MS : EMPTY_RESEARCH_RETRY_MS) };
 }
 
+function hasPerformerEvidence(auditJson: string) {
+  const audit = readEventEvidenceRecord(auditJson);
+  return !!(audit.billedProgramme || audit.partialProgramme);
+}
+
 async function storeWebGenreResearch(ctx: MutationCtx, event: Doc<"events">, webResearch: WebGenreResult) {
   const row = await loadGenreResearch(ctx, event._id);
-  if (researchIsCurrent(row, event.updatedAt) && row?.matches.some(({ url, identityUrl }) =>
+  if (row?.model !== REGISTRY_MODEL && researchIsCurrent(row, event.updatedAt) && row?.matches.some(({ url, identityUrl }) =>
     canPublishPerformerGenreSource(url) && canPublishPerformerGenreSource(identityUrl))) return;
   const data = { ...webResearch, eventId: event._id, eventUpdatedAt: event.updatedAt,
     version: PERFORMER_GENRE_RESEARCH_VERSION, researchedAt: Date.now() };
   if (row) await ctx.db.replace(row._id, data);
   else await ctx.db.insert("eventPerformerGenreResearch", data);
+  await schedulePublishedDiscovery(ctx, event._id);
 }
 
 export const listDailyInputs = query({
@@ -524,10 +549,36 @@ export const listDailyInputs = query({
     const page = await ctx.db.query("events").withIndex("by_creation_time", (q) =>
       q.gte("_creationTime", window.from).lte("_creationTime", window.to)).paginate({ cursor, numItems: 12 });
     const events = await Promise.all(page.page.map(async (event) => {
-      if (!await cameFromDailyRun(ctx, event, runId, window) || await loadLabel(ctx, event._id)) return null;
+      if (!await cameFromDailyRun(ctx, event, runId, window) || await loadLabel(ctx, event._id) ||
+        await ingestionWork(ctx, event._id)) return null;
+      // The per-publication transaction will persist any reusable data even if
+      // this older daily callback races the freshly scheduled local mutation.
+      const programme = await lookupPerformerRegistryProgramme(ctx, event);
+      if (programme.matches.length || programme.category) return null;
       return discoveryCandidate(ctx, event);
     }));
     return { events: events.filter((event) => event !== null), cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
+// A daily completion can race its publication tasks. This callback always
+// schedules local work; only the shared, budgeted sweep can start paid work.
+export const scheduleDailyPage = mutation({
+  args: { serviceSecret: v.string(), runId: v.id("ingestionRuns"), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ scheduled: v.number(), cursor: v.union(v.string(), v.null()) }),
+  handler: async (ctx, { serviceSecret, runId, cursor }) => {
+    await requireAdminOrServiceSecret(ctx, serviceSecret);
+    const window = await completedDailyWindow(ctx, runId);
+    if (!window) return { scheduled: 0, cursor: null };
+    const page = await ctx.db.query("events").withIndex("by_creation_time", q =>
+      q.gte("_creationTime", window.from).lte("_creationTime", window.to)).paginate({ cursor, numItems: 12 });
+    let scheduled = 0;
+    for (const event of page.page) {
+      if (!await cameFromDailyRun(ctx, event, runId, window)) continue;
+      await schedulePublishedDiscovery(ctx, event._id);
+      scheduled++;
+    }
+    return { scheduled, cursor: page.isDone ? null : page.continueCursor };
   },
 });
 
@@ -560,6 +611,7 @@ export const recordDailyBatch = mutation({
       await ctx.db.insert("eventDiscoveryLabels", { eventId, eventUpdatedAt: event.updatedAt,
         version: EVENT_DISCOVERY_VERSION, model, taxonomy, auditJson: serializeGenreAudit(enrichmentAudit(result, Date.now()), estimatedGenres) });
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
+      else if (hasPerformerEvidence(result.auditJson)) await schedulePublishedDiscovery(ctx, event._id);
       counts.written++;
     }
     return counts;
@@ -568,6 +620,16 @@ export const recordDailyBatch = mutation({
 
 function loadEnrichmentState(ctx: Pick<QueryCtx, "db">) {
   return ctx.db.query("eventDiscoveryEnrichmentState").withIndex("by_key", (q) => q.eq("key", "upcoming")).unique();
+}
+
+function dueForFirstBilledReview(event: Doc<"events">, taxonomy: EventDiscoveryTaxonomy | null | undefined,
+  audit: Record<string, unknown>, now: number) {
+  if (audit.performerReviewVersion === BILLED_PROGRAMME_REVIEW_VERSION || audit.ambiguousPerformerIdentity ||
+    audit.partialProgramme || audit.performerReviewDeferred || typeof audit.upcomingGenreRetryAt !== "number" ||
+    audit.upcomingGenreRetryAt <= now + ENRICHMENT_RETRY_MS) return false;
+  const music = getPerformerGenreResearchFormat(taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
+  return music ? getPerformerGenreResearchActs(event, music).some(act => !act.titleOnly) :
+    (!taxonomy || taxonomy.primaryCategory === "other") && getBilledProgrammeActs(event).length > 0;
 }
 
 async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, now: number) {
@@ -592,8 +654,7 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
       // Existing completed v0 attempts searched only a listing for an unknown
       // programme. Give the regular, budgeted sweep one chance to verify a billed
       // act. Transient retries and current-version negative results keep their delay.
-      const upgrade = previousVersion && retryAt > now + ENRICHMENT_RETRY_MS &&
-        (preferPerformerResearch || (!format && getBilledProgrammeActs(event).length > 0));
+      const upgrade = dueForFirstBilledReview(event, taxonomy, audit, now);
       if (!upgrade) return null;
       if (!format) {
         const candidate = await discoveryCandidate(ctx, event);
@@ -601,9 +662,10 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
         if (hasConflictingProgrammeEvidence(candidate) || (local?.complete && !getPerformerGenreResearchFormat(local.taxonomy))) return null;
       }
     }
-    if (format) {
+    if (music) {
       const research = await loadGenreResearch(ctx, event._id);
-      if (researchIsCurrent(research, event.updatedAt) && research?.matches.length) return null;
+      if (researchIsCurrent(research, event.updatedAt) && research?.matches.length &&
+        (format || research.model === REGISTRY_MODEL)) return null;
     }
   }
   return { row, current, currentTaxonomy: format && taxonomy ? taxonomy : undefined, preferPerformerResearch };
@@ -649,12 +711,174 @@ async function savePriorityCategory(ctx: MutationCtx, event: Doc<"events">, exis
   // Earlier attempts may have been unable to identify either a programme or
   // genre. A newly confirmed music programme gives the regular sweep new input.
   delete audit.upcomingGenreRetryAt;
+  delete audit.performerRegistryCategory;
   const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model,
     taxonomy: { ...taxonomy, genres }, auditJson: serializeGenreAudit({ ...audit, evidence: proof,
       categoryPriority: { version: PRIORITY_CATEGORY_VERSION, confirmedAt: Date.now(), model } }, estimate.length ? estimate : undefined) };
   if (existing) await ctx.db.replace(existing._id, value);
   else await ctx.db.insert("eventDiscoveryLabels", value);
 }
+
+const REGISTRY_MODEL = "performer-registry-v1";
+const LOCAL_MODEL = "ingestion-programme-evidence-v1";
+
+function ingestionWork(ctx: Pick<QueryCtx, "db">, eventId: Id<"events">) {
+  return ctx.db.query("eventDiscoveryIngestionQueue").withIndex("by_eventId", q => q.eq("eventId", eventId)).unique();
+}
+
+async function setIngestionWork(ctx: MutationCtx, event: Doc<"events">, needed: boolean, now: number, retryAt = now,
+  reason: Doc<"eventDiscoveryIngestionQueue">["reason"] = "category") {
+  const old = await ingestionWork(ctx, event._id);
+  const window = categoryWindow(now);
+  const tier = window.tier(event);
+  if (!needed || event.date < getNightlifeDefaultDateKey(new Date(now)) ||
+    (event.timeStatus === "confirmed" && event.date <= getBelgradeDayKey(now) && !tier)) {
+    if (old) await ctx.db.delete(old._id);
+    return;
+  }
+  const priority = tier === "confirmed" ? 0 : tier && tier !== "local-only" ? 1 : 2;
+  const activeAttempt = old?.eventUpdatedAt === event.updatedAt && old.lastAttemptAt ? old.lastAttemptAt + ENRICHMENT_RETRY_MS : 0;
+  const readyAt = retryAt > now || old?.eventUpdatedAt !== event.updatedAt ? Math.max(activeAttempt, retryAt) :
+    Math.max(activeAttempt, Math.min(old.readyAt, now));
+  const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, date: event.date, priority, readyAt, reason,
+    ...(old?.eventUpdatedAt === event.updatedAt && old.lastAttemptAt ? { lastAttemptAt: old.lastAttemptAt } : {}) };
+  if (!old) await ctx.db.insert("eventDiscoveryIngestionQueue", value);
+  else if (old.eventUpdatedAt !== event.updatedAt || old.priority !== priority || old.readyAt !== readyAt || old.reason !== reason) await ctx.db.replace(old._id, value);
+}
+
+async function usableRegistryProgramme(ctx: Pick<QueryCtx, "db">, event: Doc<"events">, candidate: Awaited<ReturnType<typeof discoveryCandidate>>,
+  taxonomy: EventDiscoveryTaxonomy | null) {
+  const programme = await lookupPerformerRegistryProgramme(ctx, event);
+  const programmeRole = (taxonomy ?? getStoredOrLegacyEventTaxonomy(event)).categories.find(c => c === "party" || c === "live");
+  if ((programme.category && isExternalMusicRoleExcluded(candidate, programme.category)) ||
+    (programmeRole && isExternalMusicRoleExcluded(candidate, programmeRole))) return { matches: [], category: undefined };
+  const excluded = getExcludedDiscoveryGenres(candidate, DISCOVERY_TEXT_SOURCES);
+  const permitted = programme.matches.filter(match => !excluded.has(match.genre));
+  const complete = programme.matches.every(match => permitted.some(item => item.performer === match.performer));
+  return { category: programme.category, matches: complete ? permitted : [] };
+}
+
+// The same transaction handles ingestion, catch-up and the last local check before a paid claim.
+async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events">, now: number) {
+  let row = await loadLabel(ctx, event._id);
+  const current = row && labelIsCurrent(row, event.updatedAt) ? row : null;
+  let known = hasKnownCategory(current, event);
+  let taxonomy = known ? current!.taxonomy : null;
+  const flags = { categoryWritten: false, directGenreWritten: false, registryGenreWritten: false };
+  const audit = readEventEvidenceRecord(current?.auditJson);
+  const registryCategory = audit.performerRegistryCategory === true;
+  if (known && taxonomy && !getPerformerGenreResearchFormat(taxonomy) && !registryCategory) {
+    await setIngestionWork(ctx, event, false, now);
+    return flags;
+  }
+  const candidate = await discoveryCandidate(ctx, event);
+  if (hasConflictingProgrammeEvidence(candidate)) {
+    await setIngestionWork(ctx, event, false, now);
+    return flags;
+  }
+  const explicit = classifyExplicitEventDiscovery(candidate);
+  const provesCategory = explicit && (explicit.complete || (explicit.titleCategory && explicit.taxonomy.categories.length === 1)) &&
+    explicit.evidence.some(claim => claim.kind === "category" && claim.label === explicit.taxonomy.primaryCategory);
+  if ((!known || registryCategory) && explicit && provesCategory) {
+    await savePriorityCategory(ctx, event, row, candidate, explicit.taxonomy, explicit.evidence, LOCAL_MODEL);
+    flags.categoryWritten = !known;
+    row = await loadLabel(ctx, event._id);
+    taxonomy = row!.taxonomy;
+    flags.directGenreWritten = !!taxonomy?.genres.length;
+    known = true;
+  } else if (taxonomy && !taxonomy.genres.length && !registryCategory) {
+    const direct = classifyExplicitEventDiscovery({ ...candidate, currentTaxonomy: taxonomy });
+    const evidence = direct?.evidence.filter(claim => claim.kind === "genre" && hasExplicitGenreEvidence(candidate, claim.source, claim.quote, claim.label as MusicGenre)) ?? [];
+    if (evidence.length) {
+      const genres = [...new Set(evidence.map(claim => claim.label as MusicGenre))].slice(0, 5);
+      taxonomy = { ...taxonomy, genres };
+      await ctx.db.patch(row!._id, { taxonomy, auditJson: serializeGenreAudit({ ...audit,
+        evidence: [...readPriorityEvidence(row!.auditJson).filter(c => c.kind !== "genre"), ...evidence] }, undefined) });
+      flags.directGenreWritten = true;
+    }
+  }
+  if (taxonomy && !getPerformerGenreResearchFormat(taxonomy) && (!registryCategory || provesCategory)) {
+    await setIngestionWork(ctx, event, false, now);
+    return flags;
+  }
+  const research = await loadGenreResearch(ctx, event._id);
+  const genuine = research?.model !== REGISTRY_MODEL && researchIsCurrent(research, event.updatedAt) && !!research?.matches.length;
+  const programme = await usableRegistryProgramme(ctx, event, candidate, taxonomy);
+  if (!known || (registryCategory && !provesCategory)) {
+    const category = programme.category;
+    if (category) {
+      taxonomy = { primaryCategory: category, categories: [category], formats: [], genres: [] };
+      if (!known || current?.taxonomy?.primaryCategory !== category) {
+        const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model: REGISTRY_MODEL,
+          taxonomy, auditJson: JSON.stringify({ performerRegistryCategory: true, source: "performer-registry" }) };
+        if (row) await ctx.db.replace(row._id, value);
+        else await ctx.db.insert("eventDiscoveryLabels", value);
+        flags.categoryWritten = true;
+      }
+      known = true;
+    } else if (registryCategory && row) {
+      await ctx.db.patch(row._id, { taxonomy: null, auditJson: "{}" });
+      known = false;
+      taxonomy = null;
+    }
+  }
+  const canUseGenres = getPerformerGenreResearchFormat(taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
+  const cacheHit = canUseGenres && programme.matches.length > 0;
+  if (!genuine && cacheHit && (!researchIsCurrent(research, event.updatedAt) || research?.model !== REGISTRY_MODEL ||
+    JSON.stringify(research.matches) !== JSON.stringify(programme.matches))) {
+    if (!known && !labelIsCurrent(row, event.updatedAt)) {
+      const empty = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model: LOCAL_MODEL, taxonomy: null, auditJson: "{}" };
+      if (row) await ctx.db.replace(row._id, empty);
+      else await ctx.db.insert("eventDiscoveryLabels", empty);
+    }
+    const value = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: PERFORMER_GENRE_RESEARCH_VERSION,
+      researchedAt: now, model: REGISTRY_MODEL, matches: programme.matches, auditJson: JSON.stringify({ source: "performer-registry" }) };
+    if (research) await ctx.db.replace(research._id, value);
+    else await ctx.db.insert("eventPerformerGenreResearch", value);
+    flags.registryGenreWritten = true;
+  } else if (research?.model === REGISTRY_MODEL && !cacheHit) {
+    await ctx.db.delete(research._id);
+  }
+  await setIngestionWork(ctx, event, !known || (!!canUseGenres && !genuine && !cacheHit), now,
+    flags.categoryWritten || dueForFirstBilledReview(event, taxonomy, audit, now) || typeof audit.upcomingGenreRetryAt !== "number" ? now : audit.upcomingGenreRetryAt,
+    !known ? "category" : event.artists.length ? "performer_genre" : "listing_genre");
+  return flags;
+}
+
+export const processPublishedEvent = internalMutation({
+  args: { eventId: v.id("events") }, returns: v.null(),
+  handler: async (ctx, { eventId }) => {
+    await syncPerformerRegistryForEvent(ctx, eventId);
+    const event = await ctx.db.get(eventId);
+    if (event && await isUpcomingDiscoveryPublic(ctx, event, event.date)) {
+      await enrichFromAvailableEvidence(ctx, event, Date.now());
+    } else {
+      const work = await ingestionWork(ctx, eventId);
+      if (work) await ctx.db.delete(work._id);
+    }
+    return null;
+  },
+});
+
+export const backfillPublishedDiscovery = internalMutation({
+  args: { fromDate: v.string(), throughDate: v.string(), cursor: v.union(v.null(), v.string()) },
+  returns: v.object({ cursor: v.union(v.string(), v.null()), scanned: v.number(), categoryWritten: v.number(),
+    directGenreWritten: v.number(), registryGenreWritten: v.number() }),
+  handler: async (ctx, { fromDate, throughDate, cursor }) => {
+    requireUpcomingDate(fromDate);
+    requireUpcomingDate(throughDate);
+    if (fromDate > throughDate) throw new Error("Invalid discovery backfill range.");
+    const page = await ctx.db.query("events").withIndex("by_publicationState_date", q =>
+      q.eq("publicationState", "publishable").gte("date", fromDate).lte("date", throughDate)).paginate({ cursor, numItems: 4 });
+    const counts = { scanned: page.page.length, categoryWritten: 0, directGenreWritten: 0, registryGenreWritten: 0 };
+    for (const event of page.page) {
+      if (!await isUpcomingDiscoveryPublic(ctx, event, fromDate)) continue;
+      const flags = await enrichFromAvailableEvidence(ctx, event, Date.now());
+      for (const key of ["categoryWritten", "directGenreWritten", "registryGenreWritten"] as const) if (flags[key]) counts[key]++;
+    }
+    return { ...counts, cursor: page.isDone ? null : page.continueCursor };
+  },
+});
 
 // A separate opt-in RPC keeps older web workers on their existing contract during rollout.
 export const claimPriorityCategories = mutation({
@@ -701,6 +925,11 @@ export const claimPriorityCategories = mutation({
         counts.written++;
         continue;
       }
+      const programme = await lookupPerformerRegistryProgramme(ctx, event);
+      if (programme.category) {
+        const applied = await enrichFromAvailableEvidence(ctx, event, now);
+        if (applied.categoryWritten) { counts.written++; continue; }
+      }
       counts.unresolved++;
       const old = attempts.get(event._id);
       const same = old && old.version === PRIORITY_CATEGORY_VERSION && old.updatedAt === event.updatedAt ? old : undefined;
@@ -710,7 +939,7 @@ export const claimPriorityCategories = mutation({
       events.push(candidate);
     }
     counts.attempted = events.length;
-    const remaining = UPCOMING_DAILY_BUDGET - budgets.total - events.length;
+    const remaining = budgets.remaining - events.length;
     const canSpendLater = allowModel && remaining > 0 && budgets.priority.attempted + events.length < 72;
     let nextPhase: CategoryScanPhase | undefined;
     if (!page.isDone) {
@@ -747,21 +976,56 @@ export const claimUpcomingBatch = mutation({
     const state = await loadEnrichmentState(ctx);
     const now = Date.now();
     if (state?.lease && state.lease.until > now) return { state: "busy" as const, events: [] };
-    const { dayKey, total: attempted, general: budget, urgent, priority } = discoveryBudgets(now, state);
-    const reserved = urgent > 0 && UPCOMING_DAILY_BUDGET - attempted <= 12 && (state?.categoryScan?.reserveUntil ?? 0) > now;
+    const { dayKey, total: attempted, general: budget, remaining, urgent, priority } = discoveryBudgets(now, state);
+    const reserved = urgent > 0 && remaining <= 12 && (state?.categoryScan?.reserveUntil ?? 0) > now;
     if (budget <= 0 || reserved) return { state: "idle" as const, events: [] };
     const cursor = state?.cursor ?? null;
     const fromDate = cursor && state ? state.fromDate : getNightlifeDefaultDateKey(new Date(now));
-    const page = await ctx.db.query("events").withIndex("by_publicationState_date", (q) =>
+    const limit = Math.min(4, budget);
+    const queue: Doc<"eventDiscoveryIngestionQueue">[] = [];
+    for (const tier of [0, 1, 2]) {
+      queue.push(...await ctx.db.query("eventDiscoveryIngestionQueue").withIndex("by_priority_readyAt", q =>
+        q.eq("priority", tier).lte("readyAt", now)).take(limit - queue.length));
+      if (queue.length === limit) break;
+    }
+    const ready: Doc<"events">[] = [];
+    for (const item of queue) {
+      const event = await ctx.db.get(item.eventId);
+      if (!event || !await isUpcomingDiscoveryPublic(ctx, event, getNightlifeDefaultDateKey(new Date(now)))) {
+        await ctx.db.delete(item._id);
+        continue;
+      }
+      await enrichFromAvailableEvidence(ctx, event, now);
+      const pending = await ingestionWork(ctx, event._id);
+      if (!pending || pending.readyAt > now) continue;
+      await ctx.db.patch(pending._id, { lastAttemptAt: now, readyAt: now + ENRICHMENT_RETRY_MS });
+      ready.push(event);
+    }
+    const page = ready.length ? null : await ctx.db.query("events").withIndex("by_publicationState_date", (q) =>
       q.eq("publicationState", "publishable").gte("date", fromDate)).paginate({ cursor, numItems: Math.min(12, budget) });
-    const events = (await Promise.all(page.page.map(async (event) => {
-      const discovery = await upcomingEnrichmentState(ctx, event, now);
+    const events = (await Promise.all((page ? page.page : ready).map(async (event) => {
+      if (page) {
+        const queued = await ingestionWork(ctx, event._id);
+        if (queued?.eventUpdatedAt === event.updatedAt && queued.lastAttemptAt &&
+          queued.lastAttemptAt + ENRICHMENT_RETRY_MS > now) return null;
+      }
+      let discovery = await upcomingEnrichmentState(ctx, event, now);
       if (!discovery) return null;
+      if (page) {
+        const programme = await lookupPerformerRegistryProgramme(ctx, event);
+        if (programme.category || programme.matches.length) {
+          await enrichFromAvailableEvidence(ctx, event, now);
+          discovery = await upcomingEnrichmentState(ctx, event, now);
+          if (!discovery) return null;
+        }
+      }
+      const performerSearchHints = await lookupPerformerRegistrySearchHints(ctx, event);
       return { ...await discoveryCandidate(ctx, event),
+        ...(performerSearchHints.length ? { performerSearchHints } : {}),
         ...(discovery.preferPerformerResearch ? { preferPerformerResearch: true } : {}),
         ...(discovery.currentTaxonomy ? { currentTaxonomy: discovery.currentTaxonomy } : {}) };
     }))).filter((event) => event !== null);
-    const nextCursor = page.isDone ? null : page.continueCursor;
+    const nextCursor = page ? (page.isDone ? null : page.continueCursor) : cursor;
     const lease = events.length ? { owner, until: now + ENRICHMENT_LEASE_MS, nextCursor,
       events: events.map(({ key, expectedUpdatedAt }) => ({ eventId: key, expectedUpdatedAt })) } : undefined;
     const updated = { fromDate, cursor: lease ? cursor : nextCursor, dayKey, attempted: attempted + events.length,
@@ -813,7 +1077,8 @@ export const completeUpcomingBatch = mutation({
     for (const result of results) {
       const { eventId, expectedUpdatedAt, taxonomy } = result;
       const event = await ctx.db.get(eventId);
-      if (!event || claimed.get(eventId) !== expectedUpdatedAt || event.updatedAt !== expectedUpdatedAt) {
+      if (!event || claimed.get(eventId) !== expectedUpdatedAt || event.updatedAt !== expectedUpdatedAt ||
+        !await isUpcomingDiscoveryPublic(ctx, event, getNightlifeDefaultDateKey(new Date(now)))) {
         counts.stale++;
         continue;
       }
@@ -822,12 +1087,18 @@ export const completeUpcomingBatch = mutation({
         counts.unchanged++;
         continue;
       }
-      if ((!hasKnownCategory(enrichment.row, event) && await conflictsWithNewClassification(ctx, event, result)) ||
+      if (await conflictsWithNewClassification(ctx, event, result) ||
         !await captionClaimsAreCurrent(ctx, event, readCaptionClaims(result.auditJson))) {
         counts.stale++;
         continue;
       }
-      const savedTaxonomy = taxonomy ?? enrichment.current?.taxonomy ?? null;
+      const confirmed = hasKnownCategory(enrichment.current, event) ? enrichment.current!.taxonomy : null;
+      if (confirmed && taxonomy && confirmed.primaryCategory !== taxonomy.primaryCategory) {
+        counts.stale++;
+        continue;
+      }
+      const savedTaxonomy = confirmed ? { ...confirmed, genres: confirmed.genres.length ? confirmed.genres : taxonomy?.genres ?? [] } :
+        taxonomy ?? enrichment.current?.taxonomy ?? null;
       const { estimatedGenres, webResearch } = verifiedGenreFallback(event, savedTaxonomy ?? getStoredOrLegacyEventTaxonomy(event), result);
       const currentAudit = enrichmentAudit(result, now);
       const previousEstimate = enrichment.current && !currentAudit.partialProgramme && !currentAudit.ambiguousPerformerIdentity
@@ -848,6 +1119,11 @@ export const completeUpcomingBatch = mutation({
       if (enrichment.row) await ctx.db.replace(enrichment.row._id, label);
       else await ctx.db.insert("eventDiscoveryLabels", label);
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
+      else if (hasPerformerEvidence(result.auditJson)) await schedulePublishedDiscovery(ctx, event._id);
+      const needsRetry = !savedTaxonomy || (!savedTaxonomy.genres.length && !webResearch && !!getPerformerGenreResearchFormat(savedTaxonomy));
+      await setIngestionWork(ctx, event, needsRetry || !!result.deferred, now,
+        now + (result.deferred ? ENRICHMENT_RETRY_MS : EMPTY_RESEARCH_RETRY_MS),
+        !savedTaxonomy ? "category" : event.artists.length ? "performer_genre" : "listing_genre");
       counts.written++;
     }
     await ctx.db.patch(state._id, { cursor: lease.nextCursor, lease: undefined });
@@ -949,6 +1225,7 @@ export const recordUnknownGenreBatch = mutation({
         else await ctx.db.insert("eventDiscoveryLabels", data);
       }
       if (webResearch) await storeWebGenreResearch(ctx, event, webResearch);
+      else if (hasPerformerEvidence(result.auditJson)) await schedulePublishedDiscovery(ctx, event._id);
       counts.written++;
     }
     return counts;

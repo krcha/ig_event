@@ -1,4 +1,5 @@
 import type { DiscoveryCategory, DiscoveryFormat, EventDiscoveryTaxonomy, MusicGenre } from "./event-discovery";
+import { billedMusicProgramme } from "./billed-music-programme";
 import { normalizeTaxonomyText } from "./venue-types";
 
 export const DISCOVERY_TEXT_SOURCES = ["sourceCaption", "occurrenceText", "title", "description"] as const;
@@ -33,13 +34,13 @@ export const genreProof: Record<MusicGenre, RegExp> = {
   "drum-and-bass": /\b(?:drum (?:and |n )?bass|dram (?:end |en |n )?bejs|dnb|jungle)\b/,
   "disco-funk": /\b(?:disco|disko|funk|fank|funky|fanki)\b/,
   pop: /\b(?:pop(?! up\b)|britpop|electropop|synthpop|hyperpop|schlager)\b/,
-  rock: /\b(?:rock|rok|rokenrol\w*|rockabilly|r n r)\b/,
+  rock: /\b(?:rock(?:a|u|om)?|rok|folk rok(?:a|u|om)|rokenrol\w*|rockabilly|r n r)\b/,
   "indie-alternative": /\b(?:indie|indi|alternativ\w*|post ?(?:punk|pank)|emo|grunge|shoegaze|doomgaze|new wave|darkwave|industrial|ebm|aggrotech|futurepop|dark electro|americana)\b/,
   "metal-punk": /\b(?:metal|(?<!post )(?:pank|punk)|metalcore|thrashcore|post hardcore|screamo)\b/,
-  "hip-hop": /\b(?:hip hop|hiphop|rap|rep|trap)\b/,
+  "hip-hop": /\b(?:hip ?hop(?:a|u|om)?|rap|rep|trap)\b/,
   "rnb-soul": /\b(?:r and b|r n b|rnb|rhythm and blues|ritam i bluz|soul)\b/,
   "jazz-blues": /\b(?:(?:jazz|dzez|dzhaz)(?:a|u|om)?|(?<!rhythm and |ritam i )(?:blues|bluz|blyuz)(?:a|u|om)?|swing)\b/,
-  folk: /\b(?:(?<!weird )(?<!freak )(?<!indie )folk|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*|starogradsk\w* (?:muzik\w*|pesm\w*))\b/,
+  folk: /\b(?:(?<!weird )(?<!freak )(?<!indie )folk(?! (?:rock|rok|metal|punk|pank)(?:a|u|om)?\b)|turbo folk|narodn\w* muzik\w*|narodn\w* orkest\w*|narodn\w* pesm\w*|starogradsk\w* (?:muzik\w*|pesm\w*))\b/,
   classical: /\b(?:classical|klasicn\w* muzik\w*|klassichesk\w* muzy\w*|klavirsk\w* resital\w*|piano recital|harpsichord concert|opera|baroque|barok)\b/,
   latin: /\b(?:latino|latin(?: music)?|salsa|bachata|reggaeton|flamenco|kubansk\w* muzik\w*)\b/,
   "afro-amapiano": /\b(?:afrobeats?|afro beats?|amapiano|afro house)\b/,
@@ -59,7 +60,7 @@ const INCIDENTAL = [
   /\b(?:ignore (?:all |previous |prior )*instructions|ignorisi (?:sva |prethodna )*uputstva|classify (?:this|the) event as|klasifikuj (?:ovaj )?dogadjaj kao)\b/,
 ];
 const NON_MUSIC_CONTEXT = /\b(?:quiz\w*|kviz\w*|trivia|screening\w*|projekc\w*|films? about|film\w* o|workshop\w*|radionic\w*|dance (?:lessons?|class(?:es)?)|cas\w* ples\w*|skol\w* ples\w*|kurs\w* ples\w*)\b/;
-const MUSIC_CUE = /\b(?:will play|plays?|spins?|pusta\w*|vrti\w*|svir\w*|izvodi\w*|repertoar\w*|music|muzik\w*|genres?|zanr\w*|music policy|dj set|live set)\b/;
+const MUSIC_CUE = /\b(?:will play|plays?|spins?|pusta\w*|vrti\w*|svir\w*|izvodi\w*|repertoar\w*|muzick\w* putovanj\w*|music|muzik\w*|genres?|zanr\w*|music policy|dj set|live set)\b/;
 const STYLE_FIELD = /^(?:music(?: policy)?|muzik\w*|genres?|zanr\w*|sound|stil(?:ovi)?|repertoar)\s*[:=–—-]/iu;
 const NEGATIVE_START = /\b(?:without|bez|not(?: playing)?|no|won t play|don t play|nije|nema|ne (?:pusta\w*|svira\w*|vrti\w*)|nece (?:pust\w*|svir\w*|vrt\w*))(?: (?:any|ikakv\w*|a|an))? /g;
 const NEGATIVE_END = /^ (?:is |will be |je |bice )?(?:excluded|canceled|cancelled|otkazan\w*|iskljucen\w*|not (?:played|included|on the program)|nije u programu)\b/;
@@ -126,6 +127,34 @@ export function summaryCancelsEvent(title: string | undefined, description: stri
 const ACTIVITY_NOUN = "live music|koncert\\w*|concert|dj set|festival|radionic\\w*|workshop|quiz|kviz|projekc\\w*|screening|predstav\\w*|exhibition|izlozb\\w*|party|zurk\\w*|panel|talk|lecture";
 const CANCELLED_ACTIVITY = new RegExp(`\\b(?:otkazan\\w* (?:${ACTIVITY_NOUN})|(?:${ACTIVITY_NOUN}) (?:is |je )?(?:cancell?ed|otkazan\\w*))\\b`);
 const EXCLUDED_ACTIVITY = new RegExp(`\\b(?:no|without|bez|nema) (${ACTIVITY_NOUN})\\b`);
+
+const MUSIC_ROLE_TERMS = {
+  party: /(?:dj|didzej) (?:sets?|seta|setova|nastup[aie]?)|party|parties|zurk[aeiu]|zabav[aeu]/,
+  live: /live (?:music|shows?|concerts?|bands?|performances?)|concerts?|koncer(?:t[aieu]?|ata)|svirk[aeiu]|(?:ziv[aeu] muzik[aeu]|muzik[aeu] uzivo)|nastup[aie]? uzivo/,
+};
+const MUSIC_DENIAL = /(?:no|without|not|nece biti|nema|bez|nije)/;
+const MUSIC_WHEN = /(?:tonight|today|at this event|on the programme?|this time|ovog (?:puta|petka)|ovde|veceras|danas|u programu)/;
+const deniedRole = (term: RegExp) => new RegExp(
+  `\\b${MUSIC_DENIAL.source} (?:any |an? |nikakv\\w* )?(?:${term.source})(?: ${MUSIC_WHEN.source})?$`,
+);
+const roleDenials = { party: deniedRole(MUSIC_ROLE_TERMS.party), live: deniedRole(MUSIC_ROLE_TERMS.live) };
+
+/** An artist profile may establish a role only if this occurrence permits it. */
+export function isExternalMusicRoleExcluded(input: ExplicitDiscoveryInput, role: "party" | "live"): boolean {
+  return DISCOVERY_TEXT_SOURCES.some(source => {
+    let dateMatches = true;
+    return programmeRows((input[source] ?? "").slice(0, SOURCE_LIMIT[source])).some(line => {
+      const heading = /^(?:(\p{L}+\.?)\s+)?(\d{1,2}[./]\d{1,2}(?:[./]\d{4})?)\.?\s*(?:[-–—|:]\s*|\s+|$)(.*)$/u.exec(line.trim());
+      if (heading && (!heading[1] || WEEKDAY.test(normalizeTaxonomyText(heading[1])))) {
+        dateMatches = discoveryQuoteMatchesOccurrence(`${heading[2]} - program`, input.date);
+        line = heading[3];
+      }
+      if (!dateMatches || !discoveryQuoteMatchesOccurrence(line, input.date)) return false;
+      return line.split(/[,.!?:;–—]/u).some(part =>
+        clauses(part).some(({ words }) => roleDenials[role].test(words)));
+    });
+  });
+}
 
 export function hasConflictingProgrammeEvidence(input: ExplicitDiscoveryInput): boolean {
   const scoped = DISCOVERY_TEXT_SOURCES.flatMap(source => programmeRows((input[source] ?? "").slice(0, SOURCE_LIMIT[source]))
@@ -353,6 +382,20 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
       }
     }
   }
+  let billedSelection = false;
+  if (!input.currentTaxonomy && !categorySet.size) {
+    const billed = billedMusicProgramme(input, bySource);
+    if (billed) {
+      const { category, format, source, quote } = billed;
+      billedSelection = category === "party" && !format;
+      categorySet.add(category);
+      evidence.push({ kind: "category", label: category, source, quote });
+      if (format) {
+        formatSet.add(format);
+        evidence.push({ kind: "format", label: format, source, quote });
+      }
+    }
+  }
   const jazzHeadline = findJazzEveningHeadline(input, bySource, names, categorySet);
   if (jazzHeadline) {
     if (jazzHeadline.source === "title") titleCategories.add("live");
@@ -382,7 +425,7 @@ export function classifyExplicitEventDiscovery(input: ExplicitDiscoveryInput, fa
           isGenreList(context.replace(PROGRAMME_STYLE_SUFFIX, "").replace(/\blive\b/g, " "));
         const isBilledStyleList = PROGRAMME_STYLE_PREFIX.test(context) &&
           isGenreList(context.replace(PROGRAMME_STYLE_PREFIX, "").replace(/\bgospel\b/g, " "));
-        const strong = MUSIC_CUE.test(context) || STYLE_FIELD.test(quote) || isBilledStyleList || isStyleHeading ||
+        const strong = MUSIC_CUE.test(context) || (billedSelection && /\b(?:hitovi|hitove|hits)\b/.test(context)) || STYLE_FIELD.test(quote) || isBilledStyleList || isStyleHeading ||
           (source === jazzHeadline?.source && quote === jazzHeadline.quote) ||
           (source === "title" && (Boolean(input.currentTaxonomy) && isGenreList(context) ||
             ACTIVITIES.some(({ category, cue }) => (category === "party" || category === "live") && cue.test(context))));

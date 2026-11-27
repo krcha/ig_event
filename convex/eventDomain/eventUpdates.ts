@@ -1,3 +1,4 @@
+import { schedulePublishedDiscovery } from "../internal/schedulePublishedDiscovery";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { DomainError } from "../../lib/domain/errors";
@@ -276,6 +277,9 @@ export async function applyEventUpdate(
     ...publicationPatch,
     updatedAt,
   });
+  if (existingEvent.publicationState === "publishable" || publicationPatch.publicationState === "publishable") {
+    await schedulePublishedDiscovery(ctx, args.id);
+  }
   const auditPatch = clearTicketPrice
     ? { ...patch, clearTicketPrice: true }
     : patch;
