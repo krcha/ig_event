@@ -42,9 +42,28 @@ export type PublicCalendarOverviewEvent = PublicEventSearchFields & {
   venueLocation?: string;
 };
 
+export type PublicCalendarOverviewRow<VenueId extends string = string> = PublicEventSearchFields & {
+  date: string;
+  category: EventPrimaryCategory;
+  venueId?: VenueId;
+  venueLocation?: string;
+};
+
+/** Restrict the shared search snapshot to the fields the counters actually use. */
+export function toPublicCalendarOverviewRow<VenueId extends string>(event: PublicCalendarOverviewEvent & { venueId?: VenueId }): PublicCalendarOverviewRow<VenueId> {
+  return {
+    date: event.date, category: DISCOVERY_CATEGORY_TONES[getEventDiscoveryTaxonomy(event).primaryCategory],
+    title: event.title, artists: event.artists, venue: event.venue,
+    ...(event.venueId ? { venueId: event.venueId } : {}),
+    ...(event.venueLocation ? { venueLocation: event.venueLocation } : {}),
+    ...(event.venueAliases?.length ? { venueAliases: event.venueAliases } : {}),
+    ...(event.performerSearchNames?.length ? { performerSearchNames: event.performerSearchNames } : {}),
+  };
+}
+
 /** Aggregate authorized public rows without returning detailed event bodies. */
 export function buildPublicCalendarOverviewPage(
-  events: readonly PublicCalendarOverviewEvent[],
+  events: readonly (PublicCalendarOverviewEvent | PublicCalendarOverviewRow)[],
   filters: { q?: string; venue?: string } = {},
 ): Pick<PublicCalendarOverviewPage, "page" | "venues"> {
   const buckets = new Map<string, PublicCalendarOverviewGroup>();
@@ -69,7 +88,7 @@ export function buildPublicCalendarOverviewPage(
     // The month venue selector includes all public venues, even when no event
     // at that venue matches the current title/artist/venue search.
     if (!matchesPublicEventNameArtistOrVenue(event, filters.q)) continue;
-    const category = DISCOVERY_CATEGORY_TONES[getEventDiscoveryTaxonomy(event).primaryCategory];
+    const category = "category" in event ? event.category : DISCOVERY_CATEGORY_TONES[getEventDiscoveryTaxonomy(event).primaryCategory];
     const key = JSON.stringify([event.date, category, venueValue]);
     const bucket = buckets.get(key) ?? {
       date: event.date,

@@ -11,6 +11,7 @@ import { announcedConcertGenres, classifyAnnouncedProgramme, scopedScheduleCapti
 import { PUBLICATION_POLICY_VERSION } from "../lib/domain/publication/policy";
 import { loadScopedPerformerHandles, occurrenceTextFromEvidence, readScopedInstagramCaption, scopedPerformerHandles } from "./occurrencePerformerCredits";
 import { readEventEvidenceRecord } from "../lib/events/confirmed-event-schema-facts";
+import { exactJsonValue } from "../lib/events/exact-json-value";
 import { normalizeEventTime } from "../lib/events/event-time";
 import { addDaysToDateKey, formatUtcDateKey, getNightlifeDefaultDateKey, parseDateKeyToUtcNoon } from "../lib/events/nightlife-date";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key";
@@ -865,7 +866,7 @@ async function enrichFromAvailableEvidence(ctx: MutationCtx, event: Doc<"events"
   const canUseGenres = getPerformerGenreResearchFormat(taxonomy ?? getStoredOrLegacyEventTaxonomy(event));
   const cacheHit = canUseGenres && programme.matches.length > 0;
   if (!genuine && cacheHit && (!researchIsCurrent(research, event.updatedAt) || research?.model !== REGISTRY_MODEL ||
-    JSON.stringify(research.matches) !== JSON.stringify(programme.matches))) {
+    !exactJsonValue(research.matches, programme.matches))) {
     if (!known && !labelIsCurrent(row, event.updatedAt)) {
       const empty = { eventId: event._id, eventUpdatedAt: event.updatedAt, version: EVENT_DISCOVERY_VERSION, model: LOCAL_MODEL, taxonomy: null, auditJson: "{}" };
       if (row) await ctx.db.replace(row._id, empty);

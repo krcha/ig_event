@@ -7,7 +7,7 @@ import * as accountResearch from "../convex/performerAccountResearch.ts";
 import * as directory from "../convex/performerDirectory.ts";
 import { validateAccountEvidence } from "../convex/performerAccountEvidence.ts";
 import { getFunctionName } from "convex/server";
-import { listDailyInputs } from "../convex/eventDiscovery.ts";
+import { backfillPublishedDiscovery, listDailyInputs } from "../convex/eventDiscovery.ts";
 import {
   loadScopedPerformerHandles,
   scopedPerformerHandles,
@@ -620,6 +620,20 @@ try {
     assert.deepEqual((await lookupPerformerRegistryProgramme(seeded.ctx, { ...future, sourceCaption: "Photo: @sela.band" })).matches, []);
     const other = { ...future, artists: ["Another Performer (@sela.band)"] };
     assert.deepEqual((await lookupPerformerRegistryProgramme(seeded.ctx, other)).matches, []);
+    seeded.put("events", future);
+    seeded.put("eventDiscoveryLabels", { _id: "future-label", eventId: future._id, eventUpdatedAt: future.updatedAt,
+      version: 1, model: "source", taxonomy: { primaryCategory: "live", categories: ["live"], formats: ["concert"], genres: [] }, auditJson: "{}" });
+    const catchUp = () => backfillPublishedDiscovery._handler(seeded.ctx, { fromDate: future.date, throughDate: future.date, cursor: null });
+    assert.equal((await catchUp()).registryGenreWritten, 1);
+    const cached = [...seeded.table("eventPerformerGenreResearch").values()].find(row => row.eventId === future._id);
+    // Native Convex returns stored record members in canonical key order.
+    const match = cached.matches[0];
+    cached.matches = [{ genre: match.genre, identityUrl: match.identityUrl, performer: match.performer, url: match.url }];
+    const writes = seeded.writes.length;
+    assert.equal((await catchUp()).registryGenreWritten, 0);
+    assert.ok(!seeded.writes.slice(writes).some(([, id]) => id === cached._id));
+    cached.matches[0].url = "https://artist-directory.org/artist/obsolete-source";
+    assert.equal((await catchUp()).registryGenreWritten, 1, "A changed citation still replaces the cached match.");
     const repeat = await backfillInstagramHandles._handler(seeded.ctx, { phase: "research", cursor: null });
     assert.deepEqual([repeat.profilesCreated, repeat.handlesAdded, repeat.billingLinksWritten], [0, 0, 0]);
   }

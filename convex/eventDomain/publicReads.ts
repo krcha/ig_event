@@ -28,6 +28,8 @@ import { getConfirmedEventSchemaFacts } from "../../lib/events/confirmed-event-s
 import { getEventArtistDisplayCredits } from "../../lib/events/event-artist-display-credits";
 import { loadPublicEventDiscoveryLabels } from "../eventDiscovery";
 import { getDisplayEventTime, resolveEventTimeProvenance } from "../../lib/events/event-time";
+import { toPublicCalendarOverviewRow } from "../../lib/events/public-calendar-overview-types";
+import { projectPublicEventVenueDisplay } from "../../lib/events/public-event-venue-fields";
 import { getEventDiscoveryTaxonomy } from "../../lib/taxonomy/event-discovery";
 
 // Live publication validation can touch persisted source evidence, venue
@@ -594,6 +596,16 @@ export async function listPublicCalendarEventsWindowPaginatedHandler(
       return discovery ? { ...event, ...discovery } : event;
     }));
   });
+}
+
+/** Identical publication and venue lifecycle gates to the public calendar, in one transaction. */
+export async function listPublicCalendarOverviewRowsPaginatedHandler(ctx: QueryCtx, args: CalendarWindow) {
+  return paginatePublicCalendarWindow(ctx, args, (rows) => Promise.all(rows.map(async (row) => {
+    const event = toPublicCalendarEvent(row);
+    const discovery = await loadPublicEventDiscoveryLabels(ctx, event, false);
+    const display = projectPublicEventVenueDisplay(event, row.physicalVenue);
+    return toPublicCalendarOverviewRow({ ...display, ...discovery });
+  })));
 }
 
 export async function listPublicRecommendationWindowPaginatedHandler(ctx: QueryCtx, args: CalendarWindow) {

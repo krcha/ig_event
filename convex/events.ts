@@ -24,6 +24,7 @@ import {
   getPublicDuplicateEventIds,
   listApprovedUpcomingByDatePaginatedHandler,
   listPublicCalendarEventsWindowPaginatedHandler,
+  listPublicCalendarOverviewRowsPaginatedHandler,
   listPublicEventsWindowHandler,
   listPublicRecommendationWindowPaginatedHandler,
 } from "./eventDomain/publicReads";
@@ -297,6 +298,19 @@ export const listPublicCalendarEventsWindowPaginated = query({
     includePerformerGenreResearch: v.optional(v.boolean()),
   },
   handler: listPublicCalendarEventsWindowPaginatedHandler,
+});
+
+export const listPublicCalendarOverviewRowsPaginated = query({
+  args: { fromDate: v.string(), beforeDate: v.string(), cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.object({
+    continueCursor: v.string(), isDone: v.boolean(), rawPageCount: v.number(), scanLimitReached: v.boolean(),
+    page: v.array(v.object({
+      date: v.string(), category: v.union(v.literal("club"), v.literal("live"), v.literal("culture"), v.literal("event")),
+      title: v.string(), artists: v.array(v.string()), performerSearchNames: v.optional(v.array(v.string())),
+      venue: v.string(), venueId: v.optional(v.id("venues")), venueLocation: v.optional(v.string()), venueAliases: v.optional(v.array(v.string())),
+    })),
+  }),
+  handler: listPublicCalendarOverviewRowsPaginatedHandler,
 });
 
 export const listPublicRecommendationWindowPaginated = query({

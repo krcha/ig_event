@@ -24,6 +24,7 @@ import {
 import {
   getPublicApprovedEventHandler,
   listPublicCalendarEventsWindowPaginatedHandler,
+  listPublicCalendarOverviewRowsPaginatedHandler,
   listPublicRecommendationWindowPaginatedHandler,
 } from "../convex/eventDomain/publicReads.ts";
 import {
@@ -31,7 +32,10 @@ import {
   prepareHumanApprovalCandidate,
   prepareHumanApprovalCandidateFromVenueResolver,
 } from "../convex/eventDomain/moderationVenue.ts";
-import { projectPublicEvent } from "../convex/publicEventProjection.ts";
+import { buildPublicCalendarOverviewPage } from "../lib/events/public-calendar-overview-types.ts";
+import { listWindow as previousOverview } from "../convex/publicCalendarOverviewAction.ts";
+import { getFunctionName } from "convex/server";
+import { performerSearchOccurrence, projectPublicEvent } from "../convex/publicEventProjection.ts";
 import { getDisplayEventTime, resolveEventTimeProvenance } from "../lib/events/event-time.ts";
 import { getEventDiscoveryTaxonomy, EVENT_DISCOVERY_VERSION } from "../lib/taxonomy/event-discovery.ts";
 import { PERFORMER_GENRE_RESEARCH_VERSION } from "../lib/taxonomy/performer-genre-research.ts";
@@ -424,6 +428,8 @@ try {
     event("stale", physical, { title: "Kviz znanja", eventType: "event", timeStatus: "confirmed" }),
     promoterNamedEvent,
   ];
+  billed[0].directorySearchCredits = { revision: billed[0].updatedAt, occurrence: performerSearchOccurrence(billed[0]), names: ["Darija Popović"] };
+  billed[1].directorySearchCredits = { revision: billed[1].updatedAt - 1, occurrence: performerSearchOccurrence(billed[1]), names: ["Unconfirmed Name"] };
   const labels = ["estimated", "researched", "direct", "stale"].map((id) => ({
     _id: `label-${id}`, eventId: id, eventUpdatedAt: id === "stale" ? 0 : 1, version: EVENT_DISCOVERY_VERSION,
     taxonomy: id === "direct" ? { ...live, genres: ["pop"] } : live,
@@ -483,6 +489,31 @@ try {
         eventTaxonomy: getEventDiscoveryTaxonomy({ ...row, venue }), genreEstimated: Boolean(row.performerGenreResearch?.estimated),
       };
     }), "Compact rows must preserve exactly the public ranking inputs of the enriched calendar");
+    // Compare the new query against the unchanged public counter action itself:
+    // both publication modes, identical opaque cursors, live lifecycle and current credits.
+    const firstSearch = await listPublicCalendarOverviewRowsPaginatedHandler(comparison.ctx, window);
+    assert.deepEqual(firstSearch, empty);
+    const nextWindow = { ...window, cursor: empty.continueCursor };
+    const searchPage = await listPublicCalendarOverviewRowsPaginatedHandler(comparison.ctx, nextWindow);
+    for (const row of searchPage.page) {
+      for (const forbidden of ["description", "sourceCaption", "instagramPostId", "normalizedFieldsJson", "hoursJson", "latitude", "_id"]) {
+        assert.ok(!Object.hasOwn(row, forbidden), "Search rows retain only counter and matching fields");
+      }
+    }
+    assert.equal(searchPage.page.some(row => row.performerSearchNames?.includes("Unconfirmed Name")), false);
+    const approvedNameHits = searchPage.page.filter(row => row.performerSearchNames?.includes("Darija Popović"));
+    assert.equal(approvedNameHits.length, mode === "materialized" ? 1 : 0);
+    const publicCtx = {runQuery(ref, args) {
+      const name = getFunctionName(ref);
+      if (name === "events:listPublicCalendarEventsWindowPaginated") return listPublicCalendarEventsWindowPaginatedHandler(comparison.ctx, args);
+      assert.equal(name, "venues:listPublicVenueFieldsByIds");
+      return listPublicVenueFieldsByIds._handler(comparison.ctx, args);
+    }};
+    for (const filters of [{}, {q:"Darija Popovic"}, {q:"Unconfirmed Name"}, {q:physical.name}, {venue:"id:" + physical._id}]) {
+      const old = await previousOverview._handler(publicCtx, { ...nextWindow, ...filters });
+      const {page:groups,venues:venueOptions} = buildPublicCalendarOverviewPage(searchPage.page,filters);
+      assert.deepEqual({ ...searchPage, page:groups, venues:venueOptions }, old);
+    }
     assert.equal(comparison.writes.length, 0);
     await assert.rejects(() => listPublicRecommendationWindowPaginatedHandler(comparison.ctx, {
       fromDate: "2026-09-01", beforeDate: "2026-11-01",

@@ -28,9 +28,8 @@ function queryResult(path, args) {
       return page(args.fromDate <= calendarDate && calendarDate < args.beforeDate ? events.map(event => ({ ...event, date: calendarDate, venueId: venues[0]._id,
         eventTaxonomy: { primaryCategory: "live", categories: ["live"], genres: ["rock"], formats: ["concert"] }, genreEstimated: false })) : []);
     case "events:listPublicCalendarEventsWindowPaginated": return page(events);
-    case "publicCalendarOverviewAction:listWindow":
-      return { ...page(venues.map(venue => ({ date: args.fromDate, category: "live", count: 1, legacyVenueMatchCount: 1, venueValue: venue._id }))),
-        venues: venues.map(venue => ({ value: venue._id, label: venue.name, names: [venue.name] })) };
+    case "events:listPublicCalendarOverviewRowsPaginated":
+      return page(venues.map(venue => ({ date: args.fromDate, category: "live", title: "Concert", artists: [], venueId: venue._id, venue: venue.name })));
     default: throw new Error(`Unexpected Convex fixture request: ${path}`);
   }
 }
