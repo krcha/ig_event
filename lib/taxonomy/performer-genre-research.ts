@@ -1,8 +1,10 @@
 import { normalizeTaxonomyText } from "./venue-types";
 import type { EventDiscoveryTaxonomy, MusicGenre } from "./event-discovery";
+import { titleContainsOnlyBilledArtists } from "../events/nightlife-lineup-coalescing";
 
 export const PERFORMER_GENRE_RESEARCH_VERSION = 1;
 export const EMPTY_RESEARCH_RETRY_MS = 14 * 24 * 60 * 60 * 1000;
+export const BILLED_PROGRAMME_REVIEW_VERSION = 1;
 
 export type PerformerGenreSource = { url: string; performer: string };
 export type PerformerGenreMatch = PerformerGenreSource & { genre: MusicGenre; identityUrl: string };
@@ -65,6 +67,14 @@ export function getPerformerGenreResearchActs(event: {
     (format === "party" && !/^(?:dj\b|@)/iu.test(title))) return [];
   const handle = /^@([\w.]{2,30})$/u.exec(title)?.[1];
   return [{ billedName: title, titleOnly: true, ...(handle ? { billedHandle: handle } : {}) }];
+}
+
+/** Only an actual named billing can turn a profile into programme context. */
+export function getBilledProgrammeActs(event: { title: string; artists: readonly string[] }): PerformerGenreAct[] {
+  if (!event.artists.length || event.artists.length > 2) return [];
+  const acts = getPerformerGenreResearchActs(event, "live").filter(act => !act.titleOnly);
+  return acts.length === event.artists.length && titleContainsOnlyBilledArtists(event.title, acts.map(act => act.billedName))
+    ? acts : [];
 }
 
 export function canPublishPerformerGenreSource(value: string): boolean {

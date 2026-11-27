@@ -17,7 +17,9 @@ import { getStoredOrLegacyEventTaxonomy, type EventDiscoveryTaxonomy, type Music
 import { normalizeTaxonomyText } from "@/lib/taxonomy/venue-types";
 import { classifyExplicitEventDiscovery, corroborateLiveProgrammeGenre, getExcludedDiscoveryGenres, hasConflictingProgrammeEvidence } from "@/lib/taxonomy/explicit-event-discovery";
 import {
+  BILLED_PROGRAMME_REVIEW_VERSION,
   canPublishPerformerGenreSource,
+  getBilledProgrammeActs,
   getEventListingResearchAct,
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
@@ -36,6 +38,7 @@ export type EventGenreCandidate = EventDiscoveryInput & {
   time?: string;
   description?: string;
   currentTaxonomy?: EventDiscoveryTaxonomy;
+  preferPerformerResearch?: boolean;
 };
 
 export type EventGenreResolution = {
@@ -196,7 +199,8 @@ export async function resolveEventGenresBatch(
       eventId: event.key, expectedUpdatedAt: event.expectedUpdatedAt, taxonomy,
       method: taxonomy?.genres.length ? evidence.some((claim) => claim.kind === "genre" && claim.source === "sourceCaption")
         ? "instagram" : "announcement" : "unknown",
-      auditJson: JSON.stringify({ credits: event.currentTaxonomy ? [] : row.credits, evidence, discardedClaims: row.discardedClaims }),
+      auditJson: JSON.stringify({ credits: event.currentTaxonomy ? [] : row.credits, evidence, discardedClaims: row.discardedClaims,
+        ...(!options.categoryOnly ? { performerReviewVersion: BILLED_PROGRAMME_REVIEW_VERSION } : {}) }),
     };
     if (!classified && !local?.complete && !event.currentTaxonomy) {
       result.deferred = true;
@@ -206,10 +210,11 @@ export async function resolveEventGenresBatch(
     const fallback = taxonomy ?? getStoredOrLegacyEventTaxonomy(event);
     const format = getPerformerGenreResearchFormat(fallback);
     const corroborated = taxonomy && corroborateLiveProgrammeGenre(event, taxonomy);
-    if (corroborated) {
+    if (corroborated && !event.preferPerformerResearch) {
       result.method = "estimate";
       result.estimatedGenres = [corroborated.genre];
-      result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), programmeGenre: corroborated });
+      // This source-only estimate has not used the named performer's web lookup.
+      result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), performerReviewVersion: undefined, programmeGenre: corroborated });
       return result;
     }
     if (format) {
@@ -219,7 +224,8 @@ export async function resolveEventGenresBatch(
       !fallback.formats.length && event.venue.trim() && validDate(event.date)) {
       const listing = getEventListingResearchAct(event);
       if (listing && !/^(?:event|dogadjaj|tba|unknown|nepoznato)$/i.test(listing.billedName)) {
-        lookups.push({ event, result, format: "live", acts: [listing], excludedGenres, discoveryOnly: true });
+        const billed = getBilledProgrammeActs(event);
+        lookups.push({ event, result, format: "live", acts: billed.length ? billed : [listing], excludedGenres, discoveryOnly: true });
       }
     }
     return result;
@@ -262,11 +268,23 @@ export async function resolveEventGenresBatch(
           if (lookup.discoveryOnly) {
             const listing = acts[0]?.listing;
             const discovered = listing?.discovery;
-            if (!listing || !discovered || !canPublishPerformerGenreSource(listing.identityEvidence.url)) continue;
-            result.taxonomy = { ...discovered.taxonomy, genres: [] };
-            result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), categoryListing: {
-              identity: listing.identityEvidence, evidence: discovered.evidence,
-            } });
+            if (listing && discovered && canPublishPerformerGenreSource(listing.identityEvidence.url)) {
+              result.taxonomy = { ...discovered.taxonomy, genres: [] };
+              result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), categoryListing: {
+                identity: listing.identityEvidence, evidence: discovered.evidence,
+              } });
+            } else {
+              if (acts.some(act => act?.nonMusicListing)) continue;
+              const roles = acts.flatMap((act, index) => act?.status === "resolved" && act.billedName === lookup.acts[index].billedName &&
+                !lookup.acts[index].titleOnly && act.programmeRole && canPublishPerformerGenreSource(act.programmeRole.evidence.url)
+                ? [{ performer: act.billedName, ...act.programmeRole, identity: act.identityEvidence, corroboration: act.identityCorroboration }] : []);
+              const category = roles[0]?.category;
+              if (!category || !roles.every(role => role.category === category)) continue;
+              // A billed musician's typical role supports a broad music category.
+              // Only the actual announcement may establish the format of this show.
+              result.taxonomy = { primaryCategory: category, categories: [category], genres: [], formats: [] };
+              result.auditJson = JSON.stringify({ ...JSON.parse(result.auditJson), billedProgramme: roles });
+            }
             delete result.deferred;
             if (!getPerformerGenreResearchFormat(result.taxonomy)) continue;
           }
@@ -298,7 +316,7 @@ export async function resolveEventGenresBatch(
       }
     }
   }));
-  const toEstimate = lookups.filter(({ result, acts }) => result.method === "unknown" &&
+  const toEstimate = lookups.filter(({ event, result, acts, discoveryOnly }) => !event.preferPerformerResearch && !discoveryOnly && result.method === "unknown" &&
     !skipEstimates.has(result.eventId) && acts.some(({ titleOnly }) => !titleOnly));
   const estimated = toEstimate.length && Date.now() < deadlineAt
     ? await (options.estimate ?? estimatePerformerGenresBatch)(toEstimate.map(({ event, acts }) => ({

@@ -385,7 +385,20 @@ for (const result of reviewedVox.results) {
   assert.equal(result.method, "estimate");
   assert.deepEqual(result.estimatedGenres, ["jazz-blues"]);
   assert.equal(JSON.parse(result.auditJson).programmeGenre.occurrenceText, vox.occurrenceText);
+  assert.equal(JSON.parse(result.auditJson).performerReviewVersion, undefined);
 }
+let voxSearches = 0;
+const voxUpgrade = await resolveEventGenresBatch([{ ...vox, currentTaxonomy: liveWithoutGenre, preferPerformerResearch: true }], {
+  ...options, classify: noVoxTransport, estimate: noVoxTransport, research: async rows => {
+    voxSearches++;
+    assert.deepEqual(rows.map(({ billedName, titleOnly }) => [billedName, Boolean(titleOnly)]), [["Inke i little more blues", false]]);
+    return { model: "fixture", attempts: 1, searchCalls: 1, usage: {}, results: new Map(rows.map(row => [row.key,
+      { billedName: row.billedName, status: "unverified", genres: [], genreEvidence: [], identityEvidence: null }])) };
+  },
+});
+assert.equal(voxSearches, 1, "The one-time upgrade must research the billed act rather than immediately repeating the local estimate.");
+assert.equal(voxUpgrade.results[0].method, "unknown");
+assert.ok(JSON.parse(voxUpgrade.results[0].auditJson).performerReviewVersion);
 for (const mismatch of [
   { title: "Kiza Zoranović", artists: ["Kiza Zoranović"], occurrenceText: "Ponedeljak 9.11. - Kiza Zoranović" },
   { venue: "Main Hall" },
@@ -700,5 +713,65 @@ assert.equal(categoryWeb.results[0].taxonomy?.primaryCategory, "exhibition");
 assert.equal(JSON.parse(categoryWeb.results[0].auditJson).categoryListing.identity.url, exhibitUrl);
 assert.equal(categoryWeb.results[1].taxonomy, null);
 assert.equal(categoryWeb.results[2].taxonomy, null);
+
+// The regular resolver can investigate a billed lineup even when no category
+// was stored. One verified artist cannot supply the genres of a co-billed act.
+const neutralBilling = (title, artists, extras = {}) => candidate(title, {
+  title, artists, eventType: "other", venue: "Bridge Hall", date: "2026-11-08", ...extras,
+});
+const profile = "https://ra.co/dj/minavalez";
+const festival = "https://festival.rs/artists/minavalez";
+const primaryQuote = "Mina Valez is a Belgrade DJ playing electronic music.";
+const secondaryQuote = "DJ Mina Valez plays in Serbia.";
+async function checkBilledProgramme(event, { name = "Mina Valez", quote = primaryQuote, corroboration = secondaryQuote,
+  genre = true, expectedWeb = 1, kind = "profile-local" } = {}) {
+  let searches = 0;
+  const batch = await resolveEventGenresBatch([event], {
+    ...options, estimate: neverTransport,
+    classify: async rows => ({ model: "fixture", usage: estimate.usage, results: rows.map(({ key }) =>
+      ({ key, taxonomy: null, credits: [], evidence: [], discardedClaims: 0 })) }),
+    fetch: async (_url, request) => {
+      searches++;
+      const body = JSON.parse(request.body);
+      const { rows } = JSON.parse(body.input.find(({ role }) => role === "user").content);
+      assert.ok(rows.every(row => row.discoveryOnly && !row.titleOnly));
+      assert.equal(body.max_tool_calls, 3, "Two credits on the same occurrence share its existing search allowance.");
+      return Response.json({ status: "completed", output: [
+        { type: "web_search_call", status: "completed", action: { sources: [{ url: profile, title: name }, { url: festival, title: name }] } },
+        { content: [{ type: "output_text", text: JSON.stringify({ rows: rows.map(({ row, billedName }) => billedName !== name
+          ? { row, status: "unverified", identity: null, listing: null, genres: [] }
+          : { row, status: "resolved", listing: null, identity: { kind, url: profile, quote,
+            corroboration: { url: festival, quote: corroboration } },
+            genres: genre ? [{ genre: "electronic", url: profile, quote }] : [] }) }) }] },
+      ] });
+    },
+  });
+  assert.equal(searches, expectedWeb);
+  return batch.results[0];
+}
+const soleBilled = await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez"]));
+assert.deepEqual(soleBilled.taxonomy, { primaryCategory: "party", categories: ["party"], formats: [], genres: [] });
+assert.deepEqual(soleBilled.webResearch.matches, [{ performer: "Mina Valez", genre: "electronic", url: profile, identityUrl: profile }]);
+assert.equal(JSON.parse(soleBilled.auditJson).billedProgramme[0].evidence.quote, primaryQuote);
+const unknownStyle = await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez"]), { genre: false });
+assert.equal(unknownStyle.taxonomy.primaryCategory, "party");
+assert.equal(unknownStyle.webResearch, undefined);
+assert.equal(unknownStyle.estimatedGenres, undefined);
+const jointBilled = await checkBilledProgramme(neutralBilling("Mina Valez, Second Name", ["Mina Valez", "Second Name"]));
+assert.equal(jointBilled.taxonomy.primaryCategory, "party");
+assert.equal(jointBilled.webResearch, undefined);
+assert.equal(JSON.parse(jointBilled.auditJson).partialProgramme.acts[0].billedName, "Mina Valez");
+assert.equal((await checkBilledProgramme(neutralBilling("Echo", ["Echo"]), { name: "Echo",
+  quote: "Echo is a Serbian rock band.", corroboration: "Echo is a DJ from Serbia." })).taxonomy, null,
+  "Short homonyms cannot establish an unknown programme using profiles without event or billed-handle linkage.");
+const exactBand = await checkBilledProgramme(neutralBilling("Echo", ["Echo"]), { name: "Echo", kind: "event-listing", genre: false,
+  quote: "Serbian band Echo at Bridge Hall on November 8, 2026." });
+assert.equal(exactBand.taxonomy.primaryCategory, "live");
+assert.deepEqual(exactBand.taxonomy.formats, []);
+const nonMusicListing = await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez"]), { kind: "event-listing",
+  quote: "Book presentation with DJ Mina Valez at Bridge Hall on November 8, 2026." });
+assert.equal(nonMusicListing.taxonomy, null, "A DJ appearing at a book presentation cannot turn it into a dance programme.");
+assert.equal((await checkBilledProgramme(neutralBilling("Mina Valez", ["Mina Valez"], {
+  description: "Razgovor sa publikom i promocija knjige.", }), { expectedWeb: 0 })).taxonomy.primaryCategory, "talk");
 
 console.log("Event discovery QA passed: exact occurrence and Instagram caption evidence, existing taxonomy, 20 genre labels, no-search estimates, cited fallback, provider isolation and strict row coverage.");

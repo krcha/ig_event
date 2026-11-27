@@ -17,6 +17,8 @@ import {
   applyPerformerGenreResearch,
   canPublishPerformerGenreSource,
   getEventListingResearchAct,
+  BILLED_PROGRAMME_REVIEW_VERSION,
+  getBilledProgrammeActs,
   getPerformerGenreResearchActs,
   getPerformerGenreResearchFormat,
 } from "../lib/taxonomy/performer-genre-research";
@@ -45,7 +47,8 @@ const discoveryInputFields = {
   ...eventInputFields, date: v.string(), time: v.optional(v.string()), eventType: v.string(), sourceCaption: v.optional(v.string()),
 };
 const dailyInput = v.object(discoveryInputFields);
-const upcomingInput = v.object({ ...discoveryInputFields, currentTaxonomy: v.optional(eventDiscoveryTaxonomy) });
+const upcomingInput = v.object({ ...discoveryInputFields, currentTaxonomy: v.optional(eventDiscoveryTaxonomy),
+  preferPerformerResearch: v.optional(v.boolean()) });
 const unknownGenreInput = v.object({ ...discoveryInputFields, currentTaxonomy: eventDiscoveryTaxonomy });
 const webGenreResult = v.object({ model: v.string(), matches: v.array(performerGenreMatch), auditJson: v.string() });
 const genreDiscoveryResult = v.object({
@@ -497,7 +500,7 @@ function serializeGenreAudit(audit: Record<string, unknown>, estimatedGenres: Mu
 }
 
 function enrichmentAudit(result: GenreDiscoveryResult, now: number): Record<string, unknown> {
-  return { ...readEventEvidenceRecord(result.auditJson), upcomingGenreRetryAt:
+  return { ...readEventEvidenceRecord(result.auditJson), performerReviewDeferred: Boolean(result.deferred), upcomingGenreRetryAt:
     now + (result.deferred ? ENRICHMENT_RETRY_MS : EMPTY_RESEARCH_RETRY_MS) };
 }
 
@@ -577,15 +580,33 @@ async function upcomingEnrichmentState(ctx: Pick<QueryCtx, "db">, event: Doc<"ev
   if (taxonomy?.genres.length) return null;
   const format = taxonomy && getPerformerGenreResearchFormat(taxonomy);
   if (!format && taxonomy && taxonomy.primaryCategory !== "other") return null;
+  let preferPerformerResearch = false;
   if (current) {
-    const retryAt = readEventEvidenceRecord(current.auditJson).upcomingGenreRetryAt;
-    if (typeof retryAt === "number" && retryAt > now) return null;
+    const audit = readEventEvidenceRecord(current.auditJson);
+    const music = format ?? getPerformerGenreResearchFormat(getStoredOrLegacyEventTaxonomy(event));
+    const previousVersion = audit.performerReviewVersion !== BILLED_PROGRAMME_REVIEW_VERSION;
+    preferPerformerResearch = Boolean((previousVersion || audit.performerReviewDeferred === true) && music && readEstimatedGenres(current.auditJson).length &&
+      getPerformerGenreResearchActs(event, music).some(act => !act.titleOnly));
+    const retryAt = audit.upcomingGenreRetryAt;
+    if (typeof retryAt === "number" && retryAt > now) {
+      // Existing completed v0 attempts searched only a listing for an unknown
+      // programme. Give the regular, budgeted sweep one chance to verify a billed
+      // act. Transient retries and current-version negative results keep their delay.
+      const upgrade = previousVersion && retryAt > now + ENRICHMENT_RETRY_MS &&
+        (preferPerformerResearch || (!format && getBilledProgrammeActs(event).length > 0));
+      if (!upgrade) return null;
+      if (!format) {
+        const candidate = await discoveryCandidate(ctx, event);
+        const local = classifyExplicitEventDiscovery(candidate);
+        if (hasConflictingProgrammeEvidence(candidate) || (local?.complete && !getPerformerGenreResearchFormat(local.taxonomy))) return null;
+      }
+    }
     if (format) {
       const research = await loadGenreResearch(ctx, event._id);
       if (researchIsCurrent(research, event.updatedAt) && research?.matches.length) return null;
     }
   }
-  return { row, current, currentTaxonomy: format && taxonomy ? taxonomy : undefined };
+  return { row, current, currentTaxonomy: format && taxonomy ? taxonomy : undefined, preferPerformerResearch };
 }
 
 const priorityCounts = v.object({ scanned: v.number(), eligible: v.number(), known: v.number(),
@@ -737,6 +758,7 @@ export const claimUpcomingBatch = mutation({
       const discovery = await upcomingEnrichmentState(ctx, event, now);
       if (!discovery) return null;
       return { ...await discoveryCandidate(ctx, event),
+        ...(discovery.preferPerformerResearch ? { preferPerformerResearch: true } : {}),
         ...(discovery.currentTaxonomy ? { currentTaxonomy: discovery.currentTaxonomy } : {}) };
     }))).filter((event) => event !== null);
     const nextCursor = page.isDone ? null : page.continueCursor;

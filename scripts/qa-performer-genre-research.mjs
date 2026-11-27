@@ -22,6 +22,7 @@ import {
 } from "../lib/ai/research-performer-genres.ts";
 import {
   applyPerformerGenreResearch,
+  BILLED_PROGRAMME_REVIEW_VERSION,
   canPublishPerformerGenreSource,
   EMPTY_RESEARCH_RETRY_MS,
   getPerformerGenreResearchActs,
@@ -29,6 +30,7 @@ import {
   PERFORMER_GENRE_RESEARCH_VERSION,
 } from "../lib/taxonomy/performer-genre-research.ts";
 import { EVENT_DISCOVERY_VERSION } from "../lib/taxonomy/event-discovery.ts";
+import { resolveEventGenresBatch } from "../lib/ai/resolve-event-genres.ts";
 import { getMusicGenreGuide } from "../lib/taxonomy/music-genre-relations.ts";
 import { getBelgradeDayKey } from "../lib/pipeline/belgrade-day-key.ts";
 
@@ -754,6 +756,54 @@ try {
   assert.equal(sweep.enrichmentState().attempted, 3);
   assert.deepEqual((await claim()).events.map(({ key }) => key), ["no-post"]);
   assert.deepEqual(await complete(owner, []), { completed: true, counts: { written: 0, unchanged: 0, stale: 0 } });
+
+  const legacy = dailyQueueFixture();
+  for (const event of legacy.events.values()) event.date = "2000-01-01";
+  const oldRetry = Date.now() + EMPTY_RESEARCH_RETRY_MS;
+  for (const [id, taxonomy, audit, extras] of [
+    ["single", null, { upcomingGenreRetryAt: oldRetry }, {}],
+    ["estimate", party, { estimatedGenres: ["techno"], upcomingGenreRetryAt: oldRetry }, { title: "Friday music" }],
+    ["split", null, { performerReviewVersion: BILLED_PROGRAMME_REVIEW_VERSION, upcomingGenreRetryAt: oldRetry }, {}],
+    ["nonmusic", null, { upcomingGenreRetryAt: oldRetry }, { description: "Razgovor sa publikom i promocija knjige." }],
+    ["unbilled", null, { upcomingGenreRetryAt: oldRetry }, { artists: [] }],
+    ["ambiguous", null, { upcomingGenreRetryAt: Date.now() + 15 * 60_000 }, {}],
+  ]) {
+    Object.assign(legacy.events.get(id), { date: "2099-11-08", eventType: "other", title: "Mina Valez", artists: ["Mina Valez"],
+      normalizedFieldsJson: "{}", sourceCaption: "", description: "", ...extras });
+    legacy.labels.set(id, { _id: `old-${id}`, eventId: id, eventUpdatedAt: 100, version: EVENT_DISCOVERY_VERSION,
+      taxonomy, auditJson: JSON.stringify(audit), model: "old" });
+  }
+  const legacyClaim = runner => claimUpcomingBatch._handler(legacy.dailyCtx, { serviceSecret: "", owner: runner });
+  const upgrades = await legacyClaim(owner);
+  assert.deepEqual(upgrades.events.map(row => row.key).sort(), ["estimate", "single"]);
+  assert.equal(upgrades.events.find(row => row.key === "estimate").preferPerformerResearch, true);
+  assert.equal((await legacyClaim(secondOwner)).state, "busy");
+  let reviewedSearches = 0;
+  const review = await resolveEventGenresBatch(upgrades.events, { ...options,
+    classify: async rows => ({ model: "test", usage: {}, results: rows.map(({ key }) =>
+      ({ key, taxonomy: null, credits: [], evidence: [], discardedClaims: 0 })) }),
+    research: async rows => {
+      reviewedSearches++;
+      assert.equal(rows.length, 2);
+      assert.ok(rows.every(row => row.billedName === "Mina Valez" && !row.titleOnly));
+      return { model: "test", usage: {}, attempts: 1, searchCalls: 1, results: new Map(rows.map(row => [row.key,
+        { billedName: row.billedName, status: "unverified", identityEvidence: null, genreEvidence: [], genres: [] }])) };
+    },
+    estimate: async rows => ({ model: "test", usage: {}, results: new Map(rows.map(row => [row.key, []])) }),
+  });
+  assert.equal(reviewedSearches, 1, "The normal sweep batches the named lookup once, including the legacy null.");
+  await completeUpcomingBatch._handler(legacy.dailyCtx, { serviceSecret: "", owner, model: "reviewed", results:
+    review.results.map(({ eventId, expectedUpdatedAt, taxonomy, auditJson }) => ({ eventId, expectedUpdatedAt, taxonomy, auditJson })) });
+  assert.equal((await legacyClaim(owner)).events.length, 0, "One complete negative check restores the cooldown on both legacy revisions.");
+  assert.equal(legacy.enrichmentState().attempted, 2, "The one-off migration uses the normal lease and event allowance.");
+  const lastEstimate = legacy.labels.get("estimate");
+  const deferredEstimate = { ...JSON.parse(lastEstimate.auditJson), performerReviewDeferred: true,
+    upcomingGenreRetryAt: Date.now() + 10 * 60_000 };
+  lastEstimate.auditJson = JSON.stringify(deferredEstimate);
+  assert.equal((await legacyClaim(owner)).events.length, 0);
+  lastEstimate.auditJson = JSON.stringify({ ...deferredEstimate, upcomingGenreRetryAt: Date.now() - 1 });
+  assert.equal((await legacyClaim(owner)).events.find(row => row.key === "estimate")?.preferPerformerResearch, true,
+    "A transient failure retries the web lookup only after its delay, even if the local programme estimate still exists.");
 
   const spring = categoryWindow(Date.parse("2026-03-28T12:00:00Z"));
   assert.equal(spring.includes({ date: "2026-03-30", time: "13:59", timeStatus: "confirmed" }), true);

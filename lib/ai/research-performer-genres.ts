@@ -47,6 +47,8 @@ export type PerformerGenreResearchResult = {
   identityEvidence: PerformerWebEvidence | null;
   identityCorroboration: PerformerWebEvidence | null;
   genreEvidence: PerformerGenreWebEvidence[];
+  programmeRole?: { category: "party" | "live"; evidence: PerformerWebEvidence };
+  nonMusicListing?: true;
   listing?: { title: string; identityEvidence: PerformerWebEvidence; genreEvidence: PerformerGenreWebEvidence[];
     discovery?: { taxonomy: EventDiscoveryTaxonomy; evidence: PerformerWebEvidence[] } };
 };
@@ -107,7 +109,7 @@ const STANDARD_PROMPT = "For named acts, search the exact billed act name or han
 const ADAPTIVE_PROMPT = [
   "Start with one query per distinct occurrence combining its event title, venue, full date and billed names or handles. Reuse results for the same occurrence. Do not combine unrelated events into a query. When a confirmed start time is provided, distinguish it from doors or another show.",
   "When listingTitle is supplied, return listing if it proves the event genre. Its identity quote must contain the exact event title, venue, and full date; the genre quotes must describe the advertised music on the same page. In that case do not duplicate the claims in main identity and genres. Otherwise return listing null and give independently verified named-act claims. A translated venue name must refer to the exact venue.",
-  "For discoveryOnly rows the billed name is the event title, not a performer; ignore trustedFormat. Use one targeted search for that exact occurrence and inspect its announcement when available. Return main identity null, genres empty and status unverified. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) that explicitly describe activities the visitor can attend, such as an exhibition, screening, concert, workshop, tasting or talk. Never infer activity from the venue, date or artist profile. For all other rows leave discoveryEvidence empty.",
+  "For discoveryOnly rows ignore trustedFormat. Search the exact occurrence first. In listing.discoveryEvidence supply up to three same-page verbatim quotes (at most 20 words each) explicitly describing an advertised activity, including non-musical programmes. When titleOnly is true never look up an artist: leave main identity null, genres empty and status unverified. Otherwise each row is an independently billed act. If the exact listing gives no programme, verify that act's identity, performance role and typical genres. Quote a clause directly identifying the named person as a DJ, selector, or the named band as a music group; look for local evidence and a billed handle for homonyms. Never assign one act's role or genres to another. Leave discoveryEvidence empty for ordinary genre lookups.",
   "Stop once an exact listing establishes the genre, or the billed artist's identity and typical style are sufficiently verified. When the first query only finds identity or ambiguous names, make one focused second query for the missing evidence. Do not use venue profiles, adjoining events, venue-wide calendars or a different edition as proof of an event genre.",
 ].join("\n");
 
@@ -313,6 +315,7 @@ function namesOfficialVenueSubject(source: PerformerWebEvidence, row: PreparedRo
 
 function matchesMusicRole(source: PerformerWebEvidence, row: PreparedRow): boolean {
   const text = normalize(source.quote);
+  if (row.discoveryOnly && !row.titleOnly) return /\b(?:dj|deejay|selector|disc jockey|band|bend|ensemble|music group|mu[zž]i[cč]ki sastav)\b/.test(text);
   return row.trustedFormat === "party" || row.trustedFormat === "dj-set"
     ? /\b(?:dj|deejay|producer|producent\w*|selector|turntablist)\b/.test(text)
     : /\b(?:musician|music artist|recording artist|muzicar\w*|singer|vocalist|guitarist|pianist|band|bend|sastav\w*|ensemble|kompozitor\w*|pevac\w*|rapper|trio|quartet)\b/.test(text);
@@ -377,6 +380,11 @@ function decodeRow(raw: JsonObject, row: PreparedRow, sources: Map<string, Sourc
   if (raw.status !== "resolved") return empty;
   const identity = resolveIdentity(raw.identity, row, sources);
   if (!identity) return empty;
+  const namedDiscovery = row.discoveryOnly && !row.titleOnly;
+  if (namedDiscovery && !matchesEvent(identity.primary, { ...row, titleOnly: true }) &&
+    !(row.billedHandle && matchesHandle(identity.primary, cleanHandle(row.billedHandle))) &&
+    !(isDistinctiveBilledName(row.billedName) && identity.corroboration &&
+      [identity.primary, identity.corroboration].some(source => matchesLocalAnchor(source, row)))) return empty;
   const verified = new Map<MusicGenre, PerformerGenreWebEvidence>();
   const specialist = [identity.primary, identity.corroboration].find((item) =>
     item && hasMatchingSpecialistProfile(item, row.billedName));
@@ -412,6 +420,13 @@ function decodeRow(raw: JsonObject, row: PreparedRow, sources: Map<string, Sourc
   if (["house", "techno", "trance", "drum-and-bass"].some((key) => verified.has(key as MusicGenre))) {
     verified.delete("electronic");
   }
+  const roleEvidence = namedDiscovery ? [identity.primary, identity.corroboration, ...verified.values()].flatMap(proof => {
+    if (!proof || (proof.url !== identity.primary.url && proof.url !== identity.corroboration?.url)) return [];
+    return billedRoleEvidence(proof, row);
+  }) : [];
+  const listingActivity = namedDiscovery && matchesEvent(identity.primary, { ...row, titleOnly: true }) ?
+    classifyExplicitEventDiscovery({ title: "", occurrenceText: identity.primary.quote, date: row.date, venue: row.venue, artists: [row.billedName] }) : null;
+  const nonMusicListing = listingActivity?.taxonomy.categories.some(category => !["live", "party"].includes(category));
   return {
     status: "resolved",
     billedName: row.billedName,
@@ -419,7 +434,27 @@ function decodeRow(raw: JsonObject, row: PreparedRow, sources: Map<string, Sourc
     identityEvidence: identity.primary,
     identityCorroboration: identity.corroboration,
     genreEvidence: [...verified.values()],
+    ...(nonMusicListing ? { nonMusicListing: true as const } : {}),
+    ...(roleEvidence.length && roleEvidence.every(role => role.category === roleEvidence[0].category) ? { programmeRole: roleEvidence[0] } : {}),
   };
+}
+
+function billedRoleEvidence(proof: PerformerWebEvidence, row: PreparedRow): NonNullable<PerformerGenreResearchResult["programmeRole"]>[] {
+  const name = normalize(row.billedName);
+  const quote = normalize(proof.quote);
+  if (!name || /\b(?:not|never|former|previously|nije|nisu|nekadasnji|bivsi)\b/.test(quote)) return [];
+  if (hasMatchingSpecialistProfile(proof, row.billedName) &&
+    /^(?:artist,\s*)?(?:dj|deejay|disc jockey|selector)\s*(?:,|and)\s*(?:musician|producer)\b/i.test(proof.quote)) {
+    return [{ category: "party", evidence: proof }];
+  }
+  const roles = [
+    ["party", "dj|deejay|disc jockey|selector|selektor"],
+    ["live", "band|bend|music group|muzi[cč]ki sastav|rock group|ensemble"],
+  ] as const;
+  return roles.flatMap(([category, role]) => {
+    const subject = new RegExp(`\\b(?:(?:${role}) ${name}|${name} (?:(?:is|are|je|su|a|an|the|serbian|belgrade|based|novosadski|beogradski|srpski|local|music|rock|electronic) ){0,5}(?:${role}))\\b`);
+    return subject.test(quote) ? [{ category, evidence: proof }] : [];
+  });
 }
 
 function decodeAdaptiveRow(raw: JsonObject, row: PreparedRow, sources: Map<string, SourceMetadata>) {
@@ -525,7 +560,7 @@ export async function researchPerformerGenresBatch(
       city: clip(input.city, 80) || undefined, date: input.date, trustedFormat: input.trustedFormat,
       time: /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time ?? "") ? input.time : undefined,
       titleOnly: input.titleOnly === true,
-      discoveryOnly: options.adaptive && input.titleOnly === true && input.discoveryOnly === true ? true : undefined,
+      discoveryOnly: options.adaptive && input.discoveryOnly === true ? true : undefined,
       listingTitle: options.adaptive && input.listingTitle === input.eventTitle.trim() && input.listingTitle.length <= 100
         ? input.listingTitle : undefined,
     };
@@ -534,9 +569,12 @@ export async function researchPerformerGenresBatch(
   const apiKey = options.apiKey ?? getRequiredEnv("OPENAI_API_KEY");
   const model = options.model ?? getOpenAiModelEnv("OPENAI_REVIEW_MODEL");
   const extraInstructions = options.adaptive ? ADAPTIVE_PROMPT : options.thorough ? THOROUGH_PROMPT : STANDARD_PROMPT;
+  const discoveryProgrammes = new Set(rows.filter(row => row.discoveryOnly)
+    .map(row => JSON.stringify([row.eventTitle, row.venue, row.date, row.time])));
+  const adaptiveUnits = rows.filter(row => !row.discoveryOnly).length + discoveryProgrammes.size;
   const body = JSON.stringify({
     model, store: false, max_output_tokens: options.adaptive ? Math.min(5000, 3000 + 500 * rows.length) : 5000,
-    max_tool_calls: options.adaptive ? Math.min(8, rows.length * 3) : options.thorough ? Math.min(12, rows.length * 6) : rows.length * 3,
+    max_tool_calls: options.adaptive ? Math.min(8, adaptiveUnits * 3) : options.thorough ? Math.min(12, rows.length * 6) : rows.length * 3,
     // The live tool can consume the entire structured-output budget on hidden
     // reasoning at medium effort; keep evidence requirements in the validator.
     reasoning: { effort: options.thorough ? "medium" : "low" },
